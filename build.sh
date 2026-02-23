@@ -2,7 +2,8 @@
 set -e
 
 ARTIFACTS=".artifacts"
-RUST_INIT="rind"
+RUST_INIT="init"
+RUST_STUBS=(rind example)
 ROOTFS="$ARTIFACTS/rootfs"
 MOUNT_DISK_PATH="$ARTIFACTS/mnt"
 CPIO="$ARTIFACTS/rootfs.cpio.gz"
@@ -12,6 +13,7 @@ USE_DISK_IMG=${USE_DISK_IMG:-0}
 RUN=${RUN:-0}
 KERNEL_URL="https://l4re.org/download/Linux-kernel/x86-64/bzImage-6.6.8"
 BUSYBOX="$ARTIFACTS/busybox"
+SERVICES="$ARTIFACTS/services"
 
 mkdir -p "$ARTIFACTS"
 mkdir -p "$MOUNT_DISK_PATH"
@@ -21,12 +23,16 @@ cargo build --release --target x86_64-unknown-linux-musl
 # cp target/release/$RUST_INIT "$ARTIFACTS/$RUST_INIT"
 cp target/x86_64-unknown-linux-musl/release/$RUST_INIT "$ARTIFACTS/$RUST_INIT"
 
+
+
 echo "[*] Preparing rootfs..."
 rm -rf "$ROOTFS"
 mkdir -p "$ROOTFS"/{bin,etc,dev,proc,sys}
-cp "$ARTIFACTS/$RUST_INIT" "$ROOTFS/bin/"
 cp "$ARTIFACTS/$RUST_INIT" "$ROOTFS/init"
-cp services.sd "$ROOTFS/etc/"
+for stub in "${RUST_STUBS[@]}"; do
+  cp target/x86_64-unknown-linux-musl/release/$stub "$ROOTFS/bin/"
+done
+cp -r $SERVICES "$ROOTFS/etc/"
 
 echo "[*] Initializing Devices..."
 sudo mknod -m 666 "$ROOTFS/dev/null" c 1 3
@@ -43,7 +49,7 @@ fi
 echo "[*] Adding BusyBox to rootfs..."
 cp "$BUSYBOX" "$ROOTFS/bin/busybox"
 
-for cmd in sh ls mount echo cp mv shutdown rm mkdir touch cat; do
+for cmd in sh ls mount echo cp mv shutdown rm mkdir touch cat ln; do
   ln -sf busybox "$ROOTFS/bin/$cmd"
 done
 
@@ -80,7 +86,7 @@ if [ "$RUN" -eq 1 ]; then
 	    qemu-system-x86_64 \
 	        -kernel "$BZIMAGE" \
 	        -initrd "$CPIO" \
-	        -append "console=ttyS0 init=/bin/$RUST_INIT" \
-	        -nographic
+	        -append "console=tty1 init=/bin/$RUST_INIT"
+	        # -nographic
 	fi
 fi

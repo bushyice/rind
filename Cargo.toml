@@ -3,12 +3,28 @@ name = "rind"
 version = "0.1.0"
 edition = "2024"
 
+[[bin]]
+name = "init"
+path = "src/init.rs"
+
+[[bin]]
+name = "rind"
+path = "src/rind.rs"
+
+[[bin]]
+name = "example"
+path = "examples/example.rs"
+
 [dependencies]
 once_cell = "*"
-sdlang = "*"
+# sdlang = "*"
+toml = "*"
 glob = "*"
 nix = { version = "*", features = ["process", "acct", "term", "poll", "signal", "mount"] }
 libc = "*"
+serde = { version = "*", features = ["derive"] }
+anyhow = "*"
+clap = "*"
 
 [profile.release]
 lto = true

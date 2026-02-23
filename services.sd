@@ -1,6 +1,0 @@
-service "busybox"
-    exec="/bin/busybox"
-    restart="always"
-{
-	args "--help"
-}
