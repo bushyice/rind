@@ -8,7 +8,7 @@ pub trait UnitComponent: Sized {
   fn find_in_unit<'a>(unit: &'a Unit, name: &str) -> Option<&'a Self>;
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 pub struct Unit {
   pub service: Option<Vec<Service>>,
   pub socket: Option<Vec<Socket>>,
@@ -158,4 +158,26 @@ impl Units {
   pub fn names(&self) -> Vec<&Name> {
     self.units.keys().collect()
   }
+
+  pub fn serialize(&self) -> String {
+    // Convert HashMap<Name, Unit> into UnitSerialized
+    let serialized = UnitSerialized {
+      units: self
+        .units
+        .values()
+        .map(|u| toml::to_string(u).unwrap())
+        .collect(),
+      names: self.units.keys().map(|k| k.to_string()).collect(),
+      enabled: self.enabled.iter().map(|x| x.to_string()).collect(),
+    };
+
+    toml::to_string(&serialized).unwrap()
+  }
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct UnitSerialized {
+  units: Vec<String>,
+  names: Vec<String>,
+  enabled: Vec<String>,
 }

@@ -1,0 +1,15 @@
+[package]
+name = "rind-ipc"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/ipc.rs"
+
+[dependencies]
+libc.workspace = true
+serde.workspace = true
+nix.workspace = true
+toml.workspace = true
+anyhow.workspace = true
+rind-core = { path = "../rind-core" }

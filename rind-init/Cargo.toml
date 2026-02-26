@@ -1,0 +1,14 @@
+[package]
+name = "rind-init"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "init"
+path = "src/init.rs"
+
+[dependencies]
+libc.workspace = true
+nix.workspace = true
+rind-core = { path = "../rind-core" }
+rind-daemon = { path = "../rind-daemon" }

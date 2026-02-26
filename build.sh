@@ -3,7 +3,7 @@ set -e
 
 ARTIFACTS=".artifacts"
 RUST_INIT="init"
-RUST_STUBS=(rind example)
+RUST_STUBS=(rind example-active example-inactive)
 ROOTFS="$ARTIFACTS/rootfs"
 MOUNT_DISK_PATH="$ARTIFACTS/mnt"
 CPIO="$ARTIFACTS/rootfs.cpio.gz"

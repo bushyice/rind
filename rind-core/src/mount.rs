@@ -1,6 +1,8 @@
-use nix::mount::MsFlags;
+use nix::mount::{MsFlags, mount, umount};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::units::UNITS;
 
 #[derive(Deserialize, Serialize)]
 pub struct Mount {
@@ -14,6 +16,7 @@ pub struct Mount {
   )]
   pub flags: MsFlags,
   pub data: Option<String>,
+  pub create: Option<bool>,
 }
 
 fn default_flags() -> MsFlags {
@@ -51,21 +54,40 @@ where
   Ok(flags)
 }
 
-fn serialize_flags<S>(flags: &MsFlags, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_flags<S>(_flags: &MsFlags, serializer: S) -> Result<S::Ok, S::Error>
 where
   S: Serializer,
 {
-  let mut vec: Vec<String> = Vec::new();
+  serializer.collect_seq(Vec::<String>::new())
+}
 
-  // if flags.contains(MsFlags::RDONLY) {
-  //   vec.push("MS_RDONLY");
-  // }
-  // if flags.contains(MsFlags::NODEV) {
-  //   vec.push("MS_NODEV");
-  // }
-  // if flags.contains(MsFlags::NOSUID) {
-  //   vec.push("MS_NOSUID");
-  // }
+pub fn umount_target(target: &Mount) {
+  umount(target.target.as_str()).ok();
+}
 
-  serializer.collect_seq(vec)
+pub fn mount_target(target: &Mount) {
+  if let Some(true) = target.create {
+    std::fs::create_dir_all(target.target.clone()).ok();
+  }
+
+  mount(
+    target.source.as_deref(),
+    target.target.as_str(),
+    target.fstype.as_deref(),
+    target.flags,
+    target.data.as_deref(),
+  )
+  .ok();
+}
+
+pub fn mount_units() {
+  let units = UNITS.read().unwrap();
+  for unit in units.enabled() {
+    if let Some(ref mounts) = unit.mount {
+      for mount in mounts {
+        println!("Mounting target: {}", mount.target);
+        mount_target(mount);
+      }
+    }
+  }
 }

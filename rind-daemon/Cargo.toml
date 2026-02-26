@@ -1,0 +1,12 @@
+[package]
+name = "rind-daemon"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+path = "src/daemon.rs"
+
+[dependencies]
+rind-core = { path = "../rind-core" }
+rind-ipc = { path = "../rind-ipc" }
+anyhow.workspace = true

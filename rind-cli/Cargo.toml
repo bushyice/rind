@@ -1,0 +1,20 @@
+[package]
+name = "rind-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "rind"
+path = "src/rind.rs"
+
+[[bin]]
+name = "example-active"
+path = "examples/active.rs"
+
+[[bin]]
+name = "example-inactive"
+path = "examples/inactive.rs"
+
+[dependencies]
+clap.workspace = true
+rind-ipc = { path = "../rind-ipc" }

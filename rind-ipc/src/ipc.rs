@@ -1,4 +1,6 @@
-use libc::TCP_MD5SIG_MAXKEYLEN;
+pub mod recv;
+pub mod send;
+pub mod ser;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub enum MessageType {
@@ -7,6 +9,7 @@ pub enum MessageType {
   Stop,
   Unknown,
 }
+
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct Message {
   pub r#type: MessageType,

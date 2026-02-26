@@ -1,21 +1,12 @@
-[package]
-name = "rind"
+[workspace]
+members = ["rind-cli", "rind-daemon", "rind-core", "rind-init", "rind-ipc"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[[bin]]
-name = "init"
-path = "src/init.rs"
-
-[[bin]]
-name = "rind"
-path = "src/rind.rs"
-
-[[bin]]
-name = "example"
-path = "examples/example.rs"
-
-[dependencies]
+[workspace.dependencies]
 once_cell = "*"
 # sdlang = "*"
 toml = "*"

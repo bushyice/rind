@@ -1,10 +1,11 @@
-use crate::messaging::*;
-use crate::units::UNITS;
+use super::Message;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::thread;
 
-fn handle_client(mut stream: UnixStream) {
+type ClientHandler = fn(Message) -> Result<Option<Message>, anyhow::Error>;
+
+pub fn recv_message(mut stream: UnixStream, handle_client: ClientHandler) {
   println!("client connected");
 
   loop {
@@ -30,8 +31,6 @@ fn handle_client(mut stream: UnixStream) {
       }
     };
 
-    println!("raw: {raw}");
-
     let msg: Message = match toml::from_str(&raw) {
       Ok(m) => m,
       Err(e) => {
@@ -40,13 +39,8 @@ fn handle_client(mut stream: UnixStream) {
       }
     };
 
-    println!("parsed: {msg:?}");
-
-    let response = match msg.r#type {
-      MessageType::List => {
-        Message::from_type(MessageType::List).with(UNITS.read().unwrap().serialize())
-      }
-      _ => MessageType::Unknown.into(),
+    let Ok(Some(response)) = handle_client(msg) else {
+      continue;
     };
 
     let resp = response.as_string().into_bytes();
@@ -64,9 +58,9 @@ fn handle_client(mut stream: UnixStream) {
   }
 }
 
-pub fn start_ipc_server() -> std::io::Result<()> {
+pub fn start_ipc_server(handle_client: ClientHandler) -> std::io::Result<()> {
   let socket_path = "/tmp/rind.sock";
-  let _ = std::fs::remove_file(socket_path); // remove if exists
+  let _ = std::fs::remove_file(socket_path);
   let listener = UnixListener::bind(socket_path)?;
 
   println!("Daemon IPC listening on {}", socket_path);
@@ -74,7 +68,7 @@ pub fn start_ipc_server() -> std::io::Result<()> {
   for stream in listener.incoming() {
     match stream {
       Ok(stream) => {
-        thread::spawn(|| handle_client(stream));
+        thread::spawn(move || recv_message(stream, handle_client));
       }
       Err(e) => eprintln!("IPC connection failed: {}", e),
     }

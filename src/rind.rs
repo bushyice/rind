@@ -9,16 +9,28 @@ mod messaging;
 #[command(version = env!("CARGO_PKG_VERSION"))]
 #[command(about = "Rust Init Daemon")]
 struct Cli {
-  #[command(subcommand)]
-  command: Commands,
+  #[arg(short = 'L', long)]
+  list: bool,
+
+  #[arg(short = 'S', long)]
+  start: bool,
+
+  #[arg(short = 'X', long)]
+  stop: bool,
+
+  #[arg(short = 'u', long, num_args(0..=1), default_missing_value = "")]
+  unit: Option<String>,
+
+  #[arg(short = 's', long, num_args(0..=1), default_missing_value = "")]
+  service: Option<String>,
 }
 
-#[derive(clap::Subcommand)]
-enum Commands {
-  List,
-  Start { name: String },
-  Stop { name: String },
-}
+// #[derive(clap::Subcommand)]
+// enum Commands {
+//   List,
+//   Start { name: String },
+//   Stop { name: String },
+// }
 
 fn send_command(cmd: impl Into<String>) -> std::io::Result<String> {
   let mut stream = UnixStream::connect("/tmp/rind.sock")?;
@@ -42,21 +54,33 @@ fn send_command(cmd: impl Into<String>) -> std::io::Result<String> {
 fn main() {
   let cli = Cli::parse();
 
-  match cli.command {
-    Commands::List => {
-      let output: messaging::Message = toml::from_str(
-        &send_command(
-          toml::to_string(&messaging::Message::from_type(messaging::MessageType::List)).unwrap(),
-        )
-        .unwrap(),
-      )
-      .unwrap();
+  // match cli.command {
+  //   Commands::List => {
+  //     let output: messaging::Message = toml::from_str(
+  //       &send_command(
+  //         toml::to_string(&messaging::Message::from_type(messaging::MessageType::List)).unwrap(),
+  //       )
+  //       .unwrap(),
+  //     )
+  //     .unwrap();
 
-      for item in output.parse_vec_payload::<String>().unwrap() {
-        println!("{item}");
-      }
-    }
-    Commands::Start { name } => {}
-    Commands::Stop { name } => {}
+  //     for item in output.parse_vec_payload::<String>().unwrap() {
+  //       println!("{item}");
+  //     }
+  //   }
+  //   Commands::Start { name } => {}
+  //   Commands::Stop { name } => {}
+  // }
+
+  if cli.list {
+    let output: messaging::Message = toml::from_str(
+      &send_command(
+        toml::to_string(&messaging::Message::from_type(messaging::MessageType::List)).unwrap(),
+      )
+      .unwrap(),
+    )
+    .unwrap();
+
+    println!("{:?}", output.payload);
   }
 }

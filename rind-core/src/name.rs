@@ -2,6 +2,9 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use serde::Deserialize;
+use serde::de::Deserializer;
+
 #[derive(Clone, serde::Serialize)]
 pub struct Name {
   hash: u64,
@@ -55,9 +58,6 @@ impl Hash for Name {
 fn ser_name<S: serde::Serializer>(f: &Arc<str>, serializer: S) -> Result<S::Ok, S::Error> {
   serializer.collect_str(&f.to_string())
 }
-
-use serde::Deserialize;
-use serde::de::Deserializer;
 
 fn de_name<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Name, D::Error> {
   let s: &str = Deserialize::deserialize(deserializer)?;

@@ -1,4 +1,4 @@
-use crate::names::Name;
+use crate::name::Name;
 use crate::units::UNITS;
 use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
@@ -15,6 +15,7 @@ pub enum ServiceState {
   #[default]
   Inactive,
   Exited(i32),
+  Error(String),
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -40,20 +41,23 @@ impl crate::units::UnitComponent for Service {
 #[derive(serde::Deserialize, serde::Serialize, Default)]
 pub struct Socket(pub u32);
 
-pub fn spawn_service(service: &mut Service) {
-  let child = Command::new(&service.exec)
-    .args(&service.args)
-    .spawn()
-    .unwrap();
+pub fn spawn_service(service: &mut Service) -> anyhow::Result<()> {
+  let child = Command::new(&service.exec).args(&service.args).spawn()?;
 
   println!("Started service {} with PID {}", service.name, child.id());
   service.child = Some(child);
+  Ok(())
 }
 
 pub fn start_service(service: &mut Service) {
-  spawn_service(service);
-
-  service.last_state = ServiceState::Active;
+  match spawn_service(service) {
+    Ok(_) => service.last_state = ServiceState::Active,
+    Err(e) => {
+      let err = format!("Failed to start service \"{}\": {e}", service.name);
+      println!("{err}");
+      service.last_state = ServiceState::Error(err);
+    }
+  }
 }
 
 pub fn stop_service(service: &mut Service, force: bool) {
