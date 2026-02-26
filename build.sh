@@ -49,7 +49,7 @@ fi
 echo "[*] Adding BusyBox to rootfs..."
 cp "$BUSYBOX" "$ROOTFS/bin/busybox"
 
-for cmd in sh ls mount echo cp mv shutdown rm mkdir touch cat ln; do
+for cmd in clear sh ls mount echo cp mv shutdown rm mkdir touch cat ln; do
   ln -sf busybox "$ROOTFS/bin/$cmd"
 done
 
@@ -86,7 +86,7 @@ if [ "$RUN" -eq 1 ]; then
 	    qemu-system-x86_64 \
 	        -kernel "$BZIMAGE" \
 	        -initrd "$CPIO" \
-	        -append "console=ttyS0 init=/bin/$RUST_INIT"
+	        -append "console=ttyS0"
 	        # -nographic
 	fi
 fi

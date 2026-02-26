@@ -8,7 +8,10 @@ use nix::mount::{MsFlags, mount};
 mod config;
 mod daemon;
 mod messaging;
+mod mount;
+mod names;
 mod services;
+mod units;
 
 fn spawn_tty(tty_path: &str) -> Option<Child> {
   let Ok(tty) = OpenOptions::new().read(true).write(true).open(tty_path) else {
@@ -77,10 +80,12 @@ fn main() {
 
   // config::CONFIG.lock().unwrap().services.path = ".artifacts/services".into();
 
-  match services::load_services() {
+  match units::load_units() {
     Err(e) => eprintln!("Error Happened: {e}"),
     Ok(_) => {}
   };
+
+  services::start_services();
 
   std::thread::spawn(|| {
     let child = spawn_tty("/dev/tty1");

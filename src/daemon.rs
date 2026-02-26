@@ -1,5 +1,5 @@
 use crate::messaging::*;
-use crate::services::SERVICES;
+use crate::units::UNITS;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::thread;
@@ -43,8 +43,15 @@ fn handle_client(mut stream: UnixStream) {
     println!("parsed: {msg:?}");
 
     let response = match msg.r#type {
-      MessageType::List => Message::from_type(MessageType::List)
-        .with_vec(SERVICES.read().unwrap().keys().cloned().collect()),
+      MessageType::List => Message::from_type(MessageType::List).with_vec(
+        UNITS
+          .read()
+          .unwrap()
+          .names()
+          .iter()
+          .map(|x| x.to_string())
+          .collect(),
+      ),
       _ => MessageType::Unknown.into(),
     };
 
