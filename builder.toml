@@ -1,0 +1,15 @@
+[profile.main]
+build_command = "cargo build --release --target x86_64-unknown-linux-musl"
+binaries = ["init", "rind", "example-active", "example-inactive"]
+files = ["examples/services:/etc/services"]
+#install = ["https://url.to/coreutils.tar.zst"]
+disk_mode = "cpio" # or "image"
+linux_image = "bzImage:https://l4re.org/download/Linux-kernel/x86-64/bzImage-6.6.8"
+run_options = ["console=ttyS0/"]
+#qemu_options = { arch = "x86_64", args = [...] }
+nodes = [
+  { path = "/dev/null", node_type = "c", major = 1, minor = 3, mode = 0o666 },
+  { path = "/dev/tty1", node_type = "c", major = 4, minor = 1, mode = 0o666 },
+  { path = "/dev/console", node_type = "c", major = 5, minor = 1, mode = 0o666 }
+]
+binary_target = "target/x86_64-unknown-linux-musl/release"

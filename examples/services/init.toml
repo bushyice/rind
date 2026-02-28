@@ -1,0 +1,24 @@
+
+[[mount]]
+source = "proc"
+target = "/proc"
+fstype = "proc"
+create = true
+
+[[mount]]
+source = "sysfs"
+target = "/sys"
+fstype = "sysfs"
+create = true
+
+[[mount]]
+source = "devtmpfs"
+target = "/dev"
+fstype = "devtmpfs"
+create = true
+
+[[mount]]
+source = "tmpfs"
+target = "/tmp"
+fstype = "tmpfs"
+create = true

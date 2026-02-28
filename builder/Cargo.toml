@@ -1,0 +1,16 @@
+[package]
+name = "builder"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+toml = "0.7"
+serde = { version = "1.0", features = ["derive"] }
+reqwest = { version = "0.11", features = ["blocking", "rustls-tls"] }
+tar = "0.4"
+zstd = "0.12"
+fs_extra = "1.3"
+nix = { version = "0.27", features = ["process", "acct", "term", "poll", "signal", "mount", "fs"] }
+anyhow = "1.0"

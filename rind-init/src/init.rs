@@ -4,7 +4,7 @@ use std::os::unix::io::FromRawFd;
 use std::process::{Child, Command, Stdio};
 
 use libc;
-use rind_core::{mount, services, units};
+use rind_core::{config, mount, services, units};
 use rind_daemon::start_daemon;
 
 fn spawn_tty(tty_path: &str) -> Option<Child> {
@@ -19,7 +19,7 @@ fn spawn_tty(tty_path: &str) -> Option<Child> {
   let stdout = unsafe { Stdio::from_raw_fd(libc::dup(fd)) };
   let stderr = unsafe { Stdio::from_raw_fd(libc::dup(fd)) };
 
-  match Command::new("/bin/sh")
+  match Command::new(config::CONFIG.read().unwrap().shell.exec.clone())
     .stdin(stdin)
     .stdout(stdout)
     .stderr(stderr)
@@ -57,7 +57,7 @@ fn main() {
 
   // will be removed
   std::thread::spawn(|| {
-    let child = spawn_tty("/dev/tty1");
+    let child = spawn_tty(&config::CONFIG.read().unwrap().shell.tty);
 
     if let Some(mut child) = child {
       child.wait().expect("Failed to wait for shell");

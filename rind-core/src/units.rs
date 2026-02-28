@@ -134,7 +134,7 @@ impl Units {
 
   pub fn save_enabled(&self) {
     let enabled_path =
-      std::path::PathBuf::from(&crate::config::CONFIG.lock().unwrap().services.path)
+      std::path::PathBuf::from(&crate::config::CONFIG.read().unwrap().services.path)
         .join(".enabled");
     std::fs::write(
       enabled_path,
@@ -213,6 +213,6 @@ pub fn load_units_from(path: &str) -> Result<(), anyhow::Error> {
 }
 
 pub fn load_units() -> Result<(), anyhow::Error> {
-  load_units_from(&crate::config::CONFIG.lock().unwrap().services.path)?;
+  load_units_from(&crate::config::CONFIG.read().unwrap().services.path)?;
   Ok(())
 }

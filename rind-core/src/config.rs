@@ -1,7 +1,7 @@
 use once_cell::sync::Lazy;
 
-pub static CONFIG: Lazy<std::sync::Mutex<InitConfig>> =
-  Lazy::new(|| std::sync::Mutex::new(InitConfig::default()));
+pub static CONFIG: Lazy<std::sync::RwLock<InitConfig>> =
+  Lazy::new(|| std::sync::RwLock::new(InitConfig::default()));
 
 #[derive(serde::Deserialize)]
 pub struct ServicesConfig {
@@ -28,7 +28,7 @@ impl Default for InitConfig {
       },
       shell: ShellConfig {
         exec: "/bin/sh".into(),
-        tty: "ttyS0".into(),
+        tty: "tty1".into(),
       },
     }
   }
