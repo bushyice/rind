@@ -1,15 +1,43 @@
+
+# Only one "main" profile is available for now
 [profile.main]
+# Build command
 build_command = "cargo build --release --target x86_64-unknown-linux-musl"
-binaries = ["init", "rind", "example-active", "example-inactive"]
-files = ["examples/services:/etc/services"]
-#install = ["https://url.to/coreutils.tar.zst"]
-disk_mode = "cpio" # or "image"
-linux_image = "bzImage:https://l4re.org/download/Linux-kernel/x86-64/bzImage-6.6.8"
-run_options = ["console=ttyS0/"]
-#qemu_options = { arch = "x86_64", args = [...] }
-nodes = [
-  { path = "/dev/null", node_type = "c", major = 1, minor = 3, mode = 0o666 },
-  { path = "/dev/tty1", node_type = "c", major = 4, minor = 1, mode = 0o666 },
-  { path = "/dev/console", node_type = "c", major = 5, minor = 1, mode = 0o666 }
-]
+
+# Which path the binaries are copied from
 binary_target = "target/x86_64-unknown-linux-musl/release"
+
+# Binaries to copy
+binaries = ["init", "rind", "example-active", "example-inactive"]
+
+# Files to copy over
+files = ["examples/services:/etc/services"]
+
+# Utilities
+install = [
+  # corutils
+  "https://mirror.accum.se/mirror/archlinux/core/os/x86_64/coreutils-9.10-1-x86_64.pkg.tar.zst",
+  # bash
+  "https://mirror.accum.se/mirror/archlinux/core/os/x86_64/bash-5.3.9-1-x86_64.pkg.tar.zst",
+  # ncurses
+  "https://mirror.accum.se/mirror/archlinux/core/os/x86_64/ncurses-6.6-1-x86_64.pkg.tar.zst",
+  # readline
+  "https://mirror.accum.se/mirror/archlinux/core/os/x86_64/readline-8.3.003-1-x86_64.pkg.tar.zst"
+]
+
+# Use images for now, cpio is depricated
+disk_mode = "image"
+
+# Linux Image: for now we can use bzImage
+linux_image = "bzImage:https://l4re.org/download/Linux-kernel/x86-64/bzImage-6.6.8"
+
+# root= is needed for image disks
+run_options = ["console=ttyS0/ root=/dev/vda"]
+#qemu_options = { arch = "x86_64", args = [...] }
+
+# Depricated
+nodes = [
+  # { path = "/dev/null", node_type = "c", major = 1, minor = 3, mode = 0o666 },
+  # { path = "/dev/tty1", node_type = "c", major = 4, minor = 1, mode = 0o666 },
+  # { path = "/dev/console", node_type = "c", major = 5, minor = 1, mode = 0o666 }
+]

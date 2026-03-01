@@ -1,5 +1,7 @@
 use clap::Parser;
-use rind_ipc::{Message, MessageType, send::send_message, ser::UnitsSerialized};
+use rind_ipc::{
+  Message, MessageType, Service, ServiceState, send::send_message, ser::UnitsSerialized,
+};
 
 #[derive(clap::Parser)]
 #[command(name = "rind")]
@@ -42,9 +44,19 @@ fn main() {
     } else {
       for (name, unit) in units.each() {
         println!(
-          "{}: {} services, {} mounts",
+          "{}: {} services({} running, {} crashed), {} mounts",
           name.to_string(),
           unit.service.as_ref().map_or(0, |x| x.len()),
+          unit.service.as_ref().map_or(0, |x| x
+            .iter()
+            .filter(|x| matches!(x.last_state, ServiceState::Active))
+            .collect::<Vec<&Service>>()
+            .len()),
+          unit.service.as_ref().map_or(0, |x| x
+            .iter()
+            .filter(|x| matches!(x.last_state, ServiceState::Error(_)))
+            .collect::<Vec<&Service>>()
+            .len()),
           unit.mount.as_ref().map_or(0, |x| x.len())
         );
       }

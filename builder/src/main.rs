@@ -1,4 +1,4 @@
-// rinb/src/main.rs
+/// mostly by: GPT-5 Mini
 use std::{
   collections::HashMap,
   fs::{self, File},
@@ -7,6 +7,9 @@ use std::{
   process::{exit, Command},
 };
 
+use std::os::unix::fs::MetadataExt;
+
+use ext4_lwext4::{mkfs, Ext4Fs, FileBlockDevice, MkfsOptions, OpenFlags};
 use fs_extra::dir::CopyOptions;
 use reqwest::blocking::get;
 use serde::Deserialize;
@@ -100,6 +103,7 @@ fn builder_b(profile: &Profile) {
   }
 }
 
+/// mostly by me
 fn prepare_rootfs(profile: &Profile, rootfs: &Path) {
   fs::create_dir_all(rootfs).unwrap();
   fs::create_dir_all(rootfs.join("bin")).unwrap();
@@ -114,7 +118,7 @@ fn prepare_rootfs(profile: &Profile, rootfs: &Path) {
           .unwrap_or("target/x86_64-unknown-linux-musl/release".to_string()),
       )
       .join(bin);
-      let dst = if bin == "init" {
+      let dst = if bin == "initd" {
         rootfs.join(bin)
       } else {
         rootfs.join("bin").join(bin)
@@ -233,44 +237,69 @@ fn builder_d(profile: &Profile, rootfs: &Path) {
         println!("[*] Updating existing disk image");
         fs::remove_file(&output).unwrap();
       }
-      let size = "512M";
-      println!("[*] Creating disk image of size {}", size);
-      Command::new("fallocate")
-        .args(&["-l", size, output.to_str().unwrap()])
-        .status()
-        .unwrap();
+
+      let size_bytes = 1024 * 1024 * 1024;
+      println!("[*] Creating ext4 disk image of size {} bytes", size_bytes);
+
+      let device =
+        FileBlockDevice::create(&output, size_bytes).expect("Failed to create block device");
+
       Command::new("mkfs.ext4")
-        .args(&["-F", output.to_str().unwrap()])
-        .status()
-        .unwrap();
-      let mnt = artifact_path().join("mnt");
-      fs::create_dir_all(&mnt).unwrap();
-      Command::new("sudo")
         .args(&[
-          "mount",
-          "-o",
-          "loop",
+          "-F",
+          "-O",
+          "^64bit,^metadata_csum,^flex_bg,^huge_file,^dir_index,^extent",
+          "-E",
+          "lazy_itable_init=0,lazy_journal_init=0",
+          "-m",
+          "0",
           output.to_str().unwrap(),
-          mnt.to_str().unwrap(),
         ])
         .status()
         .unwrap();
-      Command::new("sudo")
-        .args(&[
-          "cp",
-          "-r",
-          &format!("{}/*", rootfs.display()),
-          mnt.to_str().unwrap(),
-        ])
-        .status()
-        .unwrap();
-      Command::new("sudo")
-        .args(&["umount", mnt.to_str().unwrap()])
-        .status()
-        .unwrap();
+      let device = FileBlockDevice::open(&output).expect("Failed to open image");
+      let mut fs = Ext4Fs::mount(device, false).expect("Failed to mount device");
+
+      copy_into_ext4(&mut fs, rootfs, rootfs).expect("Failed to copy rootfs recursively");
+
+      println!("[*] Disk image created at {}", output.display());
     }
     other => panic!("Unknown disk_mode: {}", other),
   };
+}
+
+fn copy_into_ext4(fs: &mut Ext4Fs, rootfs: &Path, current: &Path) -> std::io::Result<()> {
+  for entry in fs::read_dir(current)? {
+    let entry = entry?;
+    let path = entry.path();
+
+    let rel_path = path.strip_prefix(rootfs).unwrap();
+    let target_path = format!("/{}", rel_path.display());
+
+    println!("Copying: {:?}", path);
+
+    let meta = std::fs::metadata(&path)?;
+    let mode = meta.mode() & 0o7777;
+
+    if path.is_dir() {
+      fs.mkdir(&target_path, 0o755)
+        .expect("Failed to create directory");
+
+      copy_into_ext4(fs, rootfs, &path)?;
+    } else {
+      let bytes = fs::read(&path)?;
+
+      let mut file = fs
+        .open(&target_path, OpenFlags::CREATE | OpenFlags::WRITE)
+        .expect("Failed to open file");
+
+      file.write_all(&bytes).expect("Failed to write file");
+      fs.set_permissions(&target_path, mode)
+        .expect("Failed to set file mode");
+    }
+  }
+
+  Ok(())
 }
 
 fn run(profile: &Profile) {
@@ -306,7 +335,11 @@ fn run(profile: &Profile) {
         .arg(artifact_path().join("rootfs.cpio.gz"));
     }
     "image" => {
-      cmd.arg("-hda").arg(artifact_path().join("rootfs.img"));
+      cmd.arg("-drive").arg(format!(
+        "file={},format=raw,if=virtio",
+        artifact_path().join("rootfs.img").display()
+      ));
+      // cmd.arg("-hda").arg(artifact_path().join("rootfs.img"));
     }
     _ => panic!("Unknown disk_mode"),
   }

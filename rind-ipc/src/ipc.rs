@@ -2,6 +2,8 @@ pub mod recv;
 pub mod send;
 pub mod ser;
 
+pub use rind_core::services::{Service, ServiceState};
+
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub enum MessageType {
   List,
