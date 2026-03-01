@@ -8,6 +8,7 @@ use std::{
 };
 
 use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::PermissionsExt;
 
 use ext4_lwext4::{mkfs, Ext4Fs, FileBlockDevice, MkfsOptions, OpenFlags};
 use fs_extra::dir::CopyOptions;
@@ -35,6 +36,8 @@ struct Profile {
   run_options: Option<Vec<String>>,
   qemu_options: Option<QemuOptions>,
   nodes: Option<Vec<NodeConfig>>,
+  busybox_url: Option<String>,
+  busybox_applets: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -205,6 +208,43 @@ fn builder_i(profile: &Profile, rootfs: &Path) {
       .split_once(":")
       .expect("Invalid linux_image format. Expected name:url");
     cached_download(url, Some(name));
+  }
+
+  if let Some(url) = &profile.busybox_url {
+    let bb_path = cached_download(url, None);
+
+    let bin_dir = rootfs.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+
+    let busybox_dst = bin_dir.join("busybox");
+    fs::copy(&bb_path, &busybox_dst).unwrap();
+
+    let mut perms = fs::metadata(&busybox_dst).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&busybox_dst, perms).unwrap();
+
+    let applets = profile.busybox_applets.clone().unwrap_or(vec![
+      "sh".into(),
+      "ls".into(),
+      "cp".into(),
+      "mkdir".into(),
+      "echo".into(),
+      "cat".into(),
+      "rm".into(),
+      "ln".into(),
+    ]);
+
+    for app in &applets {
+      let link_path = bin_dir.join(app);
+      if !link_path.exists() {
+        std::os::unix::fs::symlink("busybox", link_path).unwrap();
+      }
+    }
+
+    println!(
+      "[*] BusyBox installed at /bin/busybox with applets: {:?}",
+      applets
+    );
   }
 }
 
