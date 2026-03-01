@@ -32,7 +32,7 @@ disk_mode = "image"
 linux_image = "bzImage:https://l4re.org/download/Linux-kernel/x86-64/bzImage-6.6.8"
 
 # root= is needed for image disks
-run_options = ["console=ttyS0/ root=/dev/vda"]
+run_options = ["console=ttyS0/ root=/dev/vda rw"]
 #qemu_options = { arch = "x86_64", args = [...] }
 
 # Depricated
