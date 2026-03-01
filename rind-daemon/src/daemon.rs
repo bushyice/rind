@@ -9,7 +9,27 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
   }))
 }
 
+const SKIP: [&'static str; 3] = ["/proc", "/sys", "/dev"];
+
+fn visit_dirs(path: &std::path::Path) {
+  if let Ok(entries) = std::fs::read_dir(path) {
+    for entry in entries.flatten() {
+      let path = entry.path();
+      println!("{}", path.display());
+
+      if SKIP.contains(&path.to_str().unwrap()) {
+        continue;
+      }
+
+      if path.is_dir() {
+        visit_dirs(&path);
+      }
+    }
+  }
+}
+
 pub fn start_daemon() -> anyhow::Result<()> {
+  visit_dirs(std::path::Path::new("/usr/bin"));
   start_ipc_server(handle_client)?;
   Ok(())
 }

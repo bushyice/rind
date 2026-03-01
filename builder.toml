@@ -13,16 +13,29 @@ binaries = ["init", "rind", "example-active", "example-inactive"]
 # Files to copy over
 files = ["examples/services:/etc/services"]
 
+# Busybox Setup
+busybox_url = "https://busybox.net/downloads/binaries/1.19.0/busybox-x86_64"
+
 # Utilities
 install = [
+  # glibc
+  # "https://mirror.moson.org/arch/core/os/x86_64/glibc-2.43+r5+g856c426a7534-1-x86_64.pkg.tar.zst",
+  # filesystem
+  # "https://mirror.moson.org/arch/core/os/x86_64/filesystem-2025.10.12-1-any.pkg.tar.zst",
+  # iana-etc
+  # "https://mirror.moson.org/arch/core/os/x86_64/iana-etc-20260225-2-any.pkg.tar.zst",
+  # linux-api-headers
+  # "https://mirror.moson.org/arch/core/os/x86_64/linux-api-headers-6.19-1-x86_64.pkg.tar.zst",
+  # tzdata
+  # "https://mirror.moson.org/arch/core/os/x86_64/tzdata-2025c-1-x86_64.pkg.tar.zst",
   # corutils
-  "https://mirror.accum.se/mirror/archlinux/core/os/x86_64/coreutils-9.10-1-x86_64.pkg.tar.zst",
+  # "https://mirror.accum.se/mirror/archlinux/core/os/x86_64/coreutils-9.10-1-x86_64.pkg.tar.zst",
   # bash
-  "https://mirror.accum.se/mirror/archlinux/core/os/x86_64/bash-5.3.9-1-x86_64.pkg.tar.zst",
+  # "https://mirror.accum.se/mirror/archlinux/core/os/x86_64/bash-5.3.9-1-x86_64.pkg.tar.zst",
   # ncurses
-  "https://mirror.accum.se/mirror/archlinux/core/os/x86_64/ncurses-6.6-1-x86_64.pkg.tar.zst",
+  # "https://mirror.accum.se/mirror/archlinux/core/os/x86_64/ncurses-6.6-1-x86_64.pkg.tar.zst",
   # readline
-  "https://mirror.accum.se/mirror/archlinux/core/os/x86_64/readline-8.3.003-1-x86_64.pkg.tar.zst"
+  # "https://mirror.accum.se/mirror/archlinux/core/os/x86_64/readline-8.3.003-1-x86_64.pkg.tar.zst"
 ]
 
 # Use images for now, cpio is depricated

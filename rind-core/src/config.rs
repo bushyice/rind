@@ -41,7 +41,7 @@ impl Default for InitConfig {
         path: s("/etc/services"),
       },
       shell: ShellConfig {
-        exec: s("/usr/bin/sh"),
+        exec: s("/bin/sh"),
         tty: s("/dev/tty1"),
       },
       logger: LoggerConfig {
