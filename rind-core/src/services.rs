@@ -1,5 +1,7 @@
+use crate::logger::{LOGGER, log_child};
 use crate::name::Name;
 use crate::units::UNITS;
+use crate::{logerr, loginfo};
 use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
@@ -42,9 +44,11 @@ impl crate::units::UnitComponent for Service {
 pub struct Socket(pub u32);
 
 pub fn spawn_service(service: &mut Service) -> anyhow::Result<()> {
-  let child = Command::new(&service.exec).args(&service.args).spawn()?;
+  let mut child = Command::new(&service.exec).args(&service.args).spawn()?;
 
-  println!("Started service {} with PID {}", service.name, child.id());
+  log_child(&mut child, &service, LOGGER.clone());
+
+  loginfo!("Started service {} with PID {}", service.name, child.id());
   service.child = Some(child);
   Ok(())
 }
@@ -54,7 +58,7 @@ pub fn start_service(service: &mut Service) {
     Ok(_) => service.last_state = ServiceState::Active,
     Err(e) => {
       let err = format!("Failed to start service \"{}\": {e}", service.name);
-      println!("{err}");
+      logerr!("{err}");
       service.last_state = ServiceState::Error(err);
     }
   }
@@ -87,7 +91,7 @@ pub fn service_loop() {
   loop {
     match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
       Ok(WaitStatus::Exited(pid, code)) => {
-        // println!("Child {} exited with code {}", pid, code);
+        loginfo!("Child {} exited with code {}", pid, code);
 
         let mut units = UNITS.write().unwrap();
         let mut to_restart = vec![];
@@ -117,7 +121,7 @@ pub fn service_loop() {
         }
       }
       Ok(_) => {}
-      Err(e) => eprintln!("waitpid error: {}", e),
+      Err(e) => logerr!("waitpid error: {}", e),
     }
 
     thread::sleep(Duration::from_millis(100));

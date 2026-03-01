@@ -2,6 +2,7 @@ use nix::mount::{MsFlags, mount, umount};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::loginfo;
 use crate::units::UNITS;
 
 #[derive(Deserialize, Serialize)]
@@ -85,7 +86,7 @@ pub fn mount_units() {
   for unit in units.enabled() {
     if let Some(ref mounts) = unit.mount {
       for mount in mounts {
-        println!("Mounting target: {}", mount.target);
+        loginfo!("Mounting target: {}", mount.target);
         mount_target(mount);
       }
     }

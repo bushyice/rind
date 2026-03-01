@@ -19,7 +19,7 @@ fn spawn_tty(tty_path: &str) -> Option<Child> {
   let stdout = unsafe { Stdio::from_raw_fd(libc::dup(fd)) };
   let stderr = unsafe { Stdio::from_raw_fd(libc::dup(fd)) };
 
-  match Command::new(config::CONFIG.read().unwrap().shell.exec.clone())
+  match Command::new(config::CONFIG.read().unwrap().shell.exec.as_str())
     .stdin(stdin)
     .stdout(stdout)
     .stderr(stderr)

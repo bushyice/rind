@@ -134,7 +134,7 @@ impl Units {
 
   pub fn save_enabled(&self) {
     let enabled_path =
-      std::path::PathBuf::from(&crate::config::CONFIG.read().unwrap().services.path)
+      std::path::PathBuf::from(crate::config::CONFIG.read().unwrap().services.path.as_str())
         .join(".enabled");
     std::fs::write(
       enabled_path,

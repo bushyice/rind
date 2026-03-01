@@ -11,11 +11,13 @@ once_cell = "*"
 # sdlang = "*"
 toml = "*"
 glob = "*"
-nix = { version = "*", features = ["process", "acct", "term", "poll", "signal", "mount"] }
+nix = { version = "*", features = ["process", "acct", "socket", "term", "poll", "signal", "mount"] }
 libc = "*"
 serde = { version = "*", features = ["derive"] }
 anyhow = "*"
 clap = { version = "*", features = ["derive"] }
+strumbra = "*"
+serde_json = "1"
 
 [profile.release]
 lto = true
