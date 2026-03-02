@@ -249,6 +249,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rind-common"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "rind-core"
 version = "0.1.0"
 dependencies = [
@@ -288,8 +295,10 @@ dependencies = [
  "anyhow",
  "libc",
  "nix",
+ "rind-common",
  "rind-core",
  "serde",
+ "serde_json",
  "toml",
 ]
 

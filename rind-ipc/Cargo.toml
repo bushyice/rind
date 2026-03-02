@@ -13,3 +13,10 @@ nix.workspace = true
 toml.workspace = true
 anyhow.workspace = true
 rind-core = { path = "../rind-core" }
+rind-common = { path = "../rind-common" }
+serde_json.workspace = true
+
+[features]
+default = ["server"]
+
+server = []

@@ -1,65 +1,69 @@
-use rind_core::{
-  name::Name,
-  units::{UNITS, Unit, Units},
-};
+use serde::{Deserialize, Serialize};
 
-#[derive(serde::Serialize, serde::Deserialize)]
-pub struct UnitsSerialized {
-  pub units: Vec<String>,
-  pub names: Vec<String>,
-  pub enabled: Vec<String>,
+#[derive(Serialize, Deserialize)]
+pub struct UnitSerialized {
+  pub name: String,
+  pub services: usize,
+  pub active_services: usize,
+  pub mounts: usize,
+  pub mounted: usize,
 }
 
-impl UnitsSerialized {
-  pub fn to_string(&self) -> String {
-    toml::to_string(&self).unwrap()
+impl UnitSerialized {
+  pub fn stringify(&self) -> String {
+    serde_json::to_string(self).unwrap()
   }
 
-  pub fn to_units(&self) -> Units {
-    let mut units = Units::default();
-
-    let units_iter = self
-      .units
-      .iter()
-      .map(|x| toml::from_str::<Unit>(x).unwrap());
-
-    let names: Vec<Name> = self.names.iter().map(|x| Name::from(x.clone())).collect();
-
-    for (index, unit) in units_iter.enumerate() {
-      let name = &names[index];
-      // let enabled = self.enabled.contains(&name.to_string());
-
-      units.insert_unit(name.clone(), unit);
-
-      // if enabled {
-      //   units.enable_unit(name.clone(), false);
-      // }
-    }
-
-    units
+  pub fn from_string(str: String) -> Self {
+    serde_json::from_str(&str).unwrap()
   }
 
-  pub fn from_registry() -> Self {
-    let units = UNITS.read().unwrap();
-
-    UnitsSerialized {
-      units: units.units().map(|u| toml::to_string(u).unwrap()).collect(),
-      names: units.names().map(|k| k.to_string()).collect(),
-      enabled: units.enabled_names().map(|x| x.to_string()).collect(),
-    }
+  pub fn many_from_string(str: String) -> Vec<Self> {
+    serde_json::from_str(&str).unwrap()
   }
 
-  pub fn from_string(s: String) -> Self {
-    toml::from_str(&s).unwrap()
+  pub fn as_some(self) -> Option<Self> {
+    Some(self)
   }
 }
 
-impl From<Units> for UnitsSerialized {
-  fn from(value: Units) -> Self {
-    UnitsSerialized {
-      units: value.units().map(|u| toml::to_string(u).unwrap()).collect(),
-      names: value.names().map(|k| k.to_string()).collect(),
-      enabled: value.enabled_names().map(|x| x.to_string()).collect(),
-    }
+pub fn serialize_many<T: Serialize>(items: &Vec<T>) -> String {
+  serde_json::to_string(items).unwrap()
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ServiceSerialized {
+  pub name: String,
+  pub last_state: String,
+  pub after: Option<String>,
+  pub restart: bool,
+  pub args: Vec<String>,
+  pub exec: String,
+  pub pid: Option<u32>,
+}
+
+impl ServiceSerialized {
+  pub fn stringify(&self) -> String {
+    serde_json::to_string(self).unwrap()
+  }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct MountSerialized {
+  pub source: Option<String>,
+  pub target: String,
+  pub fstype: Option<String>,
+  pub mounted: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct UnitItemsSerialized {
+  pub mounts: Vec<MountSerialized>,
+  pub services: Vec<ServiceSerialized>,
+}
+
+impl UnitItemsSerialized {
+  pub fn stringify(&self) -> String {
+    serde_json::to_string(self).unwrap()
   }
 }

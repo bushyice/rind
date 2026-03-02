@@ -3,17 +3,100 @@ use rind_core::{
   mount::Mount,
   services::{start_service, stop_service},
   sockets::Socket,
-  units::UNITS,
+  store::STORE,
 };
 use rind_ipc::{
-  Message, MessageType, Payload, Service, UnitType, recv::start_ipc_server, ser::UnitsSerialized,
+  Message, MessageType, Payload, Service, ServiceState, UnitType,
+  recv::start_ipc_server,
+  ser::{MountSerialized, ServiceSerialized, UnitItemsSerialized, UnitSerialized, serialize_many},
 };
 
 fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
-  let units_ser = UnitsSerialized::from_registry();
-  // let units = { UNITS.read().unwrap() };
   Ok(Some(match msg.r#type {
-    MessageType::List => Message::from_type(MessageType::List).with(units_ser.to_string()),
+    MessageType::List => {
+      let Some(payload) = msg.parse_payload::<Payload>() else {
+        return Ok(Some(
+          Message::from_type(MessageType::Error).with(format!("Payload Incorrect")),
+        ));
+      };
+      let store = { STORE.read().unwrap() };
+
+      if matches!(payload.unit_type, UnitType::Unit) {
+        if let Some(unit) = store.unit(payload.name) {
+          let services = if let Some(services) = &unit.service {
+            services
+              .iter()
+              .map(|x| ServiceSerialized {
+                name: x.name.clone(),
+                last_state: format!("{:?}", x.last_state),
+                after: x.after.clone(),
+                restart: x.restart,
+                args: x.args.clone(),
+                exec: x.exec.clone(),
+                pid: x.child.as_ref().map(|x| x.id()),
+              })
+              .collect::<Vec<ServiceSerialized>>()
+          } else {
+            Vec::new()
+          };
+          let mounts = if let Some(mounts) = &unit.mount {
+            mounts
+              .iter()
+              .map(|x| MountSerialized {
+                source: x.source.clone(),
+                target: x.target.clone(),
+                fstype: x.fstype.clone(),
+                mounted: x.is_mounted(),
+              })
+              .collect::<Vec<MountSerialized>>()
+          } else {
+            Vec::new()
+          };
+          Message::from_type(MessageType::List)
+            .with(UnitItemsSerialized { mounts, services }.stringify())
+        } else {
+          Message::from_type(MessageType::Error).with(format!("Unit not found"))
+        }
+      } else if matches!(payload.unit_type, UnitType::Service) {
+        if let Some(x) = store.lookup::<Service>(&payload.name) {
+          Message::from_type(MessageType::List).with(
+            ServiceSerialized {
+              name: x.name.clone(),
+              last_state: format!("{:?}", x.last_state),
+              after: x.after.clone(),
+              restart: x.restart,
+              args: x.args.clone(),
+              exec: x.exec.clone(),
+              pid: x.child.as_ref().map(|x| x.id()),
+            }
+            .stringify(),
+          )
+        } else {
+          Message::from_type(MessageType::Error).with(format!("Service not found"))
+        }
+      } else {
+        Message::from_type(MessageType::List).with(serialize_many(
+          &store
+            .names()
+            .filter_map(|name| {
+              let Some(unit) = store.unit(name) else {
+                return None;
+              };
+
+              UnitSerialized {
+                name: name.to_string(),
+                services: unit.len::<Service>(),
+                active_services: unit
+                  .len_for::<Service>(|x| matches!(x.last_state, ServiceState::Active)),
+                mounts: unit.len::<Mount>(),
+                mounted: unit.len_for::<Mount>(|x| x.is_mounted()),
+              }
+              .as_some()
+            })
+            .collect::<Vec<UnitSerialized>>(),
+        ))
+      }
+    }
     MessageType::Start => {
       let Some(payload) = msg.parse_payload::<Payload>() else {
         return Ok(Some(MessageType::Unknown.into()));
@@ -21,7 +104,7 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
 
       logtrc!("Start request for: {:?}", payload.name);
 
-      let mut units = UNITS.write().unwrap();
+      let mut units = STORE.write().unwrap();
 
       if let Some(ser) = units.lookup_mut::<Service>(&payload.name) {
         start_service(ser);
@@ -46,7 +129,7 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
         logwarn!("Force stopping {:?}", payload.name);
       }
 
-      let mut units = UNITS.write().unwrap();
+      let mut units = STORE.write().unwrap();
 
       if let Some(ser) = units.lookup_mut::<Service>(&payload.name) {
         stop_service(ser, force);
@@ -64,15 +147,30 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
         return Ok(Some(MessageType::Unknown.into()));
       };
 
-      let mut units = UNITS.write().unwrap();
-
-      // if let Some(ser) = match payload.unit_type {
-      //   UnitType::Service => units.lookup_mut::<Service>(&payload.name),
-      //   UnitType::Mount => units.lookup_mut::<Mount>(&payload.name),
-      //   UnitType::Socket => units.lookup_mut::<Socket>(&payload.name),
-      // } {}
+      let mut units = STORE.write().unwrap();
 
       if let Some((unit_name, thing)) = payload.name.split_once('@') {
+        if thing == "*" {
+          units.enable_unit(unit_name, true);
+        }
+        units.enable_component(unit_name, thing, true);
+      } else {
+        units.enable_unit(payload.name, true);
+      }
+
+      MessageType::Unknown.into()
+    }
+    MessageType::Disable => {
+      let Some(payload) = msg.parse_payload::<Payload>() else {
+        return Ok(Some(MessageType::Unknown.into()));
+      };
+
+      let mut units = STORE.write().unwrap();
+
+      if let Some((unit_name, thing)) = payload.name.split_once('@') {
+        if thing == "*" {
+          units.disable_unit(unit_name, true);
+        }
         units.disable_component(unit_name, thing, true);
       } else {
         units.disable_unit(payload.name, true);
@@ -84,27 +182,7 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
   }))
 }
 
-const SKIP: [&'static str; 3] = ["/proc", "/sys", "/dev"];
-
-fn visit_dirs(path: &std::path::Path) {
-  if let Ok(entries) = std::fs::read_dir(path) {
-    for entry in entries.flatten() {
-      let path = entry.path();
-      println!("{}", path.display());
-
-      if SKIP.contains(&path.to_str().unwrap()) {
-        continue;
-      }
-
-      if path.is_dir() {
-        visit_dirs(&path);
-      }
-    }
-  }
-}
-
 pub fn start_daemon() -> anyhow::Result<()> {
-  visit_dirs(std::path::Path::new("/usr/bin"));
   start_ipc_server(handle_client)?;
   Ok(())
 }

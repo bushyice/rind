@@ -1,9 +1,12 @@
+#[cfg(feature = "server")]
 pub mod recv;
 pub mod send;
 pub mod ser;
 
+#[cfg(feature = "server")]
 pub use rind_core::services::{Service, ServiceState};
-pub use rind_core::units::UnitType;
+
+pub use rind_common::UnitType;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub enum MessageType {
@@ -69,8 +72,13 @@ impl Message {
     let Some(ref payload) = self.payload else {
       return None;
     };
-    let parsed = toml::from_str(payload);
-    Some(parsed.unwrap())
+    if let Ok(p) = serde_json::from_str(payload) {
+      Some(p)
+    } else if let Ok(p) = toml::from_str(payload) {
+      Some(p)
+    } else {
+      None
+    }
   }
 }
 
