@@ -19,3 +19,5 @@ path = "demo/inactive.rs"
 clap.workspace = true
 rind-ipc = { path = "../rind-ipc" }
 serde_json.workspace = true
+
+owo-colors = "4.3.0"

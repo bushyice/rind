@@ -1,11 +1,12 @@
 use rind_core::{
   loginfo, logtrc, logwarn,
+  mount::Mount,
   services::{start_service, stop_service},
   sockets::Socket,
   units::UNITS,
 };
 use rind_ipc::{
-  Message, MessageType, Payload, Service, recv::start_ipc_server, ser::UnitsSerialized,
+  Message, MessageType, Payload, Service, UnitType, recv::start_ipc_server, ser::UnitsSerialized,
 };
 
 fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
@@ -54,6 +55,27 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
         let err = format!("Unit component not found: {:?}", payload.name);
         loginfo!("{err}");
         return Ok(Some(Message::from_type(MessageType::Error).with(err)));
+      }
+
+      MessageType::Unknown.into()
+    }
+    MessageType::Enable => {
+      let Some(payload) = msg.parse_payload::<Payload>() else {
+        return Ok(Some(MessageType::Unknown.into()));
+      };
+
+      let mut units = UNITS.write().unwrap();
+
+      // if let Some(ser) = match payload.unit_type {
+      //   UnitType::Service => units.lookup_mut::<Service>(&payload.name),
+      //   UnitType::Mount => units.lookup_mut::<Mount>(&payload.name),
+      //   UnitType::Socket => units.lookup_mut::<Socket>(&payload.name),
+      // } {}
+
+      if let Some((unit_name, thing)) = payload.name.split_once('@') {
+        units.disable_component(unit_name, thing, true);
+      } else {
+        units.disable_unit(payload.name, true);
       }
 
       MessageType::Unknown.into()

@@ -1,7 +1,9 @@
 use clap::{CommandFactory, Parser};
+use owo_colors::OwoColorize;
 use rind_ipc::{
   Message, MessageType, Payload, Service, ServiceState, send::send_message, ser::UnitsSerialized,
 };
+mod macros;
 
 #[derive(clap::Parser)]
 #[command(name = "rind")]
@@ -34,6 +36,15 @@ struct Cli {
 
   #[arg(short = 'm', long, num_args(0..=1), default_missing_value = "")]
   mount: Option<String>,
+}
+
+pub fn handle_message(message: Message) {
+  match message.r#type {
+    MessageType::Error => {
+      println!("{} {}", "Error".on_red().black(), message.payload.unwrap())
+    }
+    _ => {}
+  }
 }
 
 fn main() {
@@ -69,45 +80,23 @@ fn main() {
     }
   } else if cli.start {
     if let Some(s) = &cli.service {
-      send_message(
-        Message::from_type(MessageType::Start).with_payload(Payload {
-          force: None,
-          name: s.clone(),
-          unit_type: rind_ipc::UnitType::Service,
-        }),
-      )
-      .unwrap();
+      handle!(action!(Start, s.clone(), Service, None));
     }
   } else if cli.stop {
     if let Some(s) = &cli.service {
-      send_message(Message::from_type(MessageType::Stop).with_payload(Payload {
-        force: Some(cli.force),
-        name: s.clone(),
-        unit_type: rind_ipc::UnitType::Service,
-      }))
-      .unwrap();
+      handle!(action!(Stop, s.clone(), Service, Some(cli.force)));
     }
   } else if cli.enable {
     if let Some(s) = &cli.service {
-      send_message(
-        Message::from_type(MessageType::Enable).with_payload(Payload {
-          force: None,
-          name: s.clone(),
-          unit_type: rind_ipc::UnitType::Service,
-        }),
-      )
-      .unwrap();
+      handle!(action!(Enable, s.clone(), Service, None));
+    } else if let Some(s) = &cli.mount {
+      handle!(action!(Enable, s.clone(), Mount, None));
     }
   } else if cli.disable {
     if let Some(s) = &cli.service {
-      send_message(
-        Message::from_type(MessageType::Disable).with_payload(Payload {
-          force: None,
-          name: s.clone(),
-          unit_type: rind_ipc::UnitType::Service,
-        }),
-      )
-      .unwrap();
+      handle!(action!(Disable, s.clone(), Service, Some(cli.force)));
+    } else if let Some(s) = &cli.mount {
+      handle!(action!(Disable, s.clone(), Mount, None));
     }
   } else {
     Cli::command().print_help().ok();

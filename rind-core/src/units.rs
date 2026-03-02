@@ -110,7 +110,7 @@ impl Units {
     let unit_name = unit_name.into();
     let filter = self.enabled.entry(unit_name.clone()).or_default();
     filter.include.insert(component.to_string());
-    filter.exclude.remove(component);
+    // filter.exclude.remove(component);
 
     if let Some(unit) = self.units.get_mut(&unit_name) {
       if let Some(services) = &mut unit.service {
@@ -144,7 +144,7 @@ impl Units {
   pub fn disable_component(&mut self, unit_name: impl Into<Name>, component: &str, write: bool) {
     let unit_name = unit_name.into();
     let filter = self.enabled.entry(unit_name.clone()).or_default();
-    filter.exclude.insert(component.to_string());
+    // filter.exclude.insert(component.to_string());
     filter.include.remove(component);
 
     if let Some(unit) = self.units.get_mut(&unit_name) {
