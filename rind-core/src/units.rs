@@ -1,11 +1,16 @@
+use crate::lookup::{ComponentFilter, LookUpComponent};
 use crate::mount::{Mount, mount_target, umount_target};
 use crate::name::Name;
-use crate::services::{Service, Socket, start_service, stop_service};
+use crate::services::{Service, start_service, stop_service};
+use crate::sockets::Socket;
 use once_cell::sync::Lazy;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-pub trait UnitComponent: Sized {
-  fn find_in_unit<'a>(unit: &'a Unit, name: &str) -> Option<&'a Self>;
+#[derive(Debug, Copy, Clone)]
+pub enum UnitType {
+  Socket,
+  Service,
+  Mount,
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -15,7 +20,7 @@ pub struct Unit {
   pub mount: Option<Vec<Mount>>,
 }
 
-impl UnitComponent for Unit {
+impl LookUpComponent for Unit {
   // placeholder
   fn find_in_unit<'a>(_unit: &'a Unit, _name: &str) -> Option<&'a Self> {
     None
@@ -27,8 +32,15 @@ pub static UNITS: Lazy<std::sync::RwLock<Units>> =
 
 #[derive(Default)]
 pub struct Units {
-  units: HashMap<Name, Unit>,
-  enabled: HashSet<Name>,
+  pub(crate) units: HashMap<Name, Unit>,
+  pub(crate) enabled: HashMap<Name, ComponentFilter>,
+}
+
+pub trait UnitComponent {
+  type Item: 'static;
+  fn iter_field(unit: &Unit) -> Box<dyn Iterator<Item = &Self::Item> + '_>;
+  fn iter_field_mut<'a>(unit: &'a mut Unit) -> Box<dyn Iterator<Item = &'a mut Self::Item> + 'a>;
+  fn item_name(item: &Self::Item) -> &str;
 }
 
 impl Units {
@@ -38,21 +50,42 @@ impl Units {
 
   pub fn enable_unit(&mut self, name: impl Into<Name>, write: bool) {
     let name = name.into();
-    if let Some(ref mut unit) = self.units.get_mut(&name) {
+    let filter = self.enabled.get(&name).cloned().unwrap_or_default();
+
+    if let Some(unit) = self.units.get_mut(&name) {
       if let Some(ref mut services) = unit.service {
-        for service in services {
-          start_service(service);
+        for svc in services {
+          if filter.include.is_empty() || filter.include.contains(&svc.name) {
+            if !filter.exclude.contains(&svc.name) {
+              start_service(svc);
+            }
+          }
         }
       }
 
       if let Some(ref mounts) = unit.mount {
         for mount in mounts {
-          mount_target(mount);
+          let mname = &mount.target;
+          if filter.include.is_empty() || filter.include.contains(mname) {
+            if !filter.exclude.contains(mname) {
+              mount_target(mount);
+            }
+          }
+        }
+      }
+
+      if let Some(ref sockets) = unit.socket {
+        for socket in sockets {
+          let sname = &socket.name;
+          if filter.include.is_empty() || filter.include.contains(sname) {
+            if !filter.exclude.contains(sname) {
+              // start_socket(socket);
+            }
+          }
         }
       }
     }
 
-    self.enabled.insert(name);
     if write {
       self.save_enabled();
     }
@@ -80,72 +113,149 @@ impl Units {
     }
   }
 
+  pub fn enable_component(&mut self, unit_name: impl Into<Name>, component: &str, write: bool) {
+    let unit_name = unit_name.into();
+    let filter = self.enabled.entry(unit_name.clone()).or_default();
+    filter.include.insert(component.to_string());
+    filter.exclude.remove(component);
+
+    if let Some(unit) = self.units.get_mut(&unit_name) {
+      if let Some(services) = &mut unit.service {
+        for svc in services {
+          if svc.name == component {
+            start_service(svc);
+          }
+        }
+      }
+      if let Some(mounts) = &unit.mount {
+        for mount in mounts {
+          if mount.target == component {
+            mount_target(mount);
+          }
+        }
+      }
+      if let Some(sockets) = &unit.socket {
+        for socket in sockets {
+          if socket.name == component {
+            // start_socket(socket);
+          }
+        }
+      }
+    }
+
+    if write {
+      self.save_enabled();
+    }
+  }
+
+  pub fn disable_component(&mut self, unit_name: impl Into<Name>, component: &str, write: bool) {
+    let unit_name = unit_name.into();
+    let filter = self.enabled.entry(unit_name.clone()).or_default();
+    filter.exclude.insert(component.to_string());
+    filter.include.remove(component);
+
+    if let Some(unit) = self.units.get_mut(&unit_name) {
+      if let Some(services) = &mut unit.service {
+        for svc in services {
+          if svc.name == component {
+            stop_service(svc, true);
+          }
+        }
+      }
+      if let Some(mounts) = &unit.mount {
+        for mount in mounts {
+          if mount.target == component {
+            umount_target(mount);
+          }
+        }
+      }
+      if let Some(sockets) = &unit.socket {
+        for socket in sockets {
+          if socket.name == component {
+            // stop_socket(socket);
+          }
+        }
+      }
+    }
+
+    if write {
+      self.save_enabled();
+    }
+  }
+
   pub fn each(&self) -> impl Iterator<Item = (&Name, &Unit)> {
     self.units.iter()
   }
 
-  pub fn services(&self) -> impl Iterator<Item = (&Name, &Service)> {
-    self.units.iter().flat_map(|(name, unit)| {
-      unit
-        .service
-        .iter()
-        .flat_map(move |s| s.iter().map(move |svc| (name, svc)))
-    })
-  }
+  // pub fn enabled(&self) -> impl Iterator<Item = &Unit> {
+  //   self.units.iter().filter_map(move |(name, unit)| {
+  //     if self.enabled.contains_key(name) {
+  //       Some(unit)
+  //     } else {
+  //       None
+  //     }
+  //   })
+  // }
+  // pub fn enabled_mut(&mut self) -> impl Iterator<Item = &mut Unit> {
+  //   self.units.iter_mut().filter_map(|(name, unit)| {
+  //     if self.enabled.contains_key(name) {
+  //       Some(unit)
+  //     } else {
+  //       None
+  //     }
+  //   })
+  // }
 
-  pub fn services_mut(&mut self) -> impl Iterator<Item = (&Name, &mut Service)> {
-    self.units.iter_mut().flat_map(|(name, unit)| {
-      unit
-        .service
-        .iter_mut()
-        .flat_map(move |services| services.iter_mut().map(move |svc| (name, svc)))
-    })
-  }
+  // pub fn enabled_services(&self) -> impl Iterator<Item = &Service> {
+  //   self.units.iter().flat_map(move |(unit_name, unit)| {
+  //     let filter = self.enabled.get(unit_name);
 
-  pub fn enabled(&self) -> impl Iterator<Item = &Unit> {
-    self.units.iter().filter_map(move |(name, unit)| {
-      if self.enabled.contains(name) {
-        Some(unit)
-      } else {
-        None
-      }
-    })
-  }
-
-  pub fn enabled_mut(&mut self) -> impl Iterator<Item = &mut Unit> {
-    self.units.iter_mut().filter_map(|(name, unit)| {
-      if self.enabled.contains(name) {
-        Some(unit)
-      } else {
-        None
-      }
-    })
-  }
+  //     filter_enabled!(unit.service.iter().flat_map(|s| s.iter()), filter)
+  //   })
+  // }
 
   pub fn parse_enabled(&mut self, content: &str) {
-    self.enabled.extend(
-      content
-        .lines()
-        .map(str::trim)
-        .filter(|x| !x.is_empty())
-        .map(|x| x.into()),
-    );
+    for line in content.lines().map(str::trim).filter(|x| !x.is_empty()) {
+      if let Some((unit_name, rest)) = line.split_once('@') {
+        let mut filter = ComponentFilter::default();
+        if let Some(inner) = rest.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+          for item in inner.split(',').map(str::trim).filter(|x| !x.is_empty()) {
+            if let Some(stripped) = item.strip_prefix('!') {
+              filter.exclude.insert(stripped.to_string());
+            } else {
+              filter.include.insert(item.to_string());
+            }
+          }
+        }
+        self.enabled.insert(unit_name.into(), filter);
+      } else {
+        self.enabled.insert(line.into(), ComponentFilter::default());
+      }
+    }
   }
 
   pub fn save_enabled(&self) {
     let enabled_path =
       std::path::PathBuf::from(crate::config::CONFIG.read().unwrap().services.path.as_str())
         .join(".enabled");
-    std::fs::write(
-      enabled_path,
-      self
-        .enabled
-        .iter()
-        .map(|x| x.to_string())
-        .collect::<Vec<String>>()
-        .join("\n"),
-    )
-    .unwrap();
+
+    let mut lines = vec![];
+    for (name, filter) in &self.enabled {
+      if filter.include.is_empty() && filter.exclude.is_empty() {
+        lines.push(name.to_string());
+      } else {
+        let mut parts = vec![];
+        for inc in &filter.include {
+          parts.push(inc.clone());
+        }
+        for exc in &filter.exclude {
+          parts.push(format!("!{}", exc));
+        }
+        lines.push(format!("{}@{{{}}}", name.to_string(), parts.join(",")));
+      }
+    }
+
+    std::fs::write(enabled_path, lines.join("\n")).unwrap();
   }
 
   pub fn unit(&self, name: impl Into<Name>) -> Option<&Unit> {
@@ -156,18 +266,6 @@ impl Units {
     self.units.get_mut(&name.into())
   }
 
-  pub fn lookup<T: UnitComponent>(&self, name: &str) -> Option<&T> {
-    if let Some((unit_name, thing)) = name.split_once('@') {
-      let unit = self.units.get(&unit_name.into())?;
-      T::find_in_unit(unit, thing)
-    } else {
-      self
-        .units
-        .values()
-        .find_map(|unit| T::find_in_unit(unit, name.into()))
-    }
-  }
-
   pub fn names(&self) -> impl Iterator<Item = &Name> {
     self.units.keys()
   }
@@ -176,8 +274,16 @@ impl Units {
     self.units.values()
   }
 
+  pub fn iter(&self) -> impl Iterator<Item = (&Name, &Unit)> {
+    self.units.iter()
+  }
+
   pub fn enabled_names(&self) -> impl Iterator<Item = &Name> {
-    self.enabled.iter()
+    self.enabled.iter().map(|x| x.0)
+  }
+
+  pub fn enabled_get(&self, name: &Name) -> Option<&ComponentFilter> {
+    self.enabled.get(name)
   }
 }
 
@@ -190,7 +296,7 @@ pub fn load_units_from(path: &str) -> Result<(), anyhow::Error> {
     let entry = entry?;
     let path = entry.path();
     let name = path
-      .file_name()
+      .file_prefix()
       .ok_or(anyhow::anyhow!("Unit file name could not be retrieved"))?
       .to_string_lossy()
       .to_string();

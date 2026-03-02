@@ -2,13 +2,13 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-use serde::Deserialize;
-use serde::de::Deserializer;
+// use serde::Deserialize;
+// use serde::de::Deserializer;
 
 #[derive(Clone, serde::Serialize)]
 pub struct Name {
   hash: u64,
-  #[serde(serialize_with = "ser_name", deserialize_with = "de_name")]
+  #[serde(serialize_with = "ser_name")]
   string: Arc<str>,
 }
 
@@ -59,7 +59,7 @@ fn ser_name<S: serde::Serializer>(f: &Arc<str>, serializer: S) -> Result<S::Ok, 
   serializer.collect_str(&f.to_string())
 }
 
-fn de_name<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Name, D::Error> {
-  let s: &str = Deserialize::deserialize(deserializer)?;
-  Ok(Name::new(s))
-}
+// fn de_name<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Name, D::Error> {
+//   let s: &str = Deserialize::deserialize(deserializer)?;
+//   Ok(Name::new(s))
+// }

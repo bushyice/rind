@@ -83,12 +83,8 @@ pub fn mount_target(target: &Mount) {
 
 pub fn mount_units() {
   let units = UNITS.read().unwrap();
-  for unit in units.enabled() {
-    if let Some(ref mounts) = unit.mount {
-      for mount in mounts {
-        loginfo!("Mounting target: {}", mount.target);
-        mount_target(mount);
-      }
-    }
+  for mount in units.enabled::<Mount>() {
+    loginfo!("Mounting target: {}", mount.target);
+    mount_target(mount);
   }
 }

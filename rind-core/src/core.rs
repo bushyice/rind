@@ -1,7 +1,9 @@
 pub mod config;
 pub mod logger;
+pub mod lookup;
 pub mod mount;
 pub mod name;
 pub mod services;
+pub mod sockets;
 pub mod units;
 pub mod utils;

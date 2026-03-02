@@ -1,15 +1,13 @@
 use crate::logger::{LOGGER, log_child};
-use crate::name::Name;
 use crate::units::UNITS;
 use crate::{logerr, loginfo};
 use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
-use std::collections::HashMap;
+use std::process::{Child, Command};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
-
-use std::process::{Child, Command};
 
 #[derive(Default, serde::Serialize, serde::Deserialize)]
 pub enum ServiceState {
@@ -20,8 +18,22 @@ pub enum ServiceState {
   Error(String),
 }
 
+static SERVICE_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ServiceId(u64);
+
+impl Default for ServiceId {
+  fn default() -> Self {
+    Self(SERVICE_ID_COUNTER.fetch_add(1, Ordering::Relaxed))
+  }
+}
+
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct Service {
+  #[serde(skip, default)]
+  pub id: ServiceId,
+
   pub name: String,
   pub exec: String,
   pub args: Vec<String>,
@@ -33,15 +45,6 @@ pub struct Service {
   #[serde(default)]
   pub last_state: ServiceState,
 }
-
-impl crate::units::UnitComponent for Service {
-  fn find_in_unit<'a>(unit: &'a crate::units::Unit, name: &str) -> Option<&'a Self> {
-    unit.service.as_ref()?.iter().find(|s| s.name == name)
-  }
-}
-
-#[derive(serde::Deserialize, serde::Serialize, Default)]
-pub struct Socket(pub u32);
 
 pub fn spawn_service(service: &mut Service) -> anyhow::Result<()> {
   let mut child = Command::new(&service.exec).args(&service.args).spawn()?;
@@ -78,12 +81,8 @@ pub fn stop_service(service: &mut Service, force: bool) {
 
 pub fn start_services() {
   let mut units = UNITS.write().unwrap();
-  for unit in units.enabled_mut() {
-    if let Some(ref mut services) = unit.service {
-      for service in services {
-        start_service(service);
-      }
-    }
+  for service in units.enabled_mut::<Service>() {
+    start_service(service);
   }
 }
 
@@ -96,13 +95,13 @@ pub fn service_loop() {
         let mut units = UNITS.write().unwrap();
         let mut to_restart = vec![];
 
-        for (name, service) in units.services_mut() {
+        for service in units.items_mut::<Service>() {
           if let Some(child) = &service.child {
             if child.id() as i32 == pid.as_raw() {
               service.last_state = ServiceState::Exited(code);
               service.child = None;
               if service.restart {
-                to_restart.push(name.clone());
+                to_restart.push(service.name.clone());
               }
             }
           }
@@ -111,11 +110,9 @@ pub fn service_loop() {
         drop(units);
         for name in to_restart {
           let mut units = UNITS.write().unwrap();
-          let mut services = units
-            .services_mut()
-            .collect::<HashMap<&Name, &mut Service>>();
+          let mut services = units.items_mut::<Service>();
 
-          if let Some(service) = services.get_mut(&name) {
+          if let Some(service) = services.find(|ser| ser.name == name) {
             start_service(service);
           }
         }

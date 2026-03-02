@@ -18,3 +18,4 @@ path = "examples/inactive.rs"
 [dependencies]
 clap.workspace = true
 rind-ipc = { path = "../rind-ipc" }
+serde_json.workspace = true
