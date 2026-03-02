@@ -3,12 +3,16 @@ pub mod send;
 pub mod ser;
 
 pub use rind_core::services::{Service, ServiceState};
+pub use rind_core::units::UnitType;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub enum MessageType {
   List,
   Start,
+  Enable,
+  Disable,
   Stop,
+  Error,
   Unknown,
 }
 
@@ -16,6 +20,13 @@ pub enum MessageType {
 pub struct Message {
   pub r#type: MessageType,
   pub payload: Option<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug)]
+pub struct Payload {
+  pub name: String,
+  pub unit_type: UnitType,
+  pub force: Option<bool>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -33,6 +44,11 @@ impl Message {
 
   pub fn with(mut self, payload: String) -> Self {
     self.payload = Some(payload);
+    self
+  }
+
+  pub fn with_payload(mut self, payload: Payload) -> Self {
+    self.payload = Some(toml::to_string(&payload).unwrap());
     self
   }
 

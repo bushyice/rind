@@ -1,0 +1,11 @@
+[[service]]
+name = "three"
+exec = "/bin/example-active"
+args = ["arg1", "arg2"]
+restart = true
+
+[[service]]
+name = "four"
+exec = "/bin/example-inactive"
+args = ["arg1", "arg2"]
+restart = false

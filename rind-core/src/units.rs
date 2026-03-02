@@ -1,4 +1,4 @@
-use crate::lookup::{ComponentFilter, LookUpComponent};
+use crate::lookup::ComponentFilter;
 use crate::mount::{Mount, mount_target, umount_target};
 use crate::name::Name;
 use crate::services::{Service, start_service, stop_service};
@@ -6,7 +6,7 @@ use crate::sockets::Socket;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, serde::Deserialize, serde::Serialize)]
 pub enum UnitType {
   Socket,
   Service,
@@ -18,13 +18,6 @@ pub struct Unit {
   pub service: Option<Vec<Service>>,
   pub socket: Option<Vec<Socket>>,
   pub mount: Option<Vec<Mount>>,
-}
-
-impl LookUpComponent for Unit {
-  // placeholder
-  fn find_in_unit<'a>(_unit: &'a Unit, _name: &str) -> Option<&'a Self> {
-    None
-  }
 }
 
 pub static UNITS: Lazy<std::sync::RwLock<Units>> =

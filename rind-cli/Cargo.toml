@@ -9,11 +9,11 @@ path = "src/rind.rs"
 
 [[bin]]
 name = "example-active"
-path = "examples/active.rs"
+path = "demo/active.rs"
 
 [[bin]]
 name = "example-inactive"
-path = "examples/inactive.rs"
+path = "demo/inactive.rs"
 
 [dependencies]
 clap.workspace = true

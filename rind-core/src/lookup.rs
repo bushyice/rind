@@ -9,6 +9,7 @@ use std::collections::HashSet;
 
 pub trait LookUpComponent: Sized {
   fn find_in_unit<'a>(unit: &'a Unit, name: &str) -> Option<&'a Self>;
+  fn find_in_unit_mut<'a>(unit: &'a mut Unit, name: &str) -> Option<&'a mut Self>;
 }
 
 #[derive(Default, Debug, Clone)]
@@ -62,6 +63,34 @@ macro_rules! impl_unit_component {
   };
 }
 
+macro_rules! impl_lookup_component {
+  ($field:ident, $name:ident) => {
+    fn find_in_unit<'a>(unit: &'a crate::units::Unit, name: &str) -> Option<&'a Self> {
+      let $field = unit.$field.as_ref()?;
+      let mut iter = $field.iter().filter(|m| m.$name == name);
+
+      let first = iter.next()?;
+      if iter.next().is_some() {
+        None
+      } else {
+        Some(first)
+      }
+    }
+
+    fn find_in_unit_mut<'a>(unit: &'a mut crate::units::Unit, name: &str) -> Option<&'a mut Self> {
+      let $field = unit.$field.as_mut()?;
+      let mut iter = $field.iter_mut().filter(|m| m.$name == name);
+
+      let first = iter.next()?;
+      if iter.next().is_some() {
+        None
+      } else {
+        Some(first)
+      }
+    }
+  };
+}
+
 impl UnitComponent for Service {
   impl_unit_component!(service, Service, name);
 }
@@ -75,20 +104,25 @@ impl UnitComponent for Mount {
 }
 
 impl LookUpComponent for Socket {
-  fn find_in_unit<'a>(unit: &'a crate::units::Unit, name: &str) -> Option<&'a Self> {
-    unit.socket.as_ref()?.iter().find(|s| s.name == name)
-  }
+  impl_lookup_component!(socket, name);
 }
 
 impl LookUpComponent for Service {
-  fn find_in_unit<'a>(unit: &'a crate::units::Unit, name: &str) -> Option<&'a Self> {
-    unit.service.as_ref()?.iter().find(|s| s.name == name)
-  }
+  impl_lookup_component!(service, name);
 }
 
 impl LookUpComponent for Mount {
-  fn find_in_unit<'a>(unit: &'a crate::units::Unit, name: &str) -> Option<&'a Self> {
-    unit.mount.as_ref()?.iter().find(|s| s.target == name)
+  impl_lookup_component!(mount, target);
+}
+
+impl LookUpComponent for Unit {
+  // placeholder
+  fn find_in_unit<'a>(_unit: &'a Unit, _name: &str) -> Option<&'a Self> {
+    None
+  }
+
+  fn find_in_unit_mut<'a>(_unit: &'a mut Unit, _name: &str) -> Option<&'a mut Self> {
+    None
   }
 }
 
@@ -109,7 +143,7 @@ impl Units {
           let name = T::item_name(item);
           !f.exclude.contains(name) && (f.include.is_empty() || f.include.contains(name))
         } else {
-          true
+          false
         }
       })
     })
@@ -123,7 +157,7 @@ impl Units {
           let name = T::item_name(item);
           !f.exclude.contains(name) && (f.include.is_empty() || f.include.contains(name))
         } else {
-          true
+          false
         }
       })
     })
@@ -138,6 +172,18 @@ impl Units {
         .units
         .values()
         .find_map(|unit| T::find_in_unit(unit, name.into()))
+    }
+  }
+
+  pub fn lookup_mut<T: LookUpComponent>(&mut self, name: &str) -> Option<&mut T> {
+    if let Some((unit_name, thing)) = name.split_once('@') {
+      let unit = self.units.get_mut(&unit_name.into())?;
+      T::find_in_unit_mut(unit, thing)
+    } else {
+      self
+        .units
+        .values_mut()
+        .find_map(|unit| T::find_in_unit_mut(unit, name.into()))
     }
   }
 }

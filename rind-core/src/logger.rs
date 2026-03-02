@@ -247,3 +247,53 @@ macro_rules! logerr {
     )
   };
 }
+
+#[macro_export]
+macro_rules! logwarn_as {
+  ($msg:expr) => {
+    $crate::logentry!(Warn, "rind", std::process::id(), $msg)
+  };
+  ($service:expr, $msg:expr) => {
+    $crate::logentry!(Warn, $service, std::process::id(), $msg)
+  };
+  ($service:expr, $pid:expr, $msg:expr) => {
+    $crate::logentry!(Warn, $service, $pid, $msg)
+  };
+}
+
+#[macro_export]
+macro_rules! logwarn {
+  ($($arg:tt)*) => {
+    $crate::logentry!(
+      Warn,
+      "rind",
+      std::process::id(),
+      &format!($($arg)*)
+    )
+  };
+}
+
+#[macro_export]
+macro_rules! logtrc_as {
+  ($msg:expr) => {
+    $crate::logentry!(Trace, "rind", std::process::id(), $msg)
+  };
+  ($service:expr, $msg:expr) => {
+    $crate::logentry!(Trace, $service, std::process::id(), $msg)
+  };
+  ($service:expr, $pid:expr, $msg:expr) => {
+    $crate::logentry!(Trace, $service, $pid, $msg)
+  };
+}
+
+#[macro_export]
+macro_rules! logtrc {
+  ($($arg:tt)*) => {
+    $crate::logentry!(
+      Trace,
+      "rind",
+      std::process::id(),
+      &format!($($arg)*)
+    )
+  };
+}
