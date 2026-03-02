@@ -238,6 +238,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "rind-ipc",
+ "serde_json",
 ]
 
 [[package]]

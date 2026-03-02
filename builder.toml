@@ -15,6 +15,17 @@ files = ["examples/services:/etc/services"]
 
 # Busybox Setup
 busybox_url = "https://busybox.net/downloads/binaries/1.19.0/busybox-x86_64"
+busybox_applets = [
+  "sh",
+  "ls",
+  "cp",
+  "mkdir",
+  "echo",
+  "cat",
+  "rm",
+  "ln",
+  "less"
+]
 
 # Utilities
 install = [

@@ -1,4 +1,4 @@
-use std::fs::{self, OpenOptions};
+use std::fs::OpenOptions;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::io::FromRawFd;
 use std::process::{Child, Command, Stdio};
