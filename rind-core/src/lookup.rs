@@ -1,8 +1,10 @@
 use crate::{
   mount::Mount,
+  name::Name,
   services::Service,
   sockets::Socket,
-  units::{Unit, UnitComponent, Units},
+  store::Store,
+  units::{Unit, UnitComponent},
 };
 
 use std::collections::HashSet;
@@ -64,9 +66,16 @@ macro_rules! impl_unit_component {
 }
 
 macro_rules! impl_lookup_component {
-  ($field:ident, $name:ident) => {
+  ($field:ident, $name:ident, $key:expr) => {
     fn find_in_unit<'a>(unit: &'a crate::units::Unit, name: &str) -> Option<&'a Self> {
       let $field = unit.$field.as_ref()?;
+      let id = format!("{}@{}", $key, name);
+
+      if unit.index.contains_key(&id) {
+        let index = unit.index.get(&id)?;
+        return $field.get(*index);
+      }
+
       let mut iter = $field.iter().filter(|m| m.$name == name);
 
       let first = iter.next()?;
@@ -79,6 +88,13 @@ macro_rules! impl_lookup_component {
 
     fn find_in_unit_mut<'a>(unit: &'a mut crate::units::Unit, name: &str) -> Option<&'a mut Self> {
       let $field = unit.$field.as_mut()?;
+      let id = format!("{}@{}", $key, name);
+
+      if unit.index.contains_key(&id) {
+        let index = unit.index.get(&id)?;
+        return $field.get_mut(*index);
+      }
+
       let mut iter = $field.iter_mut().filter(|m| m.$name == name);
 
       let first = iter.next()?;
@@ -104,15 +120,15 @@ impl UnitComponent for Mount {
 }
 
 impl LookUpComponent for Socket {
-  impl_lookup_component!(socket, name);
+  impl_lookup_component!(socket, name, "socket");
 }
 
 impl LookUpComponent for Service {
-  impl_lookup_component!(service, name);
+  impl_lookup_component!(service, name, "service");
 }
 
 impl LookUpComponent for Mount {
-  impl_lookup_component!(mount, target);
+  impl_lookup_component!(mount, target, "mount");
 }
 
 impl LookUpComponent for Unit {
@@ -126,38 +142,56 @@ impl LookUpComponent for Unit {
   }
 }
 
-impl Units {
-  pub fn items<T: UnitComponent>(&self) -> impl Iterator<Item = &T::Item> {
-    iter_typed_item!(self.units, T, (items, _n) { items })
+impl Unit {
+  pub fn len<T: UnitComponent>(&self) -> usize {
+    T::iter_field(self).count()
   }
 
-  pub fn items_mut<T: UnitComponent>(&mut self) -> impl Iterator<Item = &mut T::Item> {
-    iter_typed_item_mut!(self.units, T, (items, _n) { items })
+  pub fn len_for<T: UnitComponent>(&self, filter: fn(item: &T::Item) -> bool) -> usize {
+    T::iter_field(self).filter(|x| filter(x)).count()
+  }
+}
+
+impl Store {
+  pub fn items<T: UnitComponent>(&self) -> impl Iterator<Item = (&Name, &T::Item)> {
+    iter_typed_item!(self.units, T, (items, unit_name) { items.map(move |item| (unit_name, item)) })
   }
 
-  pub fn enabled<T: UnitComponent>(&self) -> impl Iterator<Item = &T::Item> {
+  pub fn items_mut<T: UnitComponent>(&mut self) -> impl Iterator<Item = (&Name, &mut T::Item)> {
+    iter_typed_item_mut!(self.units, T, (items, unit_name) { items.map(move |item| (unit_name, item)) })
+  }
+
+  pub fn enabled<T: UnitComponent>(&self) -> impl Iterator<Item = (&Name, &T::Item)> {
     iter_typed_item!(self.units, T, (items, unit_name) {
       let filter = self.enabled.get(unit_name);
-      items.filter(move |item| {
+      items.filter_map(move |item| {
         if let Some(f) = filter {
           let name = T::item_name(item);
-          !f.exclude.contains(name) && (f.include.is_empty() || f.include.contains(name))
+          if !f.exclude.contains(name) && (f.include.is_empty() || f.include.contains(name)) {
+            Some((unit_name, item))
+          } else {
+            None
+          }
         } else {
-          false
+          None
         }
       })
     })
   }
 
-  pub fn enabled_mut<T: UnitComponent>(&mut self) -> impl Iterator<Item = &mut T::Item> {
+  pub fn enabled_mut<T: UnitComponent>(&mut self) -> impl Iterator<Item = (&Name, &mut T::Item)> {
     iter_typed_item_mut!(self.units, T, (items, unit_name) {
       let filter = self.enabled.get(unit_name);
-      items.filter(move |item| {
+      items.filter_map(move |item| {
         if let Some(f) = filter {
           let name = T::item_name(item);
-          !f.exclude.contains(name) && (f.include.is_empty() || f.include.contains(name))
+          if !f.exclude.contains(name) && (f.include.is_empty() || f.include.contains(name)) {
+            Some((unit_name, item))
+          } else {
+            None
+          }
         } else {
-          false
+          None
         }
       })
     })

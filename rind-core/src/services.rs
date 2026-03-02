@@ -1,15 +1,17 @@
 use crate::logger::{LOGGER, log_child};
-use crate::units::UNITS;
+use crate::name::Name;
+use crate::store::STORE;
 use crate::{logerr, loginfo};
 use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
+use std::collections::HashSet;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Default, Debug, serde::Serialize, serde::Deserialize)]
 pub enum ServiceState {
   Active,
   #[default]
@@ -33,11 +35,14 @@ impl Default for ServiceId {
 pub struct Service {
   #[serde(skip, default)]
   pub id: ServiceId,
+  #[serde(skip, default)]
+  pub unit: Name,
 
   pub name: String,
   pub exec: String,
   pub args: Vec<String>,
   pub restart: bool,
+  pub after: Option<String>,
 
   #[serde(skip, default)]
   pub child: Option<Child>,
@@ -78,11 +83,51 @@ pub fn stop_service(service: &mut Service, force: bool) {
   }
   service.last_state = ServiceState::Inactive;
 }
-
 pub fn start_services() {
-  let mut units = UNITS.write().unwrap();
-  for service in units.enabled_mut::<Service>() {
-    start_service(service);
+  let mut store = STORE.write().unwrap();
+
+  let mut started: HashSet<String> = HashSet::new();
+  let mut pending = Vec::new();
+
+  for (unit_name, service) in store.enabled_mut::<Service>() {
+    let id = format!("{}@{}", unit_name.to_string(), service.name);
+    if let Some(after) = &service.after {
+      pending.push((unit_name.clone(), service.name.clone(), after.clone()));
+    } else {
+      start_service(service);
+      started.insert(id);
+    }
+  }
+
+  loop {
+    let mut progress = false;
+
+    pending.retain(|(_, service_name, after)| {
+      if started.contains(after) {
+        if let Some(service) = store.lookup_mut::<Service>(service_name) {
+          start_service(service);
+          started.insert(service_name.clone());
+          progress = true;
+        }
+        false
+      } else {
+        true
+      }
+    });
+
+    if !progress {
+      break;
+    }
+  }
+
+  if !pending.is_empty() {
+    logerr!(
+      "Unresolved dependencies: {:?}",
+      pending
+        .iter()
+        .map(|x| format!("{}@{} for {}", x.0.to_string(), x.1, x.2))
+        .collect::<Vec<String>>()
+    );
   }
 }
 
@@ -92,10 +137,10 @@ pub fn service_loop() {
       Ok(WaitStatus::Exited(pid, code)) => {
         loginfo!("Child {} exited with code {}", pid, code);
 
-        let mut units = UNITS.write().unwrap();
+        let mut store = STORE.write().unwrap();
         let mut to_restart = vec![];
 
-        for service in units.items_mut::<Service>() {
+        for (_, service) in store.items_mut::<Service>() {
           if let Some(child) = &service.child {
             if child.id() as i32 == pid.as_raw() {
               service.last_state = ServiceState::Exited(code);
@@ -107,12 +152,12 @@ pub fn service_loop() {
           }
         }
 
-        drop(units);
+        drop(store);
         for name in to_restart {
-          let mut units = UNITS.write().unwrap();
-          let mut services = units.items_mut::<Service>();
+          let mut store = STORE.write().unwrap();
+          let mut services = store.items_mut::<Service>();
 
-          if let Some(service) = services.find(|ser| ser.name == name) {
+          if let Some(service) = services.find(|ser| ser.1.name == name).map(|x| x.1) {
             start_service(service);
           }
         }

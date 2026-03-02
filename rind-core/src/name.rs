@@ -5,7 +5,7 @@ use std::sync::Arc;
 // use serde::Deserialize;
 // use serde::de::Deserializer;
 
-#[derive(Clone, serde::Serialize)]
+#[derive(Clone, serde::Serialize, Default)]
 pub struct Name {
   hash: u64,
   #[serde(serialize_with = "ser_name")]
@@ -39,6 +39,12 @@ impl From<String> for Name {
 impl From<&str> for Name {
   fn from(value: &str) -> Self {
     Self::new(value)
+  }
+}
+
+impl From<&Name> for Name {
+  fn from(value: &Name) -> Self {
+    Self::new(&value.to_string())
   }
 }
 

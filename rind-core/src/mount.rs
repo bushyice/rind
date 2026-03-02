@@ -1,9 +1,11 @@
+use std::collections::HashSet;
+
 use nix::mount::{MsFlags, mount, umount};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::loginfo;
-use crate::units::UNITS;
+use crate::store::STORE;
+use crate::{logerr, loginfo};
 
 #[derive(Deserialize, Serialize)]
 pub struct Mount {
@@ -18,6 +20,7 @@ pub struct Mount {
   pub flags: MsFlags,
   pub data: Option<String>,
   pub create: Option<bool>,
+  pub after: Option<String>,
 }
 
 fn default_flags() -> MsFlags {
@@ -70,6 +73,7 @@ pub fn mount_target(target: &Mount) {
   if let Some(true) = target.create {
     std::fs::create_dir_all(target.target.clone()).ok();
   }
+  loginfo!("Mounting target: {}", target.target);
 
   mount(
     target.source.as_deref(),
@@ -82,9 +86,55 @@ pub fn mount_target(target: &Mount) {
 }
 
 pub fn mount_units() {
-  let units = UNITS.read().unwrap();
-  for mount in units.enabled::<Mount>() {
-    loginfo!("Mounting target: {}", mount.target);
-    mount_target(mount);
+  let store = STORE.read().unwrap();
+
+  let mut mounted: HashSet<String> = HashSet::new();
+  let mut pending = Vec::new();
+
+  for (unit_name, mount) in store.enabled::<Mount>() {
+    let id = format!("{}@{}", unit_name.to_string(), mount.target);
+    if let Some(after) = &mount.after {
+      pending.push((unit_name.clone(), mount.target.clone(), after.clone()));
+    } else {
+      mount_target(mount);
+      mounted.insert(id);
+    }
+  }
+
+  loop {
+    let mut progress = false;
+
+    pending.retain(|(_, service_name, after)| {
+      if mounted.contains(after) {
+        if let Some(service) = store.lookup::<Mount>(service_name) {
+          mount_target(service);
+          mounted.insert(service_name.clone());
+          progress = true;
+        }
+        false
+      } else {
+        true
+      }
+    });
+
+    if !progress {
+      break;
+    }
+  }
+
+  if !pending.is_empty() {
+    logerr!(
+      "Unresolved dependencies: {:?}",
+      pending
+        .iter()
+        .map(|x| format!("{}@{} for {}", x.0.to_string(), x.1, x.2))
+        .collect::<Vec<String>>()
+    );
+  }
+}
+
+impl Mount {
+  pub fn is_mounted(&self) -> bool {
+    crate::utils::is_mounted(&self.target).unwrap()
   }
 }
