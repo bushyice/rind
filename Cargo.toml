@@ -1,5 +1,5 @@
 [workspace]
-members = ["rind-cli", "rind-daemon", "rind-core", "rind-init", "rind-ipc", "rind-common", "rind-logger"]
+members = ["rind-cli", "rind-daemon", "rind-core", "rind-init", "rind-ipc", "rind-common"]
 resolver = "3"
 
 [workspace.package]

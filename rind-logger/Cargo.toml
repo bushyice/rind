@@ -1,6 +1,0 @@
-[package]
-name = "rind-logger"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
