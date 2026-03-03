@@ -32,7 +32,6 @@ pub struct LoggerConfig {
   pub max_segment_size: u64,
   pub batch_size: usize,
 }
-const MAGIC: u32 = 0x524C4F47; // "RLOG"
 
 #[derive(serde::Deserialize)]
 pub struct InitConfig {

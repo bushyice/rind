@@ -53,6 +53,7 @@
         devShells.default = pkgs.mkShell {
           buildInputs = [
             builder
+            # Uncomment this if you're on nix
             # rustToolchain
             pkgs.pkg-config
             pkgs.openssl

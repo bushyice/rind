@@ -2,11 +2,9 @@ use crate::config::CONFIG;
 use anyhow::Result;
 use bincode_next::{Decode, Encode, config};
 use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
 use std::{
   collections::HashMap,
   fs::{self, File, OpenOptions},
-  hash::{DefaultHasher, Hasher, SipHasher},
   io::{self, BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write},
   path::{Path, PathBuf},
   process::Child,
@@ -22,22 +20,6 @@ use std::{
 const MAGIC: u32 = 0x524C4F47;
 
 pub static LOGGER: Lazy<Arc<Sender<LogEntry>>> = Lazy::new(|| start_logger());
-
-#[repr(C)]
-struct RecordHeader {
-  total_len: u32,
-  timestamp: u64,
-  level: u8,
-  service_hash: u64,
-  payload_len: u32,
-}
-
-#[derive(Serialize, Deserialize)]
-struct SegmentMeta {
-  min_ts: u64,
-  max_ts: u64,
-  record_count: u64,
-}
 
 #[derive(Encode, Decode, Clone, Copy)]
 pub enum LogLevel {
@@ -232,7 +214,7 @@ pub fn query_segment(
 
     let mut offset = 0;
 
-    let total_len = u32::from_be_bytes(header_buf[offset..offset + 4].try_into()?);
+    // let total_len = u32::from_be_bytes(header_buf[offset..offset + 4].try_into()?);
     offset += 4;
 
     let timestamp = u64::from_be_bytes(header_buf[offset..offset + 8].try_into()?);

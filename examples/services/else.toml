@@ -2,10 +2,10 @@
 name = "three"
 exec = "/bin/example-active"
 args = ["arg1", "arg2"]
-restart = true
+restart = false
 
 [[service]]
 name = "four"
 exec = "/bin/example-inactive"
 args = ["arg1", "arg2"]
-restart = false
+restart = true

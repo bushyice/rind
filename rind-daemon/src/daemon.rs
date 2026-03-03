@@ -1,7 +1,7 @@
 use rind_core::{
   loginfo, logtrc, logwarn,
   mount::Mount,
-  services::{start_service, stop_service},
+  services::{RestartPolicy, start_service, stop_service},
   sockets::Socket,
   store::STORE,
 };
@@ -28,9 +28,13 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
               .iter()
               .map(|x| ServiceSerialized {
                 name: x.name.clone(),
-                last_state: format!("{:?}", x.last_state),
+                last_state: format!("{:?}", x.state),
                 after: x.after.clone(),
-                restart: x.restart,
+                restart: if matches!(x.restart, RestartPolicy::Bool(false)) {
+                  false
+                } else {
+                  true
+                },
                 args: x.args.clone(),
                 exec: x.exec.clone(),
                 pid: x.child.as_ref().map(|x| x.id()),
@@ -62,9 +66,13 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
           Message::from_type(MessageType::List).with(
             ServiceSerialized {
               name: x.name.clone(),
-              last_state: format!("{:?}", x.last_state),
+              last_state: format!("{:?}", x.state),
               after: x.after.clone(),
-              restart: x.restart,
+              restart: if matches!(x.restart, RestartPolicy::Bool(false)) {
+                false
+              } else {
+                true
+              },
               args: x.args.clone(),
               exec: x.exec.clone(),
               pid: x.child.as_ref().map(|x| x.id()),
@@ -87,7 +95,7 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
                 name: name.to_string(),
                 services: unit.len::<Service>(),
                 active_services: unit
-                  .len_for::<Service>(|x| matches!(x.last_state, ServiceState::Active)),
+                  .len_for::<Service>(|x| matches!(x.state, ServiceState::Active)),
                 mounts: unit.len::<Mount>(),
                 mounted: unit.len_for::<Mount>(|x| x.is_mounted()),
               }

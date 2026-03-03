@@ -21,6 +21,7 @@ serde_json = "1"
 bincode-next = "*"
 crc32fast = "*"
 fxhash = "*"
+wait-timeout = "*"
 
 [profile.release]
 lto = true

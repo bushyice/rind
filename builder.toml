@@ -24,7 +24,14 @@ busybox_applets = [
   "cat",
   "rm",
   "ln",
-  "less"
+  "less",
+  "clear",
+  "wget",
+  "vi",
+  "uptime",
+  "stat",
+  "find",
+  "dmesg"
 ]
 
 # Utilities
