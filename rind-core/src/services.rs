@@ -11,9 +11,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
-use wait_timeout::ChildExt;
 
-#[derive(Default, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Default, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub enum ServiceState {
   Active,
   #[default]
@@ -74,6 +73,9 @@ pub struct Service {
 
   #[serde(skip)]
   pub manually_stopped: bool,
+
+  #[serde(skip)]
+  pub stop_time: Option<std::time::Instant>,
 }
 
 pub fn spawn_service(service: &mut Service) -> anyhow::Result<()> {
@@ -120,8 +122,9 @@ pub fn start_service(service: &mut Service) {
 
 pub fn stop_service(service: &mut Service, force: bool) {
   service.state = ServiceState::Stopping;
+  service.stop_time = Some(std::time::Instant::now());
 
-  if let Some(mut child) = service.child.take() {
+  if let Some(child) = service.child.as_ref() {
     let pgid = Pid::from_raw(-(child.id() as i32));
 
     let signal = if force {
@@ -131,22 +134,7 @@ pub fn stop_service(service: &mut Service, force: bool) {
     };
 
     let _ = kill(pgid, signal);
-
     service.manually_stopped = true;
-
-    match child.wait_timeout(Duration::from_secs(5)) {
-      Ok(Some(status)) => {
-        service.state = ServiceState::Exited(status.code().unwrap_or(-1));
-      }
-      Ok(None) => {
-        let _ = kill(pgid, Signal::SIGKILL);
-        let _ = child.wait();
-        service.state = ServiceState::Exited(-1);
-      }
-      Err(_) => {
-        service.state = ServiceState::Error("wait_timeout failed".into());
-      }
-    }
   } else {
     service.state = ServiceState::Inactive;
   }
@@ -250,24 +238,43 @@ fn handle_exit(pid: Pid, code: i32) {
 
 pub fn service_loop() {
   loop {
-    match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
-      Ok(WaitStatus::Exited(pid, code)) => {
-        handle_exit(pid, code);
+    loop {
+      match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
+        Ok(WaitStatus::Exited(pid, code)) => {
+          handle_exit(pid, code);
+        }
+
+        Ok(WaitStatus::Signaled(pid, signal, _)) => {
+          let code = 128 + signal as i32;
+          handle_exit(pid, code);
+        }
+
+        Ok(WaitStatus::StillAlive) | Err(nix::errno::Errno::ECHILD) => {
+          break;
+        }
+
+        Ok(_) => {}
+
+        Err(e) => {
+          logerr!("waitpid error: {}", e);
+          break;
+        }
       }
+    }
 
-      Ok(WaitStatus::Signaled(pid, signal, _)) => {
-        let code = 128 + signal as i32;
-        handle_exit(pid, code);
-      }
-
-      Ok(WaitStatus::StillAlive) => {}
-
-      Ok(_) => {}
-
-      Err(nix::errno::Errno::ECHILD) => {}
-
-      Err(e) => {
-        logerr!("waitpid error: {}", e);
+    {
+      let mut store = STORE.write().unwrap();
+      for (_, service) in store.items_mut::<Service>() {
+        if service.state == ServiceState::Stopping {
+          if let Some(stop_time) = service.stop_time {
+            if stop_time.elapsed() > Duration::from_secs(5) {
+              if let Some(child) = service.child.as_ref() {
+                let pgid = Pid::from_raw(-(child.id() as i32));
+                let _ = kill(pgid, Signal::SIGKILL);
+              }
+            }
+          }
+        }
       }
     }
 
