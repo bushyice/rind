@@ -1,4 +1,5 @@
 use crate::mount::Mount;
+use crate::name::Name;
 use crate::services::Service;
 use crate::sockets::Socket;
 use crate::store::STORE;
@@ -22,11 +23,12 @@ pub trait UnitComponent {
 }
 
 impl Unit {
-  pub fn build_index(&mut self) {
+  pub fn build_index(&mut self, name: &Name) {
     self.index.clear();
 
-    if let Some(services) = &self.service {
-      for (i, svc) in services.iter().enumerate() {
+    if let Some(services) = &mut self.service {
+      for (i, svc) in services.iter_mut().enumerate() {
+        svc.unit = name.clone();
         let key = format!("service@{}", svc.name);
         self.index.insert(key, i);
       }
@@ -80,6 +82,6 @@ pub fn load_units_from(path: &str) -> Result<(), anyhow::Error> {
 }
 
 pub fn load_units() -> Result<(), anyhow::Error> {
-  load_units_from(&crate::config::CONFIG.read().unwrap().services.path)?;
+  load_units_from(&rind_common::config::CONFIG.read().unwrap().services.path)?;
   Ok(())
 }

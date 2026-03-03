@@ -1,12 +1,12 @@
-use crate::logger::{LOGGER, log_child};
 use crate::name::Name;
 use crate::store::STORE;
-use crate::{logerr, loginfo};
 use nix::sys::signal::{Signal, kill};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
+use rind_common::logger::{LOGGER, log_child};
+use rind_common::{logerr, loginfo};
 use std::collections::HashSet;
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
@@ -52,9 +52,23 @@ pub struct Service {
 }
 
 pub fn spawn_service(service: &mut Service) -> anyhow::Result<()> {
-  let mut child = Command::new(&service.exec).args(&service.args).spawn()?;
+  let unit_name = service.unit.to_string();
 
-  log_child(&mut child, &service, LOGGER.clone());
+  let mut child = Command::new(&service.exec)
+    .args(&service.args)
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()?;
+
+  log_child(
+    &mut child,
+    if !unit_name.is_empty() {
+      format!("{}@{}", unit_name, service.name)
+    } else {
+      service.name.clone()
+    },
+    LOGGER.clone(),
+  );
 
   loginfo!("Started service {} with PID {}", service.name, child.id());
   service.child = Some(child);

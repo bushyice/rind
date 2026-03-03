@@ -7,11 +7,10 @@ edition.workspace = true
 path = "src/core.rs"
 
 [dependencies]
+rind-common = { path = "../rind-common" }
 toml.workspace = true
 serde.workspace = true
 once_cell.workspace = true
 anyhow.workspace = true
 nix.workspace = true
 libc.workspace = true
-strumbra.workspace = true
-serde_json.workspace = true

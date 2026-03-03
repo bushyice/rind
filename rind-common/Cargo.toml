@@ -3,5 +3,16 @@ name = "rind-common"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+path = "src/common.rs"
+
 [dependencies]
 serde.workspace = true
+strumbra.workspace = true
+serde_json.workspace = true
+bincode-next.workspace = true
+crc32fast.workspace = true
+fxhash.workspace = true
+once_cell.workspace = true
+toml.workspace = true
+anyhow.workspace = true

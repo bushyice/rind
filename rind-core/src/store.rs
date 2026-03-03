@@ -17,8 +17,9 @@ pub struct Store {
 
 impl Store {
   pub fn insert_unit(&mut self, name: impl Into<Name>, mut unit: Unit) {
-    unit.build_index();
-    self.units.insert(name.into(), unit);
+    let name = name.into();
+    unit.build_index(&name);
+    self.units.insert(name, unit);
   }
 
   pub fn enable_unit(&mut self, name: impl Into<Name>, write: bool) {
@@ -210,9 +211,15 @@ impl Store {
   }
 
   pub fn save_enabled(&self) {
-    let enabled_path =
-      std::path::PathBuf::from(crate::config::CONFIG.read().unwrap().services.path.as_str())
-        .join(".enabled");
+    let enabled_path = std::path::PathBuf::from(
+      rind_common::config::CONFIG
+        .read()
+        .unwrap()
+        .services
+        .path
+        .as_str(),
+    )
+    .join(".enabled");
 
     let mut lines = vec![];
     for (name, filter) in &self.enabled {

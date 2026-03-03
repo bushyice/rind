@@ -18,6 +18,8 @@ path = "demo/inactive.rs"
 [dependencies]
 clap.workspace = true
 rind-ipc = { path = "../rind-ipc", default-features = false, features = [] }
+rind-common = { path = "../rind-common" }
+
 serde_json.workspace = true
 
 owo-colors = "4.3.0"

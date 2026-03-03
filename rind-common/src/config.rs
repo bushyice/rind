@@ -25,7 +25,14 @@ pub struct LoggerConfig {
   pub socket_path: SharedString,
   #[serde(deserialize_with = "de_arcstr")]
   pub log_path: SharedString,
+
+  pub channel_capacity: usize,
+  pub flush_interval: u64, // ms
+  pub fsync_interval: u64, // secs
+  pub max_segment_size: u64,
+  pub batch_size: usize,
 }
+const MAGIC: u32 = 0x524C4F47; // "RLOG"
 
 #[derive(serde::Deserialize)]
 pub struct InitConfig {
@@ -47,6 +54,12 @@ impl Default for InitConfig {
       logger: LoggerConfig {
         socket_path: s("/run/rind-logger.sock"),
         log_path: s("/var/log/rind/"),
+
+        channel_capacity: 4096,
+        flush_interval: 1,
+        max_segment_size: 32 * 1024 * 1024,
+        batch_size: 256,
+        fsync_interval: 2,
       },
     }
   }

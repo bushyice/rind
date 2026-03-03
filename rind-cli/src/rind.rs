@@ -39,6 +39,10 @@ struct Cli {
 
   #[arg(short = 'm', long, num_args(0..=1), default_missing_value = "")]
   mount: Option<String>,
+
+  // logs
+  #[arg(long, default_missing_value = "*")]
+  logs: Option<String>,
 }
 
 pub fn handle_message(message: Message) {
@@ -113,6 +117,22 @@ fn main() {
       handle!(action!(Disable, s.clone(), Mount, None));
     } else if let Some(s) = &cli.unit {
       handle!(action!(Disable, s.clone(), Unit, None));
+    }
+  } else if let Some(logs) = cli.logs {
+    let conf = rind_common::config::CONFIG.read().unwrap();
+    if let Ok(logs) = rind_common::logger::query_logs(
+      conf.logger.log_path.as_str(),
+      if logs == "*" { None } else { Some(&logs) },
+      None,
+      None,
+      None,
+    ) && logs.len() > 0
+    {
+      for log in logs {
+        rind_common::logger::print_log(&log);
+      }
+    } else {
+      println!("{} {}", "Error".on_red().black(), "No logs found");
     }
   } else {
     Cli::command().print_help().ok();

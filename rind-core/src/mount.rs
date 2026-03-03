@@ -5,7 +5,7 @@ use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::store::STORE;
-use crate::{logerr, loginfo};
+use rind_common::{logerr, loginfo};
 
 #[derive(Deserialize, Serialize)]
 pub struct Mount {
