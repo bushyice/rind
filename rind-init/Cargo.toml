@@ -8,6 +8,7 @@ name = "init"
 path = "src/init.rs"
 
 [dependencies]
+backoff = "0.4.0"
 libc.workspace = true
 nix.workspace = true
 rind-core = { path = "../rind-core" }

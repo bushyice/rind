@@ -76,8 +76,14 @@ fn logger_thread(rx: mpsc::Receiver<LogEntry>, dir: impl Into<PathBuf>) {
   loop {
     batch.clear();
 
-    for _ in 0..conf.batch_size {
-      match rx.recv_timeout(Duration::from_millis(conf.flush_interval)) {
+    for i in 0..conf.batch_size {
+      let timeout = if i == 0 {
+        Duration::from_millis(conf.flush_interval)
+      } else {
+        Duration::from_millis(1)
+      };
+
+      match rx.recv_timeout(timeout) {
         Ok(entry) => batch.push(entry),
         Err(mpsc::RecvTimeoutError::Timeout) => break,
         Err(_) => return,
@@ -482,7 +488,7 @@ macro_rules! logerr_as {
 macro_rules! logerr {
   ($($arg:tt)*) => {
     $crate::logentry!(
-      Info,
+      Error,
       "rind",
       std::process::id(),
       &format!($($arg)*)
