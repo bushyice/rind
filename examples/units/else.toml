@@ -1,0 +1,24 @@
+[[service]]
+name = "three"
+start-on = ["my_state"]
+on-start = [{ signal = "my_signal", payload = "hi" }]
+exec = "/bin/example-active"
+args = ["arg1", "arg2"]
+restart = false
+transport = ""
+
+[[service]]
+name = "four"
+start-on = ["my_signal"]
+exec = "/bin/example-inactive"
+args = ["arg1", "arg2"]
+restart = true
+
+
+[[state]]
+name = "my_state"
+payload = "json"
+
+[[signal]]
+name = "my_signal"
+payload = "json"

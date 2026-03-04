@@ -11,7 +11,7 @@ macro_rules! handle {
 #[macro_export]
 macro_rules! action {
   ($type:ident,$name:expr,$unit:ident,$force:expr) => {
-    Message::from_type(MessageType::$type).with_payload(Payload {
+    Message::from_type(MessageType::$type).with_payload(MessagePayload {
       force: $force,
       name: $name,
       unit_type: rind_ipc::UnitType::$unit,

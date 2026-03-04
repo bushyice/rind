@@ -1,3 +1,4 @@
+use crate::flow::{FlowInstance, FlowItem, SignalDefinition, StateDefinition};
 use crate::lookup::ComponentFilter;
 use crate::mount::{mount_target, umount_target};
 use crate::name::Name;
@@ -13,6 +14,8 @@ pub static STORE: Lazy<std::sync::RwLock<Store>> =
 pub struct Store {
   pub(crate) units: HashMap<Name, Unit>,
   pub(crate) enabled: HashMap<Name, ComponentFilter>,
+
+  pub(crate) states: HashMap<String, Vec<FlowInstance>>,
 }
 
 impl Store {
@@ -45,17 +48,6 @@ impl Store {
           if filter.include.is_empty() || filter.include.contains(mname) {
             if !filter.exclude.contains(mname) {
               mount_target(mount);
-            }
-          }
-        }
-      }
-
-      if let Some(ref sockets) = unit.socket {
-        for socket in sockets {
-          let sname = &socket.name;
-          if filter.include.is_empty() || filter.include.contains(sname) {
-            if !filter.exclude.contains(sname) {
-              // start_socket(socket);
             }
           }
         }
@@ -110,13 +102,6 @@ impl Store {
           }
         }
       }
-      if let Some(sockets) = &unit.socket {
-        for socket in sockets {
-          if socket.name == component {
-            // start_socket(socket);
-          }
-        }
-      }
     }
 
     if write {
@@ -142,13 +127,6 @@ impl Store {
         for mount in mounts {
           if mount.target == component {
             umount_target(mount);
-          }
-        }
-      }
-      if let Some(sockets) = &unit.socket {
-        for socket in sockets {
-          if socket.name == component {
-            // stop_socket(socket);
           }
         }
       }
@@ -215,7 +193,7 @@ impl Store {
       rind_common::config::CONFIG
         .read()
         .unwrap()
-        .services
+        .units
         .path
         .as_str(),
     )
@@ -266,5 +244,42 @@ impl Store {
 
   pub fn enabled_get(&self, name: &Name) -> Option<&ComponentFilter> {
     self.enabled.get(name)
+  }
+
+  pub fn len(&self) -> usize {
+    self.units.len()
+  }
+
+  pub fn load_state(&mut self) {
+    let config = rind_common::config::CONFIG.read().unwrap();
+    let state_path = std::path::Path::new(config.units.state.as_str());
+    if let Ok(content) = std::fs::read(&state_path) {
+      if let Ok((states, _)) =
+        bincode_next::serde::decode_from_slice(&content, bincode_next::config::standard())
+      {
+        self.states = states;
+      }
+    }
+  }
+
+  pub fn save_state(&self) {
+    let config = rind_common::config::CONFIG.read().unwrap();
+    let state_path = std::path::Path::new(config.units.state.as_str());
+
+    if let Ok(serialized) =
+      bincode_next::serde::encode_to_vec(&self.states, bincode_next::config::standard())
+    {
+      use std::io::Write;
+      use std::os::unix::fs::OpenOptionsExt;
+      if let Ok(mut f) = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&state_path)
+      {
+        let _ = f.write_all(&serialized);
+      }
+    }
   }
 }

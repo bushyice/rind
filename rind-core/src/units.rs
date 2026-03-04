@@ -1,15 +1,16 @@
+use crate::flow::{SignalDefinition, StateDefinition};
 use crate::mount::Mount;
 use crate::name::Name;
 use crate::services::Service;
-use crate::sockets::Socket;
 use crate::store::STORE;
 use std::collections::HashMap;
 
 #[derive(serde::Deserialize, serde::Serialize)]
 pub struct Unit {
   pub service: Option<Vec<Service>>,
-  pub socket: Option<Vec<Socket>>,
   pub mount: Option<Vec<Mount>>,
+  pub state: Option<Vec<StateDefinition>>,
+  pub signal: Option<Vec<SignalDefinition>>,
 
   #[serde(skip, default)]
   pub index: HashMap<String, usize>,
@@ -34,16 +35,23 @@ impl Unit {
       }
     }
 
-    if let Some(sockets) = &self.socket {
-      for (i, sock) in sockets.iter().enumerate() {
-        let key = format!("socket@{}", sock.name);
+    if let Some(mounts) = &self.mount {
+      for (i, mnt) in mounts.iter().enumerate() {
+        let key = format!("mount@{}", mnt.target);
         self.index.insert(key, i);
       }
     }
 
-    if let Some(mounts) = &self.mount {
-      for (i, mnt) in mounts.iter().enumerate() {
-        let key = format!("mount@{}", mnt.target);
+    if let Some(states) = &self.state {
+      for (i, state) in states.iter().enumerate() {
+        let key = format!("state@{}", state.name);
+        self.index.insert(key, i);
+      }
+    }
+
+    if let Some(signals) = &self.signal {
+      for (i, sig) in signals.iter().enumerate() {
+        let key = format!("signal@{}", sig.name);
         self.index.insert(key, i);
       }
     }
@@ -54,7 +62,7 @@ pub fn load_units_from(path: &str) -> Result<(), anyhow::Error> {
   let mut store = STORE.write().unwrap();
 
   for entry in
-    std::fs::read_dir(path).map_err(|e| anyhow::anyhow!("Failed to read services folder: {e}"))?
+    std::fs::read_dir(path).map_err(|e| anyhow::anyhow!("Failed to read units folder: {e}"))?
   {
     let entry = entry?;
     let path = entry.path();
@@ -82,6 +90,6 @@ pub fn load_units_from(path: &str) -> Result<(), anyhow::Error> {
 }
 
 pub fn load_units() -> Result<(), anyhow::Error> {
-  load_units_from(&rind_common::config::CONFIG.read().unwrap().services.path)?;
+  load_units_from(&rind_common::config::CONFIG.read().unwrap().units.path)?;
   Ok(())
 }

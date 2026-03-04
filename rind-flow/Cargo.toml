@@ -1,0 +1,6 @@
+[package]
+name = "rind-flow"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
