@@ -20,7 +20,7 @@ pub struct Mount {
   pub flags: MsFlags,
   pub data: Option<String>,
   pub create: Option<bool>,
-  pub after: Option<String>,
+  pub after: Option<Vec<String>>,
 }
 
 fn default_flags() -> MsFlags {
@@ -92,9 +92,12 @@ pub fn mount_units() {
   let mut pending = Vec::new();
 
   for (unit_name, mount) in store.enabled::<Mount>() {
-    let id = format!("{}@{}", unit_name.to_string(), mount.target);
-    if let Some(after) = &mount.after {
-      pending.push((unit_name.clone(), mount.target.clone(), after.clone()));
+    let id = mount.target.clone();
+    if let Some(afters) = &mount.after {
+      pending.push((
+        format!("{}@{}", unit_name.to_string(), mount.target.clone()),
+        afters.clone(),
+      ));
     } else {
       mount_target(mount);
       mounted.insert(id);
@@ -104,11 +107,11 @@ pub fn mount_units() {
   loop {
     let mut progress = false;
 
-    pending.retain(|(_, service_name, after)| {
-      if mounted.contains(after) {
-        if let Some(service) = store.lookup::<Mount>(service_name) {
-          mount_target(service);
-          mounted.insert(service_name.clone());
+    pending.retain(|(mount_name, afters)| {
+      if afters.iter().all(|a| mounted.contains(a)) {
+        if let Some(mnt) = store.lookup::<Mount>(mount_name) {
+          mount_target(mnt);
+          mounted.insert(mount_name.clone());
           progress = true;
         }
         false
@@ -127,7 +130,7 @@ pub fn mount_units() {
       "Unresolved dependencies: {:?}",
       pending
         .iter()
-        .map(|x| format!("{}@{} for {}", x.0.to_string(), x.1, x.2))
+        .map(|x| format!("{} for {:?}", x.0, x.1))
         .collect::<Vec<String>>()
     );
   }

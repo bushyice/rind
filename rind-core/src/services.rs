@@ -1,3 +1,4 @@
+use crate::flow::{FlowItem, TransportMethod, Trigger};
 use crate::name::Name;
 use crate::store::STORE;
 use nix::sys::signal::{Signal, kill};
@@ -57,7 +58,18 @@ pub struct Service {
   pub name: String,
   pub exec: String,
   pub args: Vec<String>,
-  pub after: Option<String>,
+  pub after: Option<Vec<String>>,
+
+  #[serde(rename = "start-on")]
+  pub start_on: Option<Vec<FlowItem>>,
+  #[serde(rename = "stop-on")]
+  pub stop_on: Option<Vec<FlowItem>>,
+  #[serde(rename = "on-start")]
+  pub on_start: Option<Vec<Trigger>>,
+  #[serde(rename = "on-stop")]
+  pub on_stop: Option<Vec<Trigger>>,
+  #[serde(rename = "transport")]
+  pub transport: Option<TransportMethod>,
 
   #[serde(default)]
   pub restart: RestartPolicy,
@@ -111,7 +123,9 @@ pub fn spawn_service(service: &mut Service) -> anyhow::Result<()> {
 pub fn start_service(service: &mut Service) {
   service.state = ServiceState::Starting;
   match spawn_service(service) {
-    Ok(_) => service.state = ServiceState::Active,
+    Ok(_) => {
+      service.state = ServiceState::Active;
+    }
     Err(e) => {
       let err = format!("Failed to start service \"{}\": {e}", service.name);
       logerr!("{err}");
@@ -146,10 +160,10 @@ pub fn start_services() {
   let mut started: HashSet<String> = HashSet::new();
   let mut pending = Vec::new();
 
-  for (unit_name, service) in store.enabled_mut::<Service>() {
-    let id = format!("{}@{}", unit_name.to_string(), service.name);
-    if let Some(after) = &service.after {
-      pending.push((unit_name.clone(), service.name.clone(), after.clone()));
+  for (_, service) in store.enabled_mut::<Service>() {
+    let id = service.name.clone();
+    if let Some(afters) = &service.after {
+      pending.push((service.name.clone(), afters.clone()));
     } else {
       start_service(service);
       started.insert(id);
@@ -159,8 +173,8 @@ pub fn start_services() {
   loop {
     let mut progress = false;
 
-    pending.retain(|(_, service_name, after)| {
-      if started.contains(after) {
+    pending.retain(|(service_name, afters)| {
+      if afters.iter().all(|a| started.contains(a)) {
         if let Some(service) = store.lookup_mut::<Service>(service_name) {
           start_service(service);
           started.insert(service_name.clone());
@@ -182,9 +196,53 @@ pub fn start_services() {
       "Unresolved dependencies: {:?}",
       pending
         .iter()
-        .map(|x| format!("{}@{} for {}", x.0.to_string(), x.1, x.2))
+        .map(|x| format!("{} for {:?}", x.0, x.1))
         .collect::<Vec<String>>()
     );
+  }
+}
+
+pub fn start_dependents(store: &mut crate::store::Store, target: &str) {
+  let mut to_start = Vec::new();
+
+  for (unit_name, service) in store.enabled::<Service>() {
+    if service.state == ServiceState::Inactive || service.state == ServiceState::Exited(0) {
+      if let Some(afters) = &service.after {
+        if afters.contains(&target.to_string()) {
+          to_start.push(format!("{}@{}", unit_name.to_string(), service.name));
+        }
+      }
+    }
+  }
+
+  for name in to_start {
+    if let Some(service) = store.lookup_mut::<Service>(&name) {
+      start_service(service);
+      let t = service.name.clone();
+      start_dependents(store, &t);
+    }
+  }
+}
+
+pub fn stop_dependents(store: &mut crate::store::Store, target: &str, force: bool) {
+  let mut to_stop = Vec::new();
+
+  for (unit_name, service) in store.items::<Service>() {
+    if service.state == ServiceState::Active || service.state == ServiceState::Starting {
+      if let Some(afters) = &service.after {
+        if afters.contains(&target.to_string()) {
+          to_stop.push(format!("{}@{}", unit_name.to_string(), service.name));
+        }
+      }
+    }
+  }
+
+  for name in to_stop {
+    if let Some(service) = store.lookup_mut::<Service>(&name) {
+      stop_service(service, force);
+      let t = service.name.clone();
+      stop_dependents(store, &t, force);
+    }
   }
 }
 
@@ -192,6 +250,8 @@ fn handle_exit(pid: Pid, code: i32) {
   loginfo!("Child {} exited with code {}", pid, code);
 
   let mut to_restart: Vec<ServiceId> = Vec::new();
+  let mut to_start_deps: Vec<String> = Vec::new();
+  let mut to_stop_deps: Vec<String> = Vec::new();
 
   {
     let mut store = STORE.write().unwrap();
@@ -203,11 +263,14 @@ fn handle_exit(pid: Pid, code: i32) {
           service.child = None;
 
           if service.manually_stopped {
+            to_stop_deps.push(service.name.clone());
             continue;
           }
 
           match service.restart {
-            RestartPolicy::Bool(false) => {}
+            RestartPolicy::Bool(false) => {
+              to_stop_deps.push(service.name.clone());
+            }
 
             RestartPolicy::Bool(true) => {
               to_restart.push(service.id);
@@ -217,6 +280,8 @@ fn handle_exit(pid: Pid, code: i32) {
               if code != 0 && max_retries > 0 && service.retry_count < max_retries {
                 to_restart.push(service.id);
                 service.retry_count += 1;
+              } else {
+                to_stop_deps.push(service.name.clone());
               }
             }
           }
@@ -231,7 +296,19 @@ fn handle_exit(pid: Pid, code: i32) {
     for (_, service) in store.items_mut::<Service>() {
       if to_restart.contains(&service.id) {
         start_service(service);
+        to_start_deps.push(service.name.clone());
       }
+    }
+  }
+
+  if !to_start_deps.is_empty() || !to_stop_deps.is_empty() {
+    let mut store = STORE.write().unwrap();
+
+    for name in to_stop_deps {
+      stop_dependents(&mut store, &name, false);
+    }
+    for name in to_start_deps {
+      start_dependents(&mut store, &name);
     }
   }
 }

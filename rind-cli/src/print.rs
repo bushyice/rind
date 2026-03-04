@@ -33,7 +33,11 @@ pub fn print_unit(unit_name: &String, unit: &UnitItemsSerialized) {
         "  {:<20} {:<10} {:<10} {:<5} {:<}",
         s.name.bold().white(),
         s.last_state.green(),
-        s.after.clone().unwrap_or("-".to_string()).yellow(),
+        s.after
+          .clone()
+          .unwrap_or(vec!["-".to_string()])
+          .join(", ")
+          .yellow(),
         if s.restart { "R" } else { "-" }.red(),
         s.args.join(" ")
       );
@@ -112,6 +116,6 @@ pub fn print_service(service: &ServiceSerialized) {
   );
 
   if let Some(after) = &service.after {
-    println!("   {}: {}", "After".bold(), after.blue());
+    println!("   {}: {}", "After".bold(), after.join(", ").blue());
   }
 }

@@ -2,11 +2,10 @@ use rind_core::{
   loginfo, logtrc, logwarn,
   mount::Mount,
   services::{RestartPolicy, start_service, stop_service},
-  sockets::Socket,
   store::STORE,
 };
 use rind_ipc::{
-  Message, MessageType, Payload, Service, ServiceState, UnitType,
+  Message, MessagePayload, MessageType, Service, ServiceState, UnitType,
   recv::start_ipc_server,
   ser::{MountSerialized, ServiceSerialized, UnitItemsSerialized, UnitSerialized, serialize_many},
 };
@@ -14,7 +13,7 @@ use rind_ipc::{
 fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
   Ok(Some(match msg.r#type {
     MessageType::List => {
-      let Some(payload) = msg.parse_payload::<Payload>() else {
+      let Some(payload) = msg.parse_payload::<MessagePayload>() else {
         return Ok(Some(
           Message::from_type(MessageType::Error).with(format!("Payload Incorrect")),
         ));
@@ -106,7 +105,7 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
       }
     }
     MessageType::Start => {
-      let Some(payload) = msg.parse_payload::<Payload>() else {
+      let Some(payload) = msg.parse_payload::<MessagePayload>() else {
         return Ok(Some(MessageType::Unknown.into()));
       };
 
@@ -116,7 +115,6 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
 
       if let Some(ser) = units.lookup_mut::<Service>(&payload.name) {
         start_service(ser);
-      } else if let Some(_soc) = units.lookup_mut::<Socket>(&payload.name) {
       } else {
         let err = format!("Unit component not found: {:?}", payload.name);
         loginfo!("{err}");
@@ -126,7 +124,7 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
       MessageType::Unknown.into()
     }
     MessageType::Stop => {
-      let Some(payload) = msg.parse_payload::<Payload>() else {
+      let Some(payload) = msg.parse_payload::<MessagePayload>() else {
         return Ok(Some(MessageType::Unknown.into()));
       };
       let force = payload.force.unwrap_or(false);
@@ -141,7 +139,6 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
 
       if let Some(ser) = units.lookup_mut::<Service>(&payload.name) {
         stop_service(ser, force);
-      } else if let Some(_soc) = units.lookup_mut::<Socket>(&payload.name) {
       } else {
         let err = format!("Unit component not found: {:?}", payload.name);
         loginfo!("{err}");
@@ -151,7 +148,7 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
       MessageType::Unknown.into()
     }
     MessageType::Enable => {
-      let Some(payload) = msg.parse_payload::<Payload>() else {
+      let Some(payload) = msg.parse_payload::<MessagePayload>() else {
         return Ok(Some(MessageType::Unknown.into()));
       };
 
@@ -169,7 +166,7 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
       MessageType::Unknown.into()
     }
     MessageType::Disable => {
-      let Some(payload) = msg.parse_payload::<Payload>() else {
+      let Some(payload) = msg.parse_payload::<MessagePayload>() else {
         return Ok(Some(MessageType::Unknown.into()));
       };
 

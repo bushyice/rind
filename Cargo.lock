@@ -489,11 +489,14 @@ name = "rind-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bincode-next",
+ "bitflags",
  "libc",
  "nix",
  "once_cell",
  "rind-common",
  "serde",
+ "serde_json",
  "toml",
 ]
 
@@ -508,6 +511,10 @@ dependencies = [
  "rind-core",
  "rind-ipc",
 ]
+
+[[package]]
+name = "rind-flow"
+version = "0.1.0"
 
 [[package]]
 name = "rind-init"

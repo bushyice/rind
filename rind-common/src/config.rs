@@ -6,9 +6,11 @@ pub static CONFIG: Lazy<std::sync::RwLock<InitConfig>> =
   Lazy::new(|| std::sync::RwLock::new(InitConfig::default()));
 
 #[derive(serde::Deserialize)]
-pub struct ServicesConfig {
+pub struct UnitsConfig {
   #[serde(deserialize_with = "de_arcstr")]
   pub path: SharedString,
+  #[serde(deserialize_with = "de_arcstr")]
+  pub state: SharedString,
 }
 
 #[derive(serde::Deserialize)]
@@ -35,7 +37,7 @@ pub struct LoggerConfig {
 
 #[derive(serde::Deserialize)]
 pub struct InitConfig {
-  pub services: ServicesConfig,
+  pub units: UnitsConfig,
   pub shell: ShellConfig,
   pub logger: LoggerConfig,
 }
@@ -43,8 +45,9 @@ pub struct InitConfig {
 impl Default for InitConfig {
   fn default() -> Self {
     Self {
-      services: ServicesConfig {
-        path: s("/etc/services"),
+      units: UnitsConfig {
+        path: s("/etc/units"),
+        state: s("/ets/state"),
       },
       shell: ShellConfig {
         exec: s("/bin/sh"),

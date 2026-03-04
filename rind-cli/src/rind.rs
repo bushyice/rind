@@ -1,7 +1,7 @@
 use clap::{CommandFactory, Parser};
 use owo_colors::OwoColorize;
 use rind_ipc::{
-  Message, MessageType, Payload,
+  Message, MessagePayload, MessageType,
   send::send_message,
   ser::{ServiceSerialized, UnitItemsSerialized, UnitSerialized},
 };
@@ -60,19 +60,19 @@ fn main() {
   if cli.list {
     let output: Message = send_message(Message::from_type(MessageType::List).with_payload(
       if let Some(unit) = &cli.unit {
-        Payload {
+        MessagePayload {
           name: unit.clone(),
           unit_type: rind_ipc::UnitType::Unit,
           force: None,
         }
       } else if let Some(service) = &cli.service {
-        Payload {
+        MessagePayload {
           name: service.clone(),
           unit_type: rind_ipc::UnitType::Service,
           force: None,
         }
       } else {
-        Payload {
+        MessagePayload {
           name: "".to_string(),
           unit_type: rind_ipc::UnitType::Unknown,
           force: None,

@@ -1,8 +1,8 @@
 use crate::{
+  flow::{SignalDefinition, StateDefinition},
   mount::Mount,
   name::Name,
   services::Service,
-  sockets::Socket,
   store::Store,
   units::{Unit, UnitComponent},
 };
@@ -111,16 +111,24 @@ impl UnitComponent for Service {
   impl_unit_component!(service, Service, name);
 }
 
-impl UnitComponent for Socket {
-  impl_unit_component!(socket, Socket, name);
+impl UnitComponent for StateDefinition {
+  impl_unit_component!(state, StateDefinition, name);
+}
+
+impl UnitComponent for SignalDefinition {
+  impl_unit_component!(signal, SignalDefinition, name);
 }
 
 impl UnitComponent for Mount {
   impl_unit_component!(mount, Mount, target);
 }
 
-impl LookUpComponent for Socket {
-  impl_lookup_component!(socket, name, "socket");
+impl LookUpComponent for StateDefinition {
+  impl_lookup_component!(state, name, "state");
+}
+
+impl LookUpComponent for SignalDefinition {
+  impl_lookup_component!(signal, name, "signal");
 }
 
 impl LookUpComponent for Service {

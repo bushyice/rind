@@ -26,7 +26,7 @@ pub struct Message {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
-pub struct Payload {
+pub struct MessagePayload {
   pub name: String,
   pub unit_type: UnitType,
   pub force: Option<bool>,
@@ -50,7 +50,7 @@ impl Message {
     self
   }
 
-  pub fn with_payload(mut self, payload: Payload) -> Self {
+  pub fn with_payload(mut self, payload: MessagePayload) -> Self {
     self.payload = Some(toml::to_string(&payload).unwrap());
     self
   }

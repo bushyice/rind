@@ -35,7 +35,7 @@ pub fn serialize_many<T: Serialize>(items: &Vec<T>) -> String {
 pub struct ServiceSerialized {
   pub name: String,
   pub last_state: String,
-  pub after: Option<String>,
+  pub after: Option<Vec<String>>,
   pub restart: bool,
   pub args: Vec<String>,
   pub exec: String,
