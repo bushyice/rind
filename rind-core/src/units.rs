@@ -78,11 +78,6 @@ pub fn load_units_from(path: &str) -> Result<(), anyhow::Error> {
       let unit: Unit = toml::from_str(&content)?;
 
       store.insert_unit(name, unit);
-    } else if name == ".enabled" {
-      let content =
-        std::fs::read_to_string(path).map_err(|e| anyhow::anyhow!("Failed to read unit: {e}"))?;
-
-      store.parse_enabled(&content);
     }
   }
 
