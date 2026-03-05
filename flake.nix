@@ -14,7 +14,10 @@
         pkgs = import nixpkgs { inherit system overlays; };
 
         rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          targets = [ "x86_64-unknown-linux-musl" ];
+          targets = [
+            "x86_64-unknown-linux-gnu"
+            "x86_64-unknown-linux-musl"
+          ];
         };
 
         rustPlatform = pkgs.makeRustPlatform {
@@ -53,8 +56,7 @@
         devShells.default = pkgs.mkShell {
           buildInputs = [
             builder
-            # Uncomment this if you're on nix
-            # rustToolchain
+            rustToolchain
             pkgs.pkg-config
             pkgs.openssl
           ];
