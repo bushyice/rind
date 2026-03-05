@@ -175,7 +175,7 @@ impl Store {
       items.filter_map(move |item| {
         if let Some(f) = filter {
           let name = T::item_name(item);
-          if !f.exclude.contains(name) && (f.include.is_empty() || f.include.contains(name)) {
+          if f.is_empty() || f.contains(name) {
             Some((unit_name, item))
           } else {
             None
@@ -193,7 +193,7 @@ impl Store {
       items.filter_map(move |item| {
         if let Some(f) = filter {
           let name = T::item_name(item);
-          if !f.exclude.contains(name) && (f.include.is_empty() || f.include.contains(name)) {
+          if f.is_empty() || f.contains(name) {
             Some((unit_name, item))
           } else {
             None

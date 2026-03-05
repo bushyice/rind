@@ -1,11 +1,10 @@
-use crate::flow::{FlowInstance, FlowItem, SignalDefinition, StateDefinition};
-use crate::lookup::ComponentFilter;
+use crate::flow::FlowInstance;
 use crate::mount::{mount_target, umount_target};
 use crate::name::Name;
 use crate::services::{start_service, stop_service};
 use crate::units::Unit;
 use once_cell::sync::Lazy;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub static STORE: Lazy<std::sync::RwLock<Store>> =
   Lazy::new(|| std::sync::RwLock::new(Store::default()));
@@ -13,7 +12,7 @@ pub static STORE: Lazy<std::sync::RwLock<Store>> =
 #[derive(Default)]
 pub struct Store {
   pub(crate) units: HashMap<Name, Unit>,
-  pub(crate) enabled: HashMap<Name, ComponentFilter>,
+  pub(crate) enabled: HashMap<Name, HashSet<String>>,
 
   pub(crate) states: HashMap<String, Vec<FlowInstance>>,
 }
@@ -28,16 +27,14 @@ impl Store {
   pub fn enable_unit(&mut self, name: impl Into<Name>, write: bool) {
     let name = name.into();
     let mut filter = self.enabled.get(&name).cloned().unwrap_or_default();
-    filter.include.clear();
-    filter.exclude.clear();
+    filter.clear();
+    // filter.exclude.clear();
 
     if let Some(unit) = self.units.get_mut(&name) {
       if let Some(ref mut services) = unit.service {
         for svc in services {
-          if filter.include.is_empty() || filter.include.contains(&svc.name) {
-            if !filter.exclude.contains(&svc.name) {
-              start_service(svc);
-            }
+          if filter.is_empty() || filter.contains(&svc.name) {
+            start_service(svc);
           }
         }
       }
@@ -45,10 +42,8 @@ impl Store {
       if let Some(ref mounts) = unit.mount {
         for mount in mounts {
           let mname = &mount.target;
-          if filter.include.is_empty() || filter.include.contains(mname) {
-            if !filter.exclude.contains(mname) {
-              mount_target(mount);
-            }
+          if filter.is_empty() || filter.contains(mname) {
+            mount_target(mount);
           }
         }
       }
@@ -84,7 +79,7 @@ impl Store {
   pub fn enable_component(&mut self, unit_name: impl Into<Name>, component: &str, write: bool) {
     let unit_name = unit_name.into();
     let filter = self.enabled.entry(unit_name.clone()).or_default();
-    filter.include.insert(component.to_string());
+    filter.insert(component.to_string());
     // filter.exclude.remove(component);
 
     if let Some(unit) = self.units.get_mut(&unit_name) {
@@ -113,7 +108,7 @@ impl Store {
     let unit_name = unit_name.into();
     let filter = self.enabled.entry(unit_name.clone()).or_default();
     // filter.exclude.insert(component.to_string());
-    filter.include.remove(component);
+    filter.remove(component);
 
     if let Some(unit) = self.units.get_mut(&unit_name) {
       if let Some(services) = &mut unit.service {
@@ -168,54 +163,42 @@ impl Store {
   //   })
   // }
 
-  pub fn parse_enabled(&mut self, content: &str) {
-    for line in content.lines().map(str::trim).filter(|x| !x.is_empty()) {
+  pub fn load_enabled(&mut self) {
+    for inst in self.states.get("active").unwrap_or(&Vec::new()) {
+      let line = inst.payload.to_string();
       if let Some((unit_name, rest)) = line.split_once('@') {
-        let mut filter = ComponentFilter::default();
+        let mut filter = HashSet::default();
         if let Some(inner) = rest.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
           for item in inner.split(',').map(str::trim).filter(|x| !x.is_empty()) {
-            if let Some(stripped) = item.strip_prefix('!') {
-              filter.exclude.insert(stripped.to_string());
-            } else {
-              filter.include.insert(item.to_string());
-            }
+            filter.insert(item.to_string());
           }
         }
         self.enabled.insert(unit_name.into(), filter);
       } else {
-        self.enabled.insert(line.into(), ComponentFilter::default());
+        self.enabled.insert(line.into(), HashSet::default());
       }
     }
   }
 
-  pub fn save_enabled(&self) {
-    let enabled_path = std::path::PathBuf::from(
-      rind_common::config::CONFIG
-        .read()
-        .unwrap()
-        .units
-        .path
-        .as_str(),
-    )
-    .join(".enabled");
-
+  pub fn save_enabled(&mut self) {
     let mut lines = vec![];
     for (name, filter) in &self.enabled {
-      if filter.include.is_empty() && filter.exclude.is_empty() {
+      if filter.is_empty() {
         lines.push(name.to_string());
       } else {
         let mut parts = vec![];
-        for inc in &filter.include {
+        for inc in filter {
           parts.push(inc.clone());
-        }
-        for exc in &filter.exclude {
-          parts.push(format!("!{}", exc));
         }
         lines.push(format!("{}@{{{}}}", name.to_string(), parts.join(",")));
       }
     }
 
-    std::fs::write(enabled_path, lines.join("\n")).unwrap();
+    self
+      .states
+      .get_mut("active")
+      .unwrap_or(&mut Vec::new())
+      .retain(|instance| lines.contains(&instance.payload.to_string()));
   }
 
   pub fn unit(&self, name: impl Into<Name>) -> Option<&Unit> {
@@ -242,7 +225,7 @@ impl Store {
     self.enabled.iter().map(|x| x.0)
   }
 
-  pub fn enabled_get(&self, name: &Name) -> Option<&ComponentFilter> {
+  pub fn enabled_get(&self, name: &Name) -> Option<&HashSet<String>> {
     self.enabled.get(name)
   }
 
@@ -250,14 +233,24 @@ impl Store {
     self.units.len()
   }
 
+  pub fn state_branches(&self, name: &str) -> Option<&Vec<FlowInstance>> {
+    self.states.get(name)
+  }
+
   pub fn load_state(&mut self) {
     let config = rind_common::config::CONFIG.read().unwrap();
     let state_path = std::path::Path::new(config.units.state.as_str());
     if let Ok(content) = std::fs::read(&state_path) {
+      self.states =
+        bincode_next::serde::decode_from_slice(&content, bincode_next::config::standard())
+          .unwrap()
+          .0;
       if let Ok((states, _)) =
         bincode_next::serde::decode_from_slice(&content, bincode_next::config::standard())
       {
         self.states = states;
+      } else {
+        panic!("fuck")
       }
     }
   }
@@ -265,6 +258,8 @@ impl Store {
   pub fn save_state(&self) {
     let config = rind_common::config::CONFIG.read().unwrap();
     let state_path = std::path::Path::new(config.units.state.as_str());
+
+    bincode_next::serde::encode_to_vec(&self.states, bincode_next::config::standard()).unwrap();
 
     if let Ok(serialized) =
       bincode_next::serde::encode_to_vec(&self.states, bincode_next::config::standard())

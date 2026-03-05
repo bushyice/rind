@@ -14,10 +14,14 @@ exec = "/bin/example-inactive"
 args = ["arg1", "arg2"]
 restart = true
 
-
 [[state]]
 name = "my_state"
 payload = "json"
+branch = ["id"]
+
+[[state]]
+name = "some_state"
+payload = "string"
 
 [[signal]]
 name = "my_signal"

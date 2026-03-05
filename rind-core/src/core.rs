@@ -14,17 +14,20 @@ mod tests {
   use super::*;
 
   macro_rules! load_stuff {
-    ($store:ident) => {{
+    ($store:ident) => {
       let mut conf = rind_common::config::CONFIG.write().unwrap();
       conf.units.path = rind_common::utils::s("../examples/units");
-    }
+      conf.units.state = rind_common::utils::s("../examples/state");
+      drop(conf);
 
-    match units::load_units() {
-      Err(e) => eprintln!("{e}"),
-      Ok(_) => {}
-    }
+      match units::load_units() {
+        Err(e) => eprintln!("{e}"),
+        Ok(_) => {}
+      }
 
-    let $store = store::STORE.read().unwrap();};
+      let mut $store = store::STORE.write().unwrap();
+      $store.load_state();
+    };
   }
 
   #[test]
@@ -58,13 +61,13 @@ mod tests {
     );
 
     // this check will be removed or changed when enabled becomes state-based
-    assert_eq!(
-      store
-        .enabled::<services::Service>()
-        .find(|x| x.1.name == "example-active")
-        .map(|x| x.1.name.clone()),
-      Some("example-active".to_string())
-    );
+    // assert_eq!(
+    //   store
+    //     .enabled::<services::Service>()
+    //     .find(|x| x.1.name == "example-active")
+    //     .map(|x| x.1.name.clone()),
+    //   Some("example-active".to_string())
+    // );
     assert_eq!(
       store
         .lookup::<mount::Mount>("init@/proc")
