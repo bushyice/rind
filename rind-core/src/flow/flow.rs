@@ -27,7 +27,7 @@ pub enum FlowMatchOperation {
   },
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum FlowType {
   #[default]
@@ -44,7 +44,7 @@ pub struct FlowInstance {
   pub r#type: FlowType,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FlowJson {
   inner: String,
 }
@@ -69,7 +69,7 @@ impl From<String> for FlowJson {
   }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum FlowPayload {
   Json(FlowJson),
   String(String),

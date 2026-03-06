@@ -41,7 +41,12 @@ impl crate::store::Store {
     }
   }
 
-  pub fn set_state(&mut self, name: String, payload: Option<FlowPayload>) -> anyhow::Result<()> {
+  pub fn set_state(
+    &mut self,
+    name: String,
+    payload: Option<FlowPayload>,
+    except: Option<&Vec<String>>,
+  ) -> anyhow::Result<()> {
     // special keys
     let branches = match self.check_flow(FlowType::State, &name, &payload) {
       None => return Err(anyhow::anyhow!("State trigger validation failed.")),
@@ -59,6 +64,7 @@ impl crate::store::Store {
     };
 
     self.check_triggers(&instance, false);
+    self.broadcast(&instance, true, except).ok();
 
     let entry = self.states.entry(name.clone()).or_insert_with(Vec::new);
 
@@ -106,7 +112,12 @@ impl crate::store::Store {
     Ok(())
   }
 
-  pub fn remove_state(&mut self, name: &str, filter: Option<FlowMatchOperation>) {
+  pub fn remove_state(
+    &mut self,
+    name: &str,
+    filter: Option<FlowMatchOperation>,
+    except: Option<&Vec<String>>,
+  ) {
     if let Some(branches) = self.states.remove(name) {
       let (to_keep, mut to_remove): (Vec<_>, Vec<_>) = branches.into_iter().partition(|branch| {
         if let Some(filter) = &filter {
@@ -120,6 +131,7 @@ impl crate::store::Store {
         for branch in &mut to_remove {
           branch.r#type = FlowType::State;
           self.check_triggers(branch, true);
+          self.broadcast(branch, false, except).ok();
         }
       }
 
@@ -131,7 +143,12 @@ impl crate::store::Store {
     }
   }
 
-  pub fn emit_signal(&mut self, name: String, payload: Option<FlowPayload>) -> anyhow::Result<()> {
+  pub fn emit_signal(
+    &mut self,
+    name: String,
+    payload: Option<FlowPayload>,
+    except: Option<&Vec<String>>,
+  ) -> anyhow::Result<()> {
     if let Some(_) = self.check_flow(FlowType::Signal, &name, &payload) {
       let instance = FlowInstance {
         name: name.clone(),
@@ -144,6 +161,7 @@ impl crate::store::Store {
       };
 
       self.check_triggers(&instance, false);
+      self.broadcast(&instance, true, except).ok();
 
       Ok(())
     } else {
@@ -152,6 +170,57 @@ impl crate::store::Store {
   }
 
   // pub fn trigger(&self, name: String, payload: FlowPayload, r#type: FlowType) {}
+
+  pub fn open_subs(&self) -> anyhow::Result<()> {
+    Ok(())
+  }
+
+  pub fn broadcast(
+    &mut self,
+    instance: &FlowInstance,
+    exists: bool,
+    except: Option<&Vec<String>>,
+  ) -> anyhow::Result<()> {
+    println!("{exists} {except:?}");
+
+    // Stage 1: Collection
+    let subs = match self.check_flow(
+      instance.r#type.clone(),
+      &instance.name,
+      &Some(instance.payload.clone()),
+    ) {
+      None => return Err(anyhow::anyhow!("State trigger validation failed.")),
+      Some(e) => e.subscribers.clone(),
+    };
+
+    let services = self
+      .items_mut::<Service>()
+      .filter(|(_, s)| s.transport.is_some());
+    let mut transports = TRANSPORTS.write().unwrap();
+
+    // Stage 2: Context Buildup
+    let empty = &Vec::new();
+    let mut ctx = TransportContext::new(&instance.payload, except.unwrap_or(empty), !exists);
+
+    // Stage 3: Actual Trigger
+    if let Some(subs) = subs {
+      for sub in subs {
+        transports
+          .get_mut(sub.as_id())
+          .unwrap()
+          .recv(&mut ctx, &instance, None)?;
+      }
+    }
+
+    for (_, mut serv) in services {
+      transports
+        .get_mut(serv.transport.as_ref().unwrap().as_id())
+        .unwrap()
+        .recv(&mut ctx, &instance, Some(&mut serv))?;
+    }
+
+    Ok(())
+  }
 
   pub fn check_triggers(&mut self, trigger: &FlowInstance, remove: bool) {
     let mut to_start_services = Vec::new();

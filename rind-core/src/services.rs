@@ -1,4 +1,4 @@
-use crate::flow::{FlowItem, TransportMethod, Trigger};
+use crate::flow::{FlowItem, TransportMethod, TransportProtocol, Trigger};
 use crate::name::Name;
 use crate::store::STORE;
 use nix::sys::signal::{Signal, kill};

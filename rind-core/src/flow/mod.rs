@@ -7,6 +7,8 @@ pub use triggers::*;
 mod transport;
 pub use transport::*;
 
+pub mod transports;
+
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -29,7 +31,7 @@ mod tests {
   }
 
   #[test]
-  fn load_state() {
+  fn change_state() {
     load_stuff!(store);
 
     store.load_enabled();
@@ -40,6 +42,27 @@ mod tests {
         Some(flow::FlowPayload::Json(
           serde_json::json!({ "id": "sss" }).to_string().into(),
         )),
+        None,
+      )
+      .unwrap();
+
+    store
+      .set_state(
+        "else@my_state".to_string(),
+        Some(flow::FlowPayload::Json(
+          serde_json::json!({ "id": "some_id" }).to_string().into(),
+        )),
+        None,
+      )
+      .unwrap();
+
+    store
+      .set_state(
+        "else@my_state".to_string(),
+        Some(flow::FlowPayload::Json(
+          serde_json::json!({ "id": "jsjs" }).to_string().into(),
+        )),
+        None,
       )
       .unwrap();
 
@@ -47,6 +70,7 @@ mod tests {
       .set_state(
         "else@some_state".to_string(),
         Some(flow::FlowPayload::String("Simple".into())),
+        None,
       )
       .unwrap();
 
@@ -57,7 +81,14 @@ mod tests {
         contains: None,
         r#as: Some(serde_json::json!({ "id": "sss" })),
       }),
+      None,
     );
-    // store.state_branches("else@my_state");
+
+    store.load_state();
+
+    assert_eq!(store.state_branches("else@my_state").unwrap().len(), 2);
   }
+
+  #[test]
+  fn signals() {}
 }

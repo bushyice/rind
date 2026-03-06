@@ -18,6 +18,7 @@ restart = true
 name = "my_state"
 payload = "json"
 branch = ["id"]
+#outputs = { pipe-to = "env", matcher = "ENV=(.+);", format = "$1" }
 
 [[state]]
 name = "some_state"
