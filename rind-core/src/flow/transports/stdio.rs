@@ -9,6 +9,20 @@ use super::*;
 pub struct StdioTransportProtocol;
 
 impl TransportProtocol for StdioTransportProtocol {
+  fn init(
+    &mut self,
+    _options: Vec<String>,
+    _ctx: &TransportInitContext,
+    service: Option<&mut crate::services::Service>,
+  ) {
+    let Some(service) = service else {
+      return;
+    };
+    if let Some(child) = service.child.as_mut() {
+      start_stdout_listener(service.name.clone(), child);
+    }
+  }
+
   fn recv(
     &self,
     ctx: &mut TransportContext,
@@ -43,14 +57,6 @@ impl TransportProtocol for StdioTransportProtocol {
     }
 
     Ok(None)
-  }
-
-  fn init(&mut self, _options: Vec<String>, service: Option<&mut crate::services::Service>) {
-    if let Some(service) = service {
-      if let Some(child) = service.child.as_mut() {
-        start_stdout_listener(service.name.clone(), child);
-      }
-    }
   }
 }
 

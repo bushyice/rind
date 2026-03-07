@@ -105,6 +105,15 @@ impl FlowPayload {
     }
   }
 
+  pub fn get_json_field(&self, field: &str) -> Option<serde_json::Value> {
+    match self {
+      FlowPayload::String(_) => None,
+      FlowPayload::Json(s) => s.into_json().get(field).map(|x| x.clone()).clone(),
+      FlowPayload::Bytes(_) => None,
+      FlowPayload::None(_) => None,
+    }
+  }
+
   pub fn value_to_vec_string(value: &serde_json::Value) -> Vec<String> {
     match value {
       serde_json::Value::Array(arr) => arr

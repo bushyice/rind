@@ -11,7 +11,7 @@ binary_target = "target/x86_64-unknown-linux-musl/release"
 binaries = ["init", "rind", "example-active", "example-inactive"]
 
 # Files to copy over
-files = ["examples/units:/etc/units"]
+files = ["examples/units:/etc/units", "examples/fallback.toml:/etc/fallback.toml"]
 
 # Busybox Setup
 busybox_url = "https://busybox.net/downloads/binaries/1.19.0/busybox-x86_64"

@@ -11,6 +11,8 @@ pub struct UnitsConfig {
   pub path: SharedString,
   #[serde(deserialize_with = "de_arcstr")]
   pub state: SharedString,
+  #[serde(deserialize_with = "de_arcstr")]
+  pub fallback: SharedString,
 }
 
 #[derive(serde::Deserialize)]
@@ -47,7 +49,8 @@ impl Default for InitConfig {
     Self {
       units: UnitsConfig {
         path: s("/etc/units"),
-        state: s("/ets/state"),
+        state: s("/etc/state"),
+        fallback: s("/etc/fallback.toml"),
       },
       shell: ShellConfig {
         exec: s("/bin/sh"),

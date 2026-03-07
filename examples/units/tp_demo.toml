@@ -1,0 +1,30 @@
+[[service]]
+name = "uds_echo"
+exec = "/bin/example-uds"
+args = ["--mode", "uds"]
+restart = false
+transport = { id = "uds", options = ["detached=true"] }
+
+[[service]]
+name = "env_consumer"
+exec = "/bin/example-active"
+args = ["env-demo"]
+restart = false
+transport = { id = "env", options = ["DEMO_STATE=state:tp_demo@transport_state"] }
+
+[[service]]
+name = "args_consumer"
+exec = "/bin/example-active"
+args = ["args-demo"]
+restart = false
+transport = { id = "args", options = ["--from-state", "state:tp_demo@transport_state"] }
+
+[[state]]
+name = "transport_state"
+payload = "string"
+subscribers = [{ id = "uds", options = ["detached=true"] }]
+
+[[signal]]
+name = "demo_ping"
+payload = "string"
+subscribers = ["uds"]

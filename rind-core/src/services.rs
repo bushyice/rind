@@ -1,5 +1,6 @@
 use crate::flow::{
-  FlowChangeAction, FlowInstance, FlowItem, FlowPayload, TransportMethod, Trigger,
+  FlowChangeAction, FlowInstance, FlowItem, FlowPayload, TransportInitStage, TransportMethod,
+  Trigger, init_service_transport,
 };
 use crate::name::Name;
 use crate::store::STORE;
@@ -97,6 +98,8 @@ pub struct Service {
   pub name: String,
   pub exec: String,
   pub args: Vec<String>,
+  #[serde(default)]
+  pub env: Option<HashMap<String, String>>,
   pub after: Option<Vec<String>>,
 
   #[serde(rename = "start-on")]
@@ -162,6 +165,9 @@ fn spawn_process(
     if let Some(key) = branch_key {
       cmd.env("RIND_BRANCH_KEY", key);
     }
+    if let Some(env) = &service.env {
+      cmd.envs(env);
+    }
     cmd.spawn()?
   };
 
@@ -180,8 +186,10 @@ fn spawn_process(
 
 pub fn start_service(service: &mut Service) {
   service.state = ServiceState::Starting;
+  init_service_transport(service, TransportInitStage::ServicePreStart);
   match spawn_service(service) {
     Ok(_) => {
+      init_service_transport(service, TransportInitStage::ServicePostStart);
       service.state = ServiceState::Active;
     }
     Err(e) => {
@@ -331,6 +339,7 @@ pub fn reconcile_state_branching(
 
 pub fn start_services() {
   let mut store = rw_write(&STORE, "store write in start_services");
+  store.init_detached_transports();
 
   let mut started: HashSet<String> = HashSet::new();
   let mut pending = Vec::new();

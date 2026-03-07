@@ -1,4 +1,4 @@
-use crate::flow::{SignalDefinition, StateDefinition};
+use crate::flow::{FlowDefinitionBase, FlowPayloadType, SignalDefinition, StateDefinition};
 use crate::mount::Mount;
 use crate::name::Name;
 use crate::services::Service;
@@ -82,6 +82,8 @@ pub fn load_units_from(path: &str) -> Result<(), anyhow::Error> {
     }
   }
 
+  add_builtin_flow_defs(&mut store);
+
   Ok(())
 }
 
@@ -89,6 +91,51 @@ pub fn load_units() -> Result<(), anyhow::Error> {
   let config = rw_read(&rind_common::config::CONFIG, "config read in load_units");
   load_units_from(&config.units.path)?;
   Ok(())
+}
+
+const BUILTIN_FLOW_UNIT: &str = "__rind";
+
+fn add_builtin_flow_defs(store: &mut crate::store::Store) {
+  fn state_def(name: &str) -> StateDefinition {
+    StateDefinition(FlowDefinitionBase {
+      name: name.to_string(),
+      payload: FlowPayloadType::String,
+      ..Default::default()
+    })
+  }
+  fn signal_def(name: &str) -> SignalDefinition {
+    SignalDefinition(FlowDefinitionBase {
+      name: name.to_string(),
+      payload: FlowPayloadType::String,
+      ..Default::default()
+    })
+  }
+
+  if let Some(unit) = store.unit_mut(BUILTIN_FLOW_UNIT) {
+    let states = unit.state.get_or_insert_with(Vec::new);
+    if !states.iter().any(|s| s.name == "active") {
+      states.push(state_def("active"));
+    }
+    let signals = unit.signal.get_or_insert_with(Vec::new);
+    if !signals.iter().any(|s| s.name == "activate") {
+      signals.push(signal_def("activate"));
+    }
+    if !signals.iter().any(|s| s.name == "deactivate") {
+      signals.push(signal_def("deactivate"));
+    }
+    unit.build_index(&Name::from(BUILTIN_FLOW_UNIT));
+  } else {
+    store.insert_unit(
+      BUILTIN_FLOW_UNIT,
+      Unit {
+        service: None,
+        mount: None,
+        state: Some(vec![state_def("active")]),
+        signal: Some(vec![signal_def("activate"), signal_def("deactivate")]),
+        index: HashMap::new(),
+      },
+    );
+  }
 }
 
 #[cfg(test)]
@@ -100,6 +147,7 @@ mod tests {
   use crate::mount::Mount;
   use crate::name::Name;
   use crate::services::{RestartPolicy, Service, ServiceState};
+  use crate::store::Store;
   use nix::mount::MsFlags;
 
   #[test]
@@ -111,6 +159,7 @@ mod tests {
         name: "svc".to_string(),
         exec: "/bin/true".to_string(),
         args: vec![],
+        env: None,
         branching: None,
         after: None,
         start_on: None,
@@ -151,5 +200,36 @@ mod tests {
     assert!(unit.index.contains_key("mount@/tmp/mnt"));
     assert!(unit.index.contains_key("state@st"));
     assert!(unit.index.contains_key("signal@sig"));
+  }
+
+  #[test]
+  fn builtin_defs_are_injected() {
+    let mut store = Store::default();
+    super::add_builtin_flow_defs(&mut store);
+
+    let builtin = store.unit("__rind");
+    assert!(builtin.is_some());
+    let builtin = builtin.unwrap_or_else(|| panic!("missing builtin unit"));
+    assert!(
+      builtin
+        .state
+        .as_ref()
+        .map(|x| x.iter().any(|s| s.name == "active"))
+        .unwrap_or(false)
+    );
+    assert!(
+      builtin
+        .signal
+        .as_ref()
+        .map(|x| x.iter().any(|s| s.name == "activate"))
+        .unwrap_or(false)
+    );
+    assert!(
+      builtin
+        .signal
+        .as_ref()
+        .map(|x| x.iter().any(|s| s.name == "deactivate"))
+        .unwrap_or(false)
+    );
   }
 }

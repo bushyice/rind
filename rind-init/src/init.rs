@@ -5,6 +5,8 @@ use std::process::{Child, Command, Stdio};
 
 use libc;
 use rind_common::error::{install_panic_handler, report_error, rw_read};
+use rind_core::error::rw_write;
+use rind_core::store::STORE;
 use rind_core::{config, mount, services, units};
 use rind_daemon::start_daemon;
 
@@ -52,6 +54,10 @@ fn main() {
     Err(e) => eprintln!("Error Happened: {e}"),
     Ok(_) => {}
   };
+
+  {
+    rw_write(&STORE, "load enabled").load_enabled();
+  }
 
   // mount shit
   mount::mount_units();

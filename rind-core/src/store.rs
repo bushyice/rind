@@ -1,4 +1,4 @@
-use crate::flow::FlowInstance;
+use crate::flow::{FlowInstance, FlowPayload};
 use crate::mount::{mount_target, umount_target};
 use crate::name::Name;
 use crate::services::{StopMode, start_service, stop_service};
@@ -26,6 +26,48 @@ pub enum PersistMode {
 }
 
 impl Store {
+  fn parse_enabled_line(&mut self, line: &str) {
+    if let Some((unit_name, rest)) = line.split_once('@') {
+      let mut filter = HashSet::default();
+      if let Some(inner) = rest.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
+        for item in inner.split(',').map(str::trim).filter(|x| !x.is_empty()) {
+          filter.insert(item.to_string());
+        }
+      }
+      self.enabled.insert(unit_name.into(), filter);
+    } else if !line.is_empty() {
+      self.enabled.insert(line.into(), HashSet::default());
+    }
+  }
+
+  fn load_enabled_fallback(&mut self) {
+    #[derive(serde::Deserialize)]
+    struct FallbackActiveUnits {
+      active_units: Vec<String>,
+    }
+
+    let config = rw_read(
+      &rind_common::config::CONFIG,
+      "config read in load_enabled_fallback",
+    );
+    let path = std::path::Path::new(config.units.fallback.as_str());
+    let Ok(content) = std::fs::read_to_string(&path) else {
+      return;
+    };
+    let Ok(fallback) = toml::from_str::<FallbackActiveUnits>(&content) else {
+      report_error(
+        "fallback active file parse error",
+        format!("invalid TOML in {}", path.display()),
+      );
+      return;
+    };
+    for line in fallback.active_units {
+      self.parse_enabled_line(line.as_str());
+    }
+
+    self.save_enabled();
+  }
+
   pub fn insert_unit(&mut self, name: impl Into<Name>, mut unit: Unit) {
     let name = name.into();
     unit.build_index(&name);
@@ -182,39 +224,71 @@ impl Store {
   // }
 
   pub fn load_enabled(&mut self) {
-    for inst in self.states.get("active").unwrap_or(&Vec::new()) {
-      let line = inst.payload.to_string();
-      if let Some((unit_name, rest)) = line.split_once('@') {
-        let mut filter = HashSet::default();
-        if let Some(inner) = rest.strip_prefix('{').and_then(|s| s.strip_suffix('}')) {
-          for item in inner.split(',').map(str::trim).filter(|x| !x.is_empty()) {
-            filter.insert(item.to_string());
-          }
-        }
-        self.enabled.insert(unit_name.into(), filter);
-      } else {
-        self.enabled.insert(line.into(), HashSet::default());
-      }
+    self.enabled.clear();
+    let lines: Vec<serde_json::Value> = self
+      .states
+      .get("active")
+      .map(|items| {
+        items
+          .iter()
+          .filter_map(|inst| inst.payload.get_json_field("name"))
+          .collect()
+      })
+      .unwrap_or_default();
+    for line in lines {
+      self.parse_enabled_line(&line.to_string());
+    }
+
+    if self.enabled.is_empty() {
+      self.load_enabled_fallback();
     }
   }
 
   pub fn save_enabled(&mut self) {
-    let mut lines = vec![];
+    let mut lines = HashSet::new();
     for (name, filter) in &self.enabled {
       if filter.is_empty() {
-        lines.push(name.to_string());
+        lines.insert(name.to_string());
       } else {
         let mut parts = vec![];
         for inc in filter {
           parts.push(inc.clone());
         }
-        lines.push(format!("{}@{{{}}}", name.to_string(), parts.join(",")));
+        lines.insert(format!("{}@{{{}}}", name.to_string(), parts.join(",")));
       }
     }
 
-    if let Some(active) = self.states.get_mut("active") {
-      active.retain(|instance| lines.contains(&instance.payload.to_string()));
+    let active = self.states.entry("active".to_string()).or_default();
+
+    let mut active_names: Vec<String> = Vec::new();
+
+    active.retain(|instance| {
+      let Some(name) = instance.payload.get_json_field("name") else {
+        return false;
+      };
+
+      let name = name.to_string();
+
+      let is_active = lines.contains(&name);
+
+      if is_active {
+        active_names.push(name)
+      }
+
+      is_active
+    });
+
+    for line in lines {
+      if !active_names.contains(&line) {
+        active.push(FlowInstance {
+          name: "active".to_string(),
+          payload: FlowPayload::Json(format!(r#"{{"name": "{}"}}"#, line).into()),
+          r#type: crate::flow::FlowType::State,
+        });
+      }
     }
+
+    self.save_state();
   }
 
   pub fn unit(&self, name: impl Into<Name>) -> Option<&Unit> {
@@ -287,6 +361,7 @@ mod tests {
   use super::*;
   use crate::flow::{FlowPayload, FlowType};
   use std::collections::HashSet;
+  use std::io::Write;
 
   #[test]
   fn load_enabled_parses_active_state_items() {
@@ -349,5 +424,43 @@ mod tests {
     } else {
       panic!("expected active state list");
     }
+  }
+
+  #[test]
+  fn load_enabled_uses_fallback_file_when_active_state_missing() {
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("rind-fallback-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("failed create dir: {e}"));
+
+    let mut file = std::fs::File::create(dir.join("active-fallback.toml"))
+      .unwrap_or_else(|e| panic!("failed create fallback file: {e}"));
+    writeln!(
+      file,
+      "active_units = [\"unit_a\", \"unit_b@{{svc1,svc2}}\"]"
+    )
+    .unwrap_or_else(|e| panic!("failed write fallback: {e}"));
+
+    {
+      let mut conf = rind_common::error::rw_write(
+        &rind_common::config::CONFIG,
+        "config write in test fallback",
+      );
+      conf.units.path = rind_common::utils::s(dir.to_string_lossy().as_ref());
+    }
+
+    let mut store = Store::default();
+    store.load_enabled();
+
+    assert!(store.enabled.contains_key(&Name::from("unit_a")));
+    let filter = store
+      .enabled
+      .get(&Name::from("unit_b"))
+      .cloned()
+      .unwrap_or_default();
+    assert!(filter.contains("svc1"));
+    assert!(filter.contains("svc2"));
+
+    let _ = std::fs::remove_dir_all(dir);
   }
 }

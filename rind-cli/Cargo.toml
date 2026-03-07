@@ -15,6 +15,10 @@ path = "demo/active.rs"
 name = "example-inactive"
 path = "demo/inactive.rs"
 
+[[bin]]
+name = "example-uds"
+path = "demo/uds_echo.rs"
+
 [dependencies]
 clap.workspace = true
 rind-ipc = { path = "../rind-ipc", default-features = false, features = [] }
