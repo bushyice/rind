@@ -6,6 +6,7 @@ use crate::units::Unit;
 use once_cell::sync::Lazy;
 use rind_common::error::{report_error, rw_read};
 use rind_common::fs_async::{FileWriteMode, queue_file_write};
+use rind_common::logwarn;
 use std::collections::{HashMap, HashSet};
 
 pub static STORE: Lazy<std::sync::RwLock<Store>> =
@@ -41,6 +42,11 @@ impl Store {
   }
 
   fn load_enabled_fallback(&mut self) {
+    logwarn!("Loading from fallback.");
+    logwarn!(
+      "If this is not the first time rind is loading state from fallback, there is an issue."
+    );
+
     #[derive(serde::Deserialize)]
     struct FallbackActiveUnits {
       active_units: Vec<String>,
