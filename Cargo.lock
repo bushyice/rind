@@ -508,6 +508,7 @@ dependencies = [
  "env_logger",
  "log",
  "regex",
+ "rind-common",
  "rind-core",
  "rind-ipc",
 ]
@@ -523,6 +524,7 @@ dependencies = [
  "backoff",
  "libc",
  "nix",
+ "rind-common",
  "rind-core",
  "rind-daemon",
 ]

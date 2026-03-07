@@ -1,4 +1,5 @@
 use crate::config::CONFIG;
+use crate::error::{report_error, rw_read};
 use anyhow::Result;
 use bincode_next::{Decode, Encode, config};
 use once_cell::sync::Lazy;
@@ -43,11 +44,13 @@ pub struct LogEntry {
 
 pub fn start_logger() -> Arc<Sender<LogEntry>> {
   let log_path = {
-    let conf = CONFIG.read().unwrap();
+    let conf = rw_read(&CONFIG, "config read in start_logger");
     conf.logger.log_path.to_string()
   };
 
-  fs::create_dir_all(log_path.as_str()).expect("failed to create log dir");
+  if let Err(err) = fs::create_dir_all(log_path.as_str()) {
+    report_error("failed to create log dir", err);
+  }
 
   let (tx, rx) = mpsc::channel::<LogEntry>();
   let tx = Arc::new(tx);
@@ -61,7 +64,7 @@ pub fn start_logger() -> Arc<Sender<LogEntry>> {
 
 fn logger_thread(rx: mpsc::Receiver<LogEntry>, dir: impl Into<PathBuf>) {
   let dir = dir.into();
-  let conf = CONFIG.read().unwrap();
+  let conf = rw_read(&CONFIG, "config read in logger_thread");
   let conf = &conf.logger;
 
   let mut segment_id = next_segment_id(&dir);
@@ -122,8 +125,10 @@ fn logger_thread(rx: mpsc::Receiver<LogEntry>, dir: impl Into<PathBuf>) {
 }
 
 fn next_segment_id(dir: &Path) -> u64 {
-  fs::read_dir(dir)
-    .unwrap()
+  let Ok(entries) = fs::read_dir(dir) else {
+    return 1;
+  };
+  entries
     .filter_map(|e| e.ok())
     .filter_map(|e| {
       e.path()
@@ -138,12 +143,18 @@ fn next_segment_id(dir: &Path) -> u64 {
 
 fn open_segment(dir: &Path, id: u64) -> BufWriter<File> {
   let path = dir.join(format!("{:08}.rlog", id));
-
-  let file = OpenOptions::new()
-    .create(true)
-    .append(true)
-    .open(path)
-    .expect("segment open failed");
+  let file = match OpenOptions::new().create(true).append(true).open(path) {
+    Ok(file) => file,
+    Err(err) => {
+      report_error("segment open failed", err);
+      let fallback = std::env::temp_dir().join(format!("{:08}.rlog", id));
+      OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(fallback)
+        .unwrap_or_else(|fatal| panic!("failed to open fallback segment: {fatal}"))
+    }
+  };
 
   BufWriter::with_capacity(64 * 1024, file)
 }
@@ -280,8 +291,10 @@ pub fn query_segment(
 }
 
 fn all_segments(dir: &Path) -> Vec<PathBuf> {
-  let mut segs: Vec<_> = fs::read_dir(dir)
-    .unwrap()
+  let Ok(entries) = fs::read_dir(dir) else {
+    return Vec::new();
+  };
+  let mut segs: Vec<_> = entries
     .filter_map(|e| e.ok())
     .map(|e| e.path())
     .filter(|p| p.extension().map(|ext| ext == "rlog").unwrap_or(false))
@@ -373,7 +386,7 @@ pub fn print_log(entry: &LogEntry) {
 pub fn now() -> u64 {
   SystemTime::now()
     .duration_since(UNIX_EPOCH)
-    .unwrap()
+    .unwrap_or(Duration::from_secs(0))
     .as_secs()
 }
 
@@ -429,6 +442,45 @@ pub fn log_child(child: &mut Child, service: String, logger: Arc<Sender<LogEntry
 
 pub fn log_event(log: LogEntry) -> Result<(), SendError<LogEntry>> {
   LOGGER.send(log)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{
+    LogEntry, LogLevel, all_segments, next_segment_id, open_segment, query_logs, write_record,
+  };
+  use std::io::Write;
+
+  #[test]
+  fn segment_id_and_query_roundtrip() {
+    let mut dir = std::env::temp_dir();
+    dir.push(format!("rind-log-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    assert_eq!(next_segment_id(&dir), 1);
+    {
+      let mut writer = open_segment(&dir, 1);
+      let entry = LogEntry {
+        timestamp: 1,
+        service: "svc".to_string(),
+        pid: 42,
+        level: LogLevel::Info,
+        message: "hello".to_string(),
+        fields: None,
+      };
+      write_record(&mut writer, &entry).unwrap();
+      writer.flush().unwrap();
+    }
+
+    let segments = all_segments(&dir);
+    assert_eq!(segments.len(), 1);
+    let logs = query_logs(dir.clone(), Some("svc"), None, None, None).unwrap();
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0].message, "hello".to_string());
+
+    let _ = std::fs::remove_dir_all(dir);
+  }
 }
 
 #[macro_export]

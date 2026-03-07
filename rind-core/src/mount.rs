@@ -5,6 +5,7 @@ use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::store::STORE;
+use rind_common::error::rw_read;
 use rind_common::{logerr, loginfo};
 
 #[derive(Deserialize, Serialize)]
@@ -86,7 +87,7 @@ pub fn mount_target(target: &Mount) {
 }
 
 pub fn mount_units() {
-  let store = STORE.read().unwrap();
+  let store = rw_read(&STORE, "store read in mount_units");
 
   let mut mounted: HashSet<String> = HashSet::new();
   let mut pending = Vec::new();
@@ -138,6 +139,6 @@ pub fn mount_units() {
 
 impl Mount {
   pub fn is_mounted(&self) -> bool {
-    crate::utils::is_mounted(&self.target).unwrap()
+    crate::utils::is_mounted(&self.target).unwrap_or(false)
   }
 }

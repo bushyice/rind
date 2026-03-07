@@ -1,6 +1,7 @@
 use std::ops::Deref;
 
 use super::*;
+use rind_common::error::report_error;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -35,7 +36,7 @@ pub enum FlowType {
   State,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FlowInstance {
   pub name: String,
   pub payload: FlowPayload,
@@ -51,7 +52,13 @@ pub struct FlowJson {
 
 impl FlowJson {
   pub fn into_json(&self) -> serde_json::Value {
-    serde_json::from_str(&self.inner).unwrap()
+    match serde_json::from_str(&self.inner) {
+      Ok(v) => v,
+      Err(err) => {
+        report_error("invalid flow json payload", err);
+        serde_json::Value::Null
+      }
+    }
   }
 
   pub fn to_string(&self) -> String {
@@ -155,4 +162,39 @@ impl Deref for SignalDefinition {
 pub struct FlowOutput {
   pub input: FlowPayload,
   pub outputs: Vec<FlowPayload>,
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{FlowJson, FlowPayload};
+
+  #[test]
+  fn flow_json_into_json_handles_invalid_input() {
+    let parsed = FlowJson::from("{not-json}".to_string()).into_json();
+    assert!(parsed.is_null());
+  }
+
+  #[test]
+  fn flow_payload_to_string_and_contains() {
+    let s = FlowPayload::String("alpha-beta".to_string());
+    assert_eq!(s.to_string(), "alpha-beta");
+    assert!(s.contains(&"beta".to_string()));
+
+    let j = FlowPayload::Json(FlowJson::from(r#"["x","y"]"#.to_string()));
+    assert!(j.contains(&"x".to_string()));
+
+    let bytes = FlowPayload::Bytes(vec![0xFF, 0xFF]);
+    assert_eq!(bytes.to_string(), "");
+  }
+
+  #[test]
+  fn value_to_vec_string_for_array_and_non_array() {
+    let arr = serde_json::json!(["a", "b", 1]);
+    let out = FlowPayload::value_to_vec_string(&arr);
+    assert_eq!(out, vec!["a".to_string(), "b".to_string()]);
+
+    let non = serde_json::json!({"k":"v"});
+    let out_non = FlowPayload::value_to_vec_string(&non);
+    assert_eq!(out_non, vec!["".to_string()]);
+  }
 }

@@ -8,6 +8,7 @@ path = "src/daemon.rs"
 
 [dependencies]
 rind-core = { path = "../rind-core" }
+rind-common = { path = "../rind-common" }
 rind-ipc = { path = "../rind-ipc" }
 anyhow.workspace = true
 regex = "1.12.3"

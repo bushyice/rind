@@ -1,0 +1,64 @@
+Rind:
+- Flow: Unit components that can be broadcasted
+          across other units based on a selection
+          with an internal public payload synchronized to
+          services via a transport protocol.
+	Signals:
+		Sent once, not persistent, act like events
+	States:
+		Saved, Have continuity, Retrieved at reboot
+
+	Payloads:
+		Typed (binary, number, string)
+		Passed through a transport protocol
+
+	Transport Protocol:
+		A system to pass into the services via:
+		- args (only in)
+		- stdio (in-out)
+		- uds (in-out)
+		- env (only in)
+
+	State and Signal Configuration:
+	 	- Broadcast into Options: Selects units that can
+	 	  accept broadcasts
+	 	- Permission Option: Which entities are allowed to
+	 	  trigger this event
+
+	State Transcendance:
+		- The order in which states are deemed active,
+		  for example `SwayActive` state might depend on
+		  `UserLoggedIn` state, but as soon as `UserLoggedIn` is
+		  deemed active, `SwayActive` is also deemed active.
+
+	State Branches:
+		- Multiple states with different payloads will be branched,
+		  and accessed through a configuration for how branches
+		  should be distributed
+
+	Detached Transports:
+	  - Transports defined by state (mainly uds) that work independently of services, that way they allow messaging for external programs
+
+	Outputs:
+	  - Services can respond to signals, when they do, their response is accumulated for each fire (for states, that fire is when the state is first set, and when start up states are loaded)
+
+	Piping:
+	  - Both outputs and payloads can be piped through, to the payload of a sub-state or signal
+
+	Service Branchig:
+	  - Services can have more than one instances depending on the state branches.
+
+- Permissions: An entity-based enabler/disabler for actions
+
+	- ActionGroup: A group of activities such as "fs"
+	- Action: An activity such as "read(/home)", "write(/home)",
+	          "broadCast(event)"
+
+	- Entities:
+		A user, a unix group, or an executable
+
+- Plugins: Cycle-based internally running programs with access
+           to rind's internal state
+	- Cycles: Run time like on_unit_collect, on_mounts_mount, on_log, ...
+
+- eBPF: An eBPF loader that loads eBPF at startup

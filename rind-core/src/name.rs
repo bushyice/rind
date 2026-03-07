@@ -69,3 +69,38 @@ fn ser_name<S: serde::Serializer>(f: &Arc<str>, serializer: S) -> Result<S::Ok, 
 //   let s: &str = Deserialize::deserialize(deserializer)?;
 //   Ok(Name::new(s))
 // }
+
+#[cfg(test)]
+mod tests {
+  use super::Name;
+  use std::collections::HashSet;
+
+  #[test]
+  fn names_compare_by_value() {
+    let a = Name::new("alpha");
+    let b = Name::from("alpha");
+    let c = Name::new("beta");
+
+    assert!(a == b);
+    assert!(a != c);
+  }
+
+  #[test]
+  fn names_hash_and_dedup() {
+    let mut set = HashSet::new();
+    set.insert(Name::new("one"));
+    set.insert(Name::new("one"));
+    set.insert(Name::new("two"));
+
+    assert_eq!(set.len(), 2);
+  }
+
+  #[test]
+  fn conversion_roundtrip() {
+    let name = Name::from(String::from("svc"));
+    let clone = Name::from(&name);
+    assert_eq!(name.to_string(), "svc".to_string());
+    assert_eq!(clone.to_string(), "svc".to_string());
+    assert!(name == clone);
+  }
+}

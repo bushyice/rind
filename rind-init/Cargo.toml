@@ -11,5 +11,6 @@ path = "src/init.rs"
 backoff = "0.4.0"
 libc.workspace = true
 nix.workspace = true
+rind-common = { path = "../rind-common" }
 rind-core = { path = "../rind-core" }
 rind-daemon = { path = "../rind-daemon" }

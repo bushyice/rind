@@ -1,8 +1,10 @@
+use rind_common::error::install_panic_handler;
 use rind_core::{
+  error::{rw_read, rw_write},
   loginfo, logtrc, logwarn,
   mount::Mount,
-  services::{RestartPolicy, start_service, stop_service},
-  store::STORE,
+  services::{RestartPolicy, StopMode, start_service, stop_service},
+  store::{PersistMode, STORE},
 };
 use rind_ipc::{
   Message, MessagePayload, MessageType, Service, ServiceState, UnitType,
@@ -18,7 +20,7 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
           Message::from_type(MessageType::Error).with(format!("Payload Incorrect")),
         ));
       };
-      let store = { STORE.read().unwrap() };
+      let store = { rw_read(&STORE, "store read in daemon list") };
 
       if matches!(payload.unit_type, UnitType::Unit) {
         if let Some(unit) = store.unit(payload.name) {
@@ -106,28 +108,33 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
     }
     MessageType::Start => {
       let Some(payload) = msg.parse_payload::<MessagePayload>() else {
-        return Ok(Some(MessageType::Unknown.into()));
+        return Ok(Some(Message::nack("invalid start payload")));
       };
 
       logtrc!("Start request for: {:?}", payload.name);
 
-      let mut units = STORE.write().unwrap();
+      let mut units = rw_write(&STORE, "store write in daemon start");
 
       if let Some(ser) = units.lookup_mut::<Service>(&payload.name) {
         start_service(ser);
       } else {
         let err = format!("Unit component not found: {:?}", payload.name);
         loginfo!("{err}");
-        return Ok(Some(Message::from_type(MessageType::Error).with(err)));
+        return Ok(Some(Message::nack(err)));
       }
 
-      MessageType::Unknown.into()
+      Message::ack(format!("started {}", payload.name))
     }
     MessageType::Stop => {
       let Some(payload) = msg.parse_payload::<MessagePayload>() else {
-        return Ok(Some(MessageType::Unknown.into()));
+        return Ok(Some(Message::nack("invalid stop payload")));
       };
       let force = payload.force.unwrap_or(false);
+      let stop_mode = if force {
+        StopMode::ForceKill
+      } else {
+        StopMode::Graceful
+      };
 
       logtrc!("Stop request for: {:?}", payload.name);
 
@@ -135,59 +142,62 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
         logwarn!("Force stopping {:?}", payload.name);
       }
 
-      let mut units = STORE.write().unwrap();
+      let mut units = rw_write(&STORE, "store write in daemon stop");
 
       if let Some(ser) = units.lookup_mut::<Service>(&payload.name) {
-        stop_service(ser, force);
+        stop_service(ser, stop_mode);
       } else {
         let err = format!("Unit component not found: {:?}", payload.name);
         loginfo!("{err}");
-        return Ok(Some(Message::from_type(MessageType::Error).with(err)));
+        return Ok(Some(Message::nack(err)));
       }
 
-      MessageType::Unknown.into()
+      Message::ack(format!("stopped {}", payload.name))
     }
     MessageType::Enable => {
       let Some(payload) = msg.parse_payload::<MessagePayload>() else {
-        return Ok(Some(MessageType::Unknown.into()));
+        return Ok(Some(Message::nack("invalid enable payload")));
       };
+      let target_name = payload.name.clone();
 
-      let mut units = STORE.write().unwrap();
+      let mut units = rw_write(&STORE, "store write in daemon enable");
 
       if let Some((unit_name, thing)) = payload.name.split_once('@') {
         if thing == "*" {
-          units.enable_unit(unit_name, true);
+          units.enable_unit(unit_name, PersistMode::Yes);
         }
-        units.enable_component(unit_name, thing, true);
+        units.enable_component(unit_name, thing, PersistMode::Yes);
       } else {
-        units.enable_unit(payload.name, true);
+        units.enable_unit(payload.name, PersistMode::Yes);
       }
 
-      MessageType::Unknown.into()
+      Message::ack(format!("enabled {}", target_name))
     }
     MessageType::Disable => {
       let Some(payload) = msg.parse_payload::<MessagePayload>() else {
-        return Ok(Some(MessageType::Unknown.into()));
+        return Ok(Some(Message::nack("invalid disable payload")));
       };
+      let target_name = payload.name.clone();
 
-      let mut units = STORE.write().unwrap();
+      let mut units = rw_write(&STORE, "store write in daemon disable");
 
       if let Some((unit_name, thing)) = payload.name.split_once('@') {
         if thing == "*" {
-          units.disable_unit(unit_name, true);
+          units.disable_unit(unit_name, PersistMode::Yes);
         }
-        units.disable_component(unit_name, thing, true);
+        units.disable_component(unit_name, thing, PersistMode::Yes);
       } else {
-        units.disable_unit(payload.name, true);
+        units.disable_unit(payload.name, PersistMode::Yes);
       }
 
-      MessageType::Unknown.into()
+      Message::ack(format!("disabled {}", target_name))
     }
     _ => MessageType::Unknown.into(),
   }))
 }
 
 pub fn start_daemon() -> anyhow::Result<()> {
+  install_panic_handler("daemon");
   start_ipc_server(handle_client)?;
   Ok(())
 }

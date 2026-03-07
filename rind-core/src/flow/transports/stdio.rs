@@ -1,6 +1,7 @@
 use std::io::{BufRead, BufReader};
 
 use crate::services::Service;
+use rind_common::error::{report_error, rw_write};
 
 use super::*;
 
@@ -27,11 +28,7 @@ impl TransportProtocol for StdioTransportProtocol {
             stdin,
             "{}",
             serde_json::to_string(&TransportMessage {
-              action: if ctx.remove {
-                TransportMessageAction::Remove
-              } else {
-                TransportMessageAction::Set
-              },
+              action: ctx.action,
               name: Some(instance.name.clone()),
               payload: Some(instance.payload.clone()),
               r#type: if instance.r#type == FlowType::Signal {
@@ -50,7 +47,9 @@ impl TransportProtocol for StdioTransportProtocol {
 
   fn init(&mut self, _options: Vec<String>, service: Option<&mut crate::services::Service>) {
     if let Some(service) = service {
-      start_stdout_listener(service.name.clone(), service.child.as_mut().unwrap());
+      if let Some(child) = service.child.as_mut() {
+        start_stdout_listener(service.name.clone(), child);
+      }
     }
   }
 }
@@ -61,11 +60,12 @@ pub fn start_stdout_listener(service_name: String, child: &mut std::process::Chi
       let reader = BufReader::new(stdout);
 
       for line in reader.lines().flatten() {
-        let msg: TransportMessage = serde_json::from_str(&line).unwrap();
+        let Ok(msg) = serde_json::from_str::<TransportMessage>(&line) else {
+          report_error("stdio transport parse error", line);
+          continue;
+        };
 
-        crate::store::STORE
-          .write()
-          .unwrap()
+        rw_write(&crate::store::STORE, "store write in stdio listener")
           .handle_message(service_name.clone(), msg);
 
         // let instance = FlowInstance {

@@ -39,8 +39,10 @@ pub fn recv_message(mut stream: UnixStream, handle_client: ClientHandler) {
       }
     };
 
-    let Ok(Some(response)) = handle_client(msg) else {
-      continue;
+    let response = match handle_client(msg) {
+      Ok(Some(response)) => response,
+      Ok(None) => Message::nack("no response from handler"),
+      Err(err) => Message::nack(format!("handler error: {err}")),
     };
 
     let resp = response.as_string().into_bytes();

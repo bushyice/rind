@@ -1,9 +1,11 @@
 use crate::flow::FlowInstance;
 use crate::mount::{mount_target, umount_target};
 use crate::name::Name;
-use crate::services::{start_service, stop_service};
+use crate::services::{StopMode, start_service, stop_service};
 use crate::units::Unit;
 use once_cell::sync::Lazy;
+use rind_common::error::{report_error, rw_read};
+use rind_common::fs_async::{FileWriteMode, queue_file_write};
 use std::collections::{HashMap, HashSet};
 
 pub static STORE: Lazy<std::sync::RwLock<Store>> =
@@ -17,6 +19,12 @@ pub struct Store {
   pub(crate) states: HashMap<String, Vec<FlowInstance>>,
 }
 
+#[derive(Clone, Copy)]
+pub enum PersistMode {
+  Yes,
+  No,
+}
+
 impl Store {
   pub fn insert_unit(&mut self, name: impl Into<Name>, mut unit: Unit) {
     let name = name.into();
@@ -24,7 +32,7 @@ impl Store {
     self.units.insert(name, unit);
   }
 
-  pub fn enable_unit(&mut self, name: impl Into<Name>, write: bool) {
+  pub fn enable_unit(&mut self, name: impl Into<Name>, persist: PersistMode) {
     let name = name.into();
     let mut filter = self.enabled.get(&name).cloned().unwrap_or_default();
     filter.clear();
@@ -49,17 +57,17 @@ impl Store {
       }
     }
 
-    if write {
+    if matches!(persist, PersistMode::Yes) {
       self.save_enabled();
     }
   }
 
-  pub fn disable_unit(&mut self, name: impl Into<Name>, write: bool) {
+  pub fn disable_unit(&mut self, name: impl Into<Name>, persist: PersistMode) {
     let name = name.into();
     if let Some(ref mut unit) = self.units.get_mut(&name) {
       if let Some(ref mut services) = unit.service {
         for service in services {
-          stop_service(service, true);
+          stop_service(service, StopMode::ForceKill);
         }
       }
 
@@ -71,12 +79,17 @@ impl Store {
     }
 
     self.enabled.remove(&name);
-    if write {
+    if matches!(persist, PersistMode::Yes) {
       self.save_enabled();
     }
   }
 
-  pub fn enable_component(&mut self, unit_name: impl Into<Name>, component: &str, write: bool) {
+  pub fn enable_component(
+    &mut self,
+    unit_name: impl Into<Name>,
+    component: &str,
+    persist: PersistMode,
+  ) {
     let unit_name = unit_name.into();
     let filter = self.enabled.entry(unit_name.clone()).or_default();
     filter.insert(component.to_string());
@@ -99,12 +112,17 @@ impl Store {
       }
     }
 
-    if write {
+    if matches!(persist, PersistMode::Yes) {
       self.save_enabled();
     }
   }
 
-  pub fn disable_component(&mut self, unit_name: impl Into<Name>, component: &str, write: bool) {
+  pub fn disable_component(
+    &mut self,
+    unit_name: impl Into<Name>,
+    component: &str,
+    persist: PersistMode,
+  ) {
     let unit_name = unit_name.into();
     let filter = self.enabled.entry(unit_name.clone()).or_default();
     // filter.exclude.insert(component.to_string());
@@ -114,7 +132,7 @@ impl Store {
       if let Some(services) = &mut unit.service {
         for svc in services {
           if svc.name == component {
-            stop_service(svc, true);
+            stop_service(svc, StopMode::ForceKill);
           }
         }
       }
@@ -127,7 +145,7 @@ impl Store {
       }
     }
 
-    if write {
+    if matches!(persist, PersistMode::Yes) {
       self.save_enabled();
     }
   }
@@ -194,11 +212,9 @@ impl Store {
       }
     }
 
-    self
-      .states
-      .get_mut("active")
-      .unwrap_or(&mut Vec::new())
-      .retain(|instance| lines.contains(&instance.payload.to_string()));
+    if let Some(active) = self.states.get_mut("active") {
+      active.retain(|instance| lines.contains(&instance.payload.to_string()));
+    }
   }
 
   pub fn unit(&self, name: impl Into<Name>) -> Option<&Unit> {
@@ -238,43 +254,100 @@ impl Store {
   }
 
   pub fn load_state(&mut self) {
-    let config = rind_common::config::CONFIG.read().unwrap();
+    let config = rw_read(&rind_common::config::CONFIG, "config read in load_state");
     let state_path = std::path::Path::new(config.units.state.as_str());
     if let Ok(content) = std::fs::read(&state_path) {
-      self.states =
-        bincode_next::serde::decode_from_slice(&content, bincode_next::config::standard())
-          .unwrap()
-          .0;
       if let Ok((states, _)) =
         bincode_next::serde::decode_from_slice(&content, bincode_next::config::standard())
       {
         self.states = states;
       } else {
-        panic!("fuck")
+        report_error("load_state decode error", "state file decode failed");
       }
     }
   }
 
   pub fn save_state(&self) {
-    let config = rind_common::config::CONFIG.read().unwrap();
+    let config = rw_read(&rind_common::config::CONFIG, "config read in save_state");
     let state_path = std::path::Path::new(config.units.state.as_str());
-
-    bincode_next::serde::encode_to_vec(&self.states, bincode_next::config::standard()).unwrap();
 
     if let Ok(serialized) =
       bincode_next::serde::encode_to_vec(&self.states, bincode_next::config::standard())
     {
-      use std::io::Write;
-      use std::os::unix::fs::OpenOptionsExt;
-      if let Ok(mut f) = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&state_path)
-      {
-        let _ = f.write_all(&serialized);
-      }
+      // currently ineffective because serialization is a bottleneck
+      queue_file_write(state_path, serialized, FileWriteMode::Truncate, Some(0o600));
+    } else {
+      report_error("save_state encode error", "failed to serialize state");
+    }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::flow::{FlowPayload, FlowType};
+  use std::collections::HashSet;
+
+  #[test]
+  fn load_enabled_parses_active_state_items() {
+    let mut store = Store::default();
+    store.states.insert(
+      "active".to_string(),
+      vec![
+        FlowInstance {
+          name: "active".to_string(),
+          payload: FlowPayload::String("unit_a".to_string()),
+          r#type: FlowType::State,
+        },
+        FlowInstance {
+          name: "active".to_string(),
+          payload: FlowPayload::String("unit_b@{svc1,svc2}".to_string()),
+          r#type: FlowType::State,
+        },
+      ],
+    );
+
+    store.load_enabled();
+
+    assert!(store.enabled.contains_key(&Name::from("unit_a")));
+    let filter = store
+      .enabled
+      .get(&Name::from("unit_b"))
+      .cloned()
+      .unwrap_or_default();
+    assert!(filter.contains("svc1"));
+    assert!(filter.contains("svc2"));
+  }
+
+  #[test]
+  fn save_enabled_keeps_only_declared_active_lines() {
+    let mut store = Store::default();
+    let mut filter = HashSet::new();
+    filter.insert("svc1".to_string());
+    store.enabled.insert(Name::from("unit_x"), filter);
+    store.states.insert(
+      "active".to_string(),
+      vec![
+        FlowInstance {
+          name: "active".to_string(),
+          payload: FlowPayload::String("unit_x@{svc1}".to_string()),
+          r#type: FlowType::State,
+        },
+        FlowInstance {
+          name: "active".to_string(),
+          payload: FlowPayload::String("unit_other".to_string()),
+          r#type: FlowType::State,
+        },
+      ],
+    );
+
+    store.save_enabled();
+
+    if let Some(active) = store.states.get("active") {
+      assert_eq!(active.len(), 1);
+      assert_eq!(active[0].payload.to_string(), "unit_x@{svc1}".to_string());
+    } else {
+      panic!("expected active state list");
     }
   }
 }

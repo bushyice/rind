@@ -4,13 +4,26 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-  flow::{FlowInstance, FlowMatchOperation, FlowPayload},
+  flow::{
+    FlowInstance, FlowMatchOperation, FlowPayload, transports::stdio::StdioTransportProtocol,
+    transports::uds::UdsTransportProtocol,
+  },
   services::Service,
   store::Store,
 };
 
 #[derive(Default, Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct TransportID(pub String);
+impl From<String> for TransportID {
+  fn from(value: String) -> Self {
+    TransportID(value)
+  }
+}
+impl From<&str> for TransportID {
+  fn from(value: &str) -> Self {
+    TransportID(value.to_string())
+  }
+}
 
 pub type SubscriberID = u64;
 
@@ -54,17 +67,21 @@ pub struct TransportContext<'a> {
   pub input: &'a FlowPayload,
 
   pub except: &'a Vec<String>,
-  pub remove: bool,
+  pub action: TransportMessageAction,
 
   stop: bool,
 }
 
 impl<'a> TransportContext<'a> {
-  pub fn new(input: &'a FlowPayload, except: &'a Vec<String>, remove: bool) -> Self {
+  pub fn new(
+    input: &'a FlowPayload,
+    except: &'a Vec<String>,
+    action: TransportMessageAction,
+  ) -> Self {
     Self {
       input,
       except,
-      remove,
+      action,
       records: Vec::new(),
       stop: false,
     }
@@ -88,7 +105,14 @@ impl<'a> TransportContext<'a> {
 }
 
 pub static TRANSPORTS: Lazy<std::sync::RwLock<HashMap<TransportID, Box<dyn TransportProtocol>>>> =
-  Lazy::new(|| std::sync::RwLock::new(HashMap::default()));
+  Lazy::new(|| {
+    let mut transports: HashMap<TransportID, Box<dyn TransportProtocol>> = HashMap::default();
+
+    transports.insert("stdio".into(), Box::new(StdioTransportProtocol));
+    transports.insert("uds".into(), Box::new(UdsTransportProtocol::default()));
+
+    std::sync::RwLock::new(transports)
+  });
 
 #[derive(Serialize, Deserialize, Copy, Clone)]
 pub enum TransportMessageType {
@@ -122,16 +146,20 @@ impl Store {
       TransportMessageType::Enquiry => {}
       TransportMessageType::Respose => {}
       TransportMessageType::Signal => {
-        self
-          .emit_signal(msg.name.unwrap(), msg.payload, Some(&exceptions))
-          .unwrap();
+        let Some(name) = msg.name else {
+          return;
+        };
+        let _ = self.emit_signal(name, msg.payload, Some(&exceptions));
       }
       TransportMessageType::State => {
         if msg.action == TransportMessageAction::Remove {
+          let Some(name) = msg.name else {
+            return;
+          };
           self.remove_state(
-            &msg.name.unwrap(),
+            &name,
             if msg.payload.is_some() {
-              match msg.payload.unwrap() {
+              match msg.payload.unwrap_or(FlowPayload::None(false)) {
                 FlowPayload::Json(i) => Some(FlowMatchOperation::Options {
                   binary: None,
                   contains: None,
@@ -147,9 +175,10 @@ impl Store {
             Some(&exceptions),
           );
         } else {
-          self
-            .set_state(msg.name.unwrap(), msg.payload, Some(&exceptions))
-            .unwrap();
+          let Some(name) = msg.name else {
+            return;
+          };
+          let _ = self.set_state(name, msg.payload, Some(&exceptions));
         }
       }
     }

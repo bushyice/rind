@@ -73,3 +73,49 @@ impl InitConfig {
     Ok(toml::from_str(&file)?)
   }
 }
+
+#[cfg(test)]
+mod tests {
+  use super::InitConfig;
+  use std::io::Write;
+
+  #[test]
+  fn default_config_has_expected_basics() {
+    let cfg = InitConfig::default();
+    assert_eq!(cfg.shell.exec.as_str(), "/bin/sh");
+    assert!(!cfg.logger.log_path.is_empty());
+  }
+
+  #[test]
+  fn from_file_parses_toml() {
+    let mut path = std::env::temp_dir();
+    path.push(format!("rind-config-{}.toml", std::process::id()));
+    let mut file = std::fs::File::create(&path).unwrap();
+    writeln!(
+      file,
+      r#"
+[units]
+path = "/etc/units"
+state = "/tmp/state.bin"
+[shell]
+exec = "/bin/sh"
+tty = "/dev/tty1"
+[logger]
+socket_path = "/tmp/rind.sock"
+log_path = "/tmp/rind-log"
+channel_capacity = 16
+flush_interval = 1
+fsync_interval = 1
+max_segment_size = 1024
+batch_size = 8
+"#
+    )
+    .unwrap();
+
+    let parsed = InitConfig::from_file(path.to_str().unwrap()).unwrap();
+    assert_eq!(parsed.units.path.as_str(), "/etc/units");
+    assert_eq!(parsed.logger.batch_size, 8);
+
+    let _ = std::fs::remove_file(path);
+  }
+}
