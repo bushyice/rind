@@ -25,7 +25,7 @@ Rind:
 	 	- Permission Option: Which entities are allowed to
 	 	  trigger this event
 
-	State Transcendance:
+	State Transcendence:
 		- The order in which states are deemed active,
 		  for example `SwayActive` state might depend on
 		  `UserLoggedIn` state, but as soon as `UserLoggedIn` is
