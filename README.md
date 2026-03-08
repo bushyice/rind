@@ -8,6 +8,37 @@
 
 `rind`(pronounced rin-dee, or rindy) is a simple init system written with rust, but with a few concepts that set it apart from something like systemd.
 
+## Todo
+- [x] **Core Architecture**: Unit loading, store management, ...
+- [x] **Flow System**: Signal/State definitions and broadcasting.
+- [x] **Payloads**: Typed support for JSON, String, and Binary data.
+- [x] **Transport Protocols**: Transport protocols.
+    - [x] `stdio`.
+    - [x] `uds`.
+    - [x] `env`.
+    - [x] `args`.
+- [x] **Service Management**:
+    - [x] Process spawning and killing stuff.
+    - [x] Dependency based startup (`after`).
+    - [x] Restart polcies.
+- [x] **State Branching**: Many state payloads at once.
+- [x] **Service Branching**: Service per state branching.
+- [x] **State Persistence**: Continuity of state across restarts.
+- [x] **Detached Transports/Subscribers**: Independent messaging access for external programs.
+- [ ] **Daemon & CLI**: The cli.
+    - [x] Listing stuff.
+    - [x] Enable/Disable/Start/Stop.
+    - [ ] States and Signal control(maybe with permissions if those happen).
+- [ ] **State Transcendence**: Auto-activation of states based on dependencies (e.g. `SwayActive` on `UserLoggedIn`).
+- [ ] **Outputs**: Signal/State output collectd from services.
+- [ ] **Piping**: Piping outputs and payloads into other states/signals.
+- [ ] **Advanced Triggering**: More complex state based service triggers.
+- [ ] **Userspace Isolation**: Isolate units for user and system.
+- [ ] **Plugins**: Cycle-based internal programs with access to `rind`'s internal state.
+- [ ] **Permissions**: Entity-based(users, groups, executables) access control for `Actions` and `ActionGroups`.
+- [ ] **eBPF Loader**: (maybe?) Loading eBPF at system startup.
+
+
 ## Core Concepts
 Look around, but most of these concepts are either there but untested or are still not made yet(eg. transcendence).
 
