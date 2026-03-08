@@ -1,12 +1,33 @@
-# `rind` (Rust Init Daemon)
+<div align="center">
+  <img src="https://raw.githubusercontent.com/bushyice/bushyice/refs/heads/main/archive/rind/logo.png" width="100" alt="Rind Logo" />
+  <h1><code>rind</code> (Rust Init Daemon)</h1>
+  <p>
+    <strong><code>rind</code>(pronounced rin-dee, or rindy) is a simple init system written with rust, but with a few concepts that set it apart from something like systemd.</strong>
+  </p>
+  <p>
+    <a href="https://github.com/bushyice/rind/stargazers">
+      <img src="https://img.shields.io/github/stars/bushyice/rind?style=for-the-badge&logo=starship&color=cba6f7&logoColor=9399b2&labelColor=181825" alt="GitHub stars"/>
+    </a>
+    <a href="https://github.com/bushyice/rind/issues">
+      <img src="https://img.shields.io/github/issues/bushyice/rind?style=for-the-badge&logo=gitbook&color=f5c2e7&logoColor=9399b2&labelColor=181825" alt="GitHub issues"/>
+    </a>
+    <a href="https://github.com/bushyice/rind/forks">
+      <img src="https://img.shields.io/github/forks/bushyice/rind?style=for-the-badge&logo=git&color=94e2d5&logoColor=9399b2&labelColor=181825" alt="GitHub forks"/>
+    </a>
+    <a href="https://github.com/bushyice/rind">
+      <img src="https://img.shields.io/github/languages/top/bushyice/rind?style=for-the-badge&color=cba6f7&logoColor=f5c2e7&labelColor=1e1e2e" alt="Top Language"/>
+    </a>
+   	<a href="https://github.com/bushyice/rind">
+      <img src="https://img.shields.io/github/contributors/bushyice/rind?style=for-the-badge&color=f5c2e7&logoColor=cba6f7&labelColor=1e1e2e" alt="Contributors"/>
+    </a>
+  </p>
+</div>
 
 > [!WARNING] 
 > #### Disclaimer
 > This repo contains a heap of objectively (and subjectively) bad code and is, in its entirety, designated POC/it-works-sometimes quality.
 > It is currently in an experimental stage, and it has temporary parts inside the code that will be removed later.
 
-
-`rind`(pronounced rin-dee, or rindy) is a simple init system written with rust, but with a few concepts that set it apart from something like systemd.
 
 ## Todo
 - [x] **Core Architecture**: Unit loading, store management, ...
