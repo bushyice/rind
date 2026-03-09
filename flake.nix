@@ -59,6 +59,8 @@
             rustToolchain
             pkgs.pkg-config
             pkgs.openssl
+            pkgs.e2fsprogs
+            pkgs.qemu
           ];
         };
       }
