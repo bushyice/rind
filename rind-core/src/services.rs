@@ -200,6 +200,61 @@ pub fn start_service(service: &mut Service) {
   }
 }
 
+pub fn prepare_service_transport_from_states(
+  service: &mut Service,
+  states: &std::collections::HashMap<String, Vec<FlowInstance>>,
+  current_trigger: Option<&FlowInstance>,
+) {
+  let Some(method) = service.transport.clone() else {
+    return;
+  };
+
+  let resolve_state = |name: &str| -> Option<String> {
+    if let Some(trigger) = current_trigger
+      && trigger.name == name
+    {
+      return Some(trigger.payload.to_string());
+    }
+    states
+      .get(name)
+      .and_then(|v| v.first())
+      .map(|x| x.payload.to_string())
+  };
+
+  match method {
+    TransportMethod::Options { id, options } if id.0 == "env" => {
+      let env = service
+        .env
+        .get_or_insert_with(std::collections::HashMap::new);
+      for option in options {
+        let Some((key, value)) = option.split_once('=') else {
+          continue;
+        };
+        if let Some(state_name) = value.strip_prefix("state:") {
+          if let Some(val) = resolve_state(state_name) {
+            env.insert(key.to_string(), val);
+          }
+        } else {
+          env.insert(key.to_string(), value.to_string());
+        }
+      }
+    }
+    TransportMethod::Options { id, options } if id.0 == "args" => {
+      for option in options {
+        if let Some(state_name) = option.strip_prefix("state:") {
+          let payload = resolve_state(state_name).unwrap_or_default();
+          if !payload.is_empty() {
+            service.args.push(payload);
+          }
+        } else {
+          service.args.push(option);
+        }
+      }
+    }
+    _ => {}
+  }
+}
+
 pub fn stop_service(service: &mut Service, mode: StopMode) {
   service.state = ServiceState::Stopping;
   service.stop_time = Some(std::time::Instant::now());
@@ -340,6 +395,7 @@ pub fn reconcile_state_branching(
 pub fn start_services() {
   let mut store = rw_write(&STORE, "store write in start_services");
   store.init_detached_transports();
+  let states_snapshot = store.states.clone();
 
   let mut started: HashSet<String> = HashSet::new();
   let mut pending = Vec::new();
@@ -349,6 +405,7 @@ pub fn start_services() {
     if let Some(afters) = &service.after {
       pending.push((service.name.clone(), afters.clone()));
     } else {
+      prepare_service_transport_from_states(service, &states_snapshot, None);
       start_service(service);
       started.insert(id);
     }
@@ -360,6 +417,7 @@ pub fn start_services() {
     pending.retain(|(service_name, afters)| {
       if afters.iter().all(|a| started.contains(a)) {
         if let Some(service) = store.lookup_mut::<Service>(service_name) {
+          prepare_service_transport_from_states(service, &states_snapshot, None);
           start_service(service);
           started.insert(service_name.clone());
           progress = true;
@@ -388,6 +446,7 @@ pub fn start_services() {
 
 pub fn start_dependents(store: &mut crate::store::Store, target: &str) {
   let mut to_start = Vec::new();
+  let states_snapshot = store.states.clone();
 
   for (unit_name, service) in store.enabled::<Service>() {
     if service.state == ServiceState::Inactive || service.state == ServiceState::Exited(0) {
@@ -401,6 +460,7 @@ pub fn start_dependents(store: &mut crate::store::Store, target: &str) {
 
   for name in to_start {
     if let Some(service) = store.lookup_mut::<Service>(&name) {
+      prepare_service_transport_from_states(service, &states_snapshot, None);
       start_service(service);
       let t = service.name.clone();
       start_dependents(store, &t);
@@ -486,9 +546,11 @@ fn handle_exit(pid: Pid, code: i32) {
 
   if !to_restart.is_empty() {
     let mut store = rw_write(&STORE, "store write in handle_exit restart");
+    let states_snapshot = store.states.clone();
 
     for (_, service) in store.items_mut::<Service>() {
       if to_restart.contains(&service.id) {
+        prepare_service_transport_from_states(service, &states_snapshot, None);
         start_service(service);
         to_start_deps.push(service.name.clone());
       }

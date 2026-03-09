@@ -6,7 +6,9 @@ pub mod utils;
 
 #[derive(Debug, Copy, Clone, serde::Deserialize, serde::Serialize)]
 pub enum UnitType {
-  Socket,
+  Flow,
+  State,
+  Signal,
   Service,
   Mount,
   Unit,

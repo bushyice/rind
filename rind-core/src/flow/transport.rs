@@ -252,6 +252,9 @@ pub fn init_service_transport(service: &mut Service, stage: TransportInitStage) 
   let Some(method) = service.transport.clone() else {
     return;
   };
+  if method.as_id().0.trim().is_empty() {
+    return;
+  }
   let endpoint = format!("{}@{}", service.unit.to_string(), service.name);
   init_transport_method(
     &method,

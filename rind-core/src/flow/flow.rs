@@ -46,13 +46,11 @@ pub struct FlowInstance {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct FlowJson {
-  inner: String,
-}
+pub struct FlowJson(pub String);
 
 impl FlowJson {
   pub fn into_json(&self) -> serde_json::Value {
-    match serde_json::from_str(&self.inner) {
+    match serde_json::from_str(&self.0) {
       Ok(v) => v,
       Err(err) => {
         report_error("invalid flow json payload", err);
@@ -62,17 +60,17 @@ impl FlowJson {
   }
 
   pub fn to_string(&self) -> String {
-    self.inner.clone()
+    self.0.clone()
   }
 
   pub fn swap(&mut self, value: serde_json::Value) {
-    self.inner = value.to_string();
+    self.0 = value.to_string();
   }
 }
 
 impl From<String> for FlowJson {
   fn from(value: String) -> Self {
-    Self { inner: value }
+    Self(value)
   }
 }
 
@@ -128,7 +126,7 @@ impl FlowPayload {
   }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "snake_case")]
 pub enum FlowPayloadType {
   #[default]
@@ -138,12 +136,30 @@ pub enum FlowPayloadType {
   None,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum AutoPayloadInsert {
+  One(String),
+  Many(Vec<String>),
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct AutoPayloadConfig {
+  pub eval: Option<String>,
+  pub args: Option<Vec<String>>,
+  pub insert: Option<AutoPayloadInsert>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct FlowDefinitionBase {
   pub name: String,
   pub payload: FlowPayloadType,
+  #[serde(rename = "auto-payload")]
+  pub auto_payload: Option<AutoPayloadConfig>,
   pub broadcast: Option<Vec<String>>,
   pub branch: Option<Vec<String>>,
+  #[serde(rename = "activate-on-none")]
+  pub activate_on_none: Option<Vec<String>>,
   // pub permission: Option<Permission>
   pub after: Option<Vec<FlowItem>>,
   pub subscribers: Option<Vec<TransportMethod>>,

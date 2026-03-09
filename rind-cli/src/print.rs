@@ -1,5 +1,5 @@
 use owo_colors::OwoColorize;
-use rind_ipc::ser::{ServiceSerialized, UnitItemsSerialized, UnitSerialized};
+use rind_ipc::ser::{ServiceSerialized, StateSerialized, UnitItemsSerialized, UnitSerialized};
 
 pub fn print_units(units: &[UnitSerialized]) {
   println!(
@@ -60,6 +60,10 @@ pub fn print_unit(unit_name: &String, unit: &UnitItemsSerialized) {
       );
     }
   }
+}
+
+pub fn print_state(st: &StateSerialized) {
+  println!("{}: {}", st.name, st.instances)
 }
 
 pub fn print_service(service: &ServiceSerialized) {

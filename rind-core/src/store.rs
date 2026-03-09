@@ -1,10 +1,13 @@
 use crate::flow::{FlowInstance, FlowPayload};
 use crate::mount::{mount_target, umount_target};
 use crate::name::Name;
-use crate::services::{StopMode, start_service, stop_service};
+use crate::services::{
+  StopMode, prepare_service_transport_from_states, start_service, stop_service,
+};
 use crate::units::Unit;
 use once_cell::sync::Lazy;
 use rind_common::error::{report_error, rw_read};
+#[cfg(not(test))]
 use rind_common::fs_async::{FileWriteMode, queue_file_write};
 use rind_common::logwarn;
 use std::collections::{HashMap, HashSet};
@@ -84,12 +87,14 @@ impl Store {
     let name = name.into();
     let mut filter = self.enabled.get(&name).cloned().unwrap_or_default();
     filter.clear();
+    let states_snapshot = self.states.clone();
     // filter.exclude.clear();
 
     if let Some(unit) = self.units.get_mut(&name) {
       if let Some(ref mut services) = unit.service {
         for svc in services {
           if filter.is_empty() || filter.contains(&svc.name) {
+            prepare_service_transport_from_states(svc, &states_snapshot, None);
             start_service(svc);
           }
         }
@@ -141,12 +146,14 @@ impl Store {
     let unit_name = unit_name.into();
     let filter = self.enabled.entry(unit_name.clone()).or_default();
     filter.insert(component.to_string());
+    let states_snapshot = self.states.clone();
     // filter.exclude.remove(component);
 
     if let Some(unit) = self.units.get_mut(&unit_name) {
       if let Some(services) = &mut unit.service {
         for svc in services {
           if svc.name == component {
+            prepare_service_transport_from_states(svc, &states_snapshot, None);
             start_service(svc);
           }
         }
@@ -354,8 +361,25 @@ impl Store {
     if let Ok(serialized) =
       bincode_next::serde::encode_to_vec(&self.states, bincode_next::config::standard())
     {
-      // currently ineffective because serialization is a bottleneck
-      queue_file_write(state_path, serialized, FileWriteMode::Truncate, Some(0o600));
+      #[cfg(test)]
+      {
+        if let Some(parent) = state_path.parent() {
+          if let Err(err) = std::fs::create_dir_all(parent) {
+            report_error("save_state create dir failed", err);
+            return;
+          }
+        }
+        if let Err(err) = std::fs::write(state_path, &serialized) {
+          report_error("save_state test write failed", err);
+        }
+        return;
+      }
+
+      #[cfg(not(test))]
+      {
+        // currently ineffective because serialization is a bottleneck
+        queue_file_write(state_path, serialized, FileWriteMode::Truncate, Some(0o600));
+      }
     } else {
       report_error("save_state encode error", "failed to serialize state");
     }

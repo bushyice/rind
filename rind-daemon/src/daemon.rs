@@ -1,6 +1,7 @@
 use rind_common::error::install_panic_handler;
 use rind_core::{
   error::{rw_read, rw_write},
+  flow::StateDefinition,
   loginfo, logtrc, logwarn,
   mount::Mount,
   services::{RestartPolicy, StopMode, start_service, stop_service},
@@ -9,7 +10,10 @@ use rind_core::{
 use rind_ipc::{
   Message, MessagePayload, MessageType, Service, ServiceState, UnitType,
   recv::start_ipc_server,
-  ser::{MountSerialized, ServiceSerialized, UnitItemsSerialized, UnitSerialized, serialize_many},
+  ser::{
+    MountSerialized, ServiceSerialized, StateSerialized, UnitItemsSerialized, UnitSerialized,
+    serialize_many,
+  },
 };
 
 fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
@@ -77,6 +81,18 @@ fn handle_client(msg: Message) -> Result<Option<Message>, anyhow::Error> {
               args: x.args.clone(),
               exec: x.exec.clone(),
               pid: x.child.as_ref().map(|x| x.id()),
+            }
+            .stringify(),
+          )
+        } else {
+          Message::from_type(MessageType::Error).with(format!("Service not found"))
+        }
+      } else if matches!(payload.unit_type, UnitType::State) {
+        if let Some(x) = store.lookup::<StateDefinition>(&payload.name) {
+          Message::from_type(MessageType::List).with(
+            StateSerialized {
+              name: x.name.clone(),
+              instances: store.state_branches(&x.name).unwrap_or(&Vec::new()).len(),
             }
             .stringify(),
           )

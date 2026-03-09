@@ -1,6 +1,11 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::process::Command;
 
-use crate::services::{Service, StopMode, reconcile_state_branching, start_service, stop_service};
+use crate::services::{
+  Service, StopMode, prepare_service_transport_from_states, reconcile_state_branching,
+  start_service, stop_service,
+};
 use rind_common::error::{report_error, rw_write};
 
 use super::*;
@@ -54,9 +59,30 @@ impl crate::store::Store {
     payload: Option<FlowPayload>,
     except: Option<&Vec<String>>,
   ) -> anyhow::Result<()> {
+    let mut guard = HashSet::new();
+    self.set_state_internal(name, payload, except, &mut guard)
+  }
+
+  fn set_state_internal(
+    &mut self,
+    name: String,
+    payload: Option<FlowPayload>,
+    except: Option<&Vec<String>>,
+    guard: &mut HashSet<String>,
+  ) -> anyhow::Result<()> {
+    let branch_sig = payload_signature(&payload);
+    let guard_key = format!("apply::{name}::{branch_sig}");
+    if guard.contains(&guard_key) {
+      return Ok(());
+    }
+    guard.insert(guard_key.clone());
+
     // special keys
     let branches = match self.check_flow(FlowType::State, &name, &payload) {
-      None => return Err(anyhow::anyhow!("State trigger validation failed.")),
+      None => {
+        guard.remove(&guard_key);
+        return Err(anyhow::anyhow!("State trigger validation failed."));
+      }
       Some(e) => e.branch.clone(),
     };
 
@@ -84,21 +110,26 @@ impl crate::store::Store {
       }
 
       FlowPayload::Json(new_json) => {
-        let branch_keys = if let Some(b) = &branches {
-          b
-        } else {
-          &vec!["id".to_string()]
-        };
+        let branch_keys = branches
+          .as_ref()
+          .map(|b| {
+            b.iter()
+              .map(|key| branch_target_key(key.as_str()).to_string())
+              .collect::<Vec<String>>()
+          })
+          .unwrap_or_else(|| vec!["id".to_string()]);
 
-        let new_key = json_branch_key(&new_json.into_json(), branch_keys)
-          .ok_or_else(|| anyhow::anyhow!("Invalid JSON branch keys"))?;
+        let new_key = json_branch_key(&new_json.into_json(), &branch_keys).ok_or_else(|| {
+          guard.remove(&guard_key);
+          anyhow::anyhow!("Invalid JSON branch keys")
+        })?;
 
         let mut found = false;
 
         for branch in entry.iter_mut() {
           if let FlowPayload::Json(json) = &mut branch.payload {
             let mut existing_json = json.into_json();
-            let existing_key = json_branch_key(&existing_json, branch_keys);
+            let existing_key = json_branch_key(&existing_json, &branch_keys);
 
             // println!("{existing_key:?}::{new_key:?}");
 
@@ -118,7 +149,10 @@ impl crate::store::Store {
     }
 
     reconcile_state_branching(self, &instance, FlowChangeAction::Apply);
+    self.reconcile_state_transcendence(&instance, FlowChangeAction::Apply, except, guard);
+    self.reconcile_activate_on_none(except, guard);
     self.save_state();
+    guard.remove(&guard_key);
     Ok(())
   }
 
@@ -128,24 +162,46 @@ impl crate::store::Store {
     filter: Option<FlowMatchOperation>,
     except: Option<&Vec<String>>,
   ) {
-    if let Some(branches) = self.states.remove(name) {
-      let (to_keep, mut to_remove): (Vec<_>, Vec<_>) = branches.into_iter().partition(|branch| {
-        if let Some(filter) = &filter {
-          !match_operation(filter, &branch.payload)
-        } else {
-          true
-        }
-      });
+    let mut guard = HashSet::new();
+    self.remove_state_internal(name, filter, except, &mut guard);
+  }
 
-      if let Some(_) = &filter {
-        for branch in &mut to_remove {
-          branch.r#type = FlowType::State;
-          self.check_triggers(branch, FlowChangeAction::Revert);
-          self
-            .broadcast(branch, FlowChangeAction::Revert, except)
-            .ok();
-          reconcile_state_branching(self, branch, FlowChangeAction::Revert);
+  fn remove_state_internal(
+    &mut self,
+    name: &str,
+    filter: Option<FlowMatchOperation>,
+    except: Option<&Vec<String>>,
+    guard: &mut HashSet<String>,
+  ) {
+    if let Some(branches) = self.states.remove(name) {
+      let (to_keep, mut to_remove): (Vec<_>, Vec<_>) = if let Some(filter) = &filter {
+        branches
+          .into_iter()
+          .partition(|branch| !match_operation(filter, &branch.payload))
+      } else {
+        (Vec::new(), branches)
+      };
+
+      for branch in &mut to_remove {
+        branch.r#type = FlowType::State;
+        let guard_key = format!(
+          "revert::{}::{}",
+          branch.name,
+          payload_signature(&Some(branch.payload.clone()))
+        );
+        if guard.contains(&guard_key) {
+          continue;
         }
+        guard.insert(guard_key.clone());
+
+        self.check_triggers(branch, FlowChangeAction::Revert);
+        self
+          .broadcast(branch, FlowChangeAction::Revert, except)
+          .ok();
+        reconcile_state_branching(self, branch, FlowChangeAction::Revert);
+        self.reconcile_state_transcendence(branch, FlowChangeAction::Revert, except, guard);
+        self.reconcile_activate_on_none(except, guard);
+        guard.remove(&guard_key);
       }
 
       if !to_keep.is_empty() {
@@ -170,7 +226,7 @@ impl crate::store::Store {
         } else {
           FlowPayload::None(false)
         },
-        r#type: FlowType::State,
+        r#type: FlowType::Signal,
       };
 
       self.check_triggers(&instance, FlowChangeAction::Apply);
@@ -182,6 +238,109 @@ impl crate::store::Store {
     } else {
       Err(anyhow::anyhow!("Signal trigger validation failed."))
     }
+  }
+
+  fn reconcile_state_transcendence(
+    &mut self,
+    source: &FlowInstance,
+    action: FlowChangeAction,
+    except: Option<&Vec<String>>,
+    guard: &mut HashSet<String>,
+  ) {
+    let dependents = self
+      .items::<StateDefinition>()
+      .filter_map(|(unit_name, def)| {
+        let after = def.after.as_ref()?;
+        if !after.iter().any(|cond| check_condition(cond, source)) {
+          return None;
+        }
+        let source_payload = if let Some(_) = def.auto_payload {
+          &auto_payload_for(&def, Some(&source.payload))
+        } else {
+          &source.payload
+        };
+        let payload = transcendent_payload_for(def, source_payload)?;
+        let all_active = after
+          .iter()
+          .all(|cond| self.condition_is_active(cond, Some(&payload)));
+        if matches!(action, FlowChangeAction::Apply) {
+          if !all_active {
+            return None;
+          }
+        } else if all_active {
+          return None;
+        }
+        Some((format!("{}@{}", unit_name.to_string(), def.name), payload))
+      })
+      .filter(|(name, _)| name != &source.name)
+      .collect::<Vec<_>>();
+
+    for (dependent, payload) in dependents {
+      if matches!(action, FlowChangeAction::Apply) {
+        if let Err(err) = self.set_state_internal(dependent.clone(), Some(payload), except, guard) {
+          report_error("state transcendence apply failed", err);
+        }
+      } else {
+        self.remove_state_internal(
+          dependent.as_str(),
+          payload_to_filter(&payload),
+          except,
+          guard,
+        );
+      }
+    }
+  }
+
+  pub fn reconcile_activate_on_none_boot(&mut self) {
+    let mut guard = HashSet::new();
+    self.reconcile_activate_on_none(None, &mut guard);
+  }
+
+  fn reconcile_activate_on_none(
+    &mut self,
+    except: Option<&Vec<String>>,
+    guard: &mut HashSet<String>,
+  ) {
+    let targets = self
+      .items::<StateDefinition>()
+      .filter_map(|(unit_name, def)| {
+        let deps = def.activate_on_none.as_ref()?;
+        let should_activate = deps
+          .iter()
+          .all(|name| self.states.get(name).map(|v| v.is_empty()).unwrap_or(true));
+        let full_name = format!("{}@{}", unit_name.to_string(), def.name);
+        Some((full_name, should_activate, auto_payload_for(def, None)))
+      })
+      .collect::<Vec<(String, bool, FlowPayload)>>();
+
+    for (name, should_activate, payload) in targets {
+      let currently_active = self
+        .states
+        .get(&name)
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+
+      if should_activate && !currently_active {
+        if let Err(err) = self.set_state_internal(name, Some(payload), except, guard) {
+          report_error("activate-on-none set failed", err);
+        }
+      } else if !should_activate && currently_active {
+        self.remove_state_internal(name.as_str(), None, except, guard);
+      }
+    }
+  }
+
+  fn condition_is_active(&self, cond: &FlowItem, payload: Option<&FlowPayload>) -> bool {
+    for branches in self.states.values() {
+      for branch in branches {
+        let mut state = branch.clone();
+        state.r#type = FlowType::State;
+        if check_condition(cond, &state) && payload_compatible(payload, &state.payload) {
+          return true;
+        }
+      }
+    }
+    false
   }
 
   pub fn broadcast(
@@ -234,6 +393,9 @@ impl crate::store::Store {
       let Some(transport_method) = serv.transport.as_ref() else {
         continue;
       };
+      if transport_method.as_id().0.trim().is_empty() {
+        continue;
+      }
       if let Some(transport) = transports.get_mut(transport_method.as_id()) {
         transport.recv(&mut ctx, &instance, Some(&mut serv))?;
       } else {
@@ -250,6 +412,7 @@ impl crate::store::Store {
   pub fn check_triggers(&mut self, trigger: &FlowInstance, action: FlowChangeAction) {
     let mut to_start_services = Vec::new();
     let mut to_stop_services = Vec::new();
+    let states_snapshot = self.states.clone();
 
     let state_def = if matches!(trigger.r#type, FlowType::State) {
       if let Some(def) = self.lookup::<StateDefinition>(&trigger.name) {
@@ -301,6 +464,7 @@ impl crate::store::Store {
     }
     for name in to_start_services {
       if let Some(service) = self.lookup_mut::<Service>(&name) {
+        prepare_service_transport_from_states(service, &states_snapshot, Some(trigger));
         // Store payload state
         // if let Some(p) = &payload {
         //   service.active_payload = Some(serde_json::to_string(p).unwrap_or_default());
@@ -373,7 +537,7 @@ fn check_condition(cond: &FlowItem, trigger: &FlowInstance) -> bool {
       if let Some(state) = state {
         if matches!(trigger.r#type, FlowType::State) {
           if let Some(branch) = branch {
-            match_operation(branch, &trigger.payload)
+            *state == *trigger.name && match_operation(branch, &trigger.payload)
           } else {
             if *state == *trigger.name { true } else { false }
           }
@@ -383,7 +547,7 @@ fn check_condition(cond: &FlowItem, trigger: &FlowInstance) -> bool {
       } else if let Some(sig) = signal {
         if matches!(trigger.r#type, FlowType::Signal) {
           if let Some(target) = target {
-            match_operation(target, &trigger.payload)
+            *sig == *trigger.name && match_operation(target, &trigger.payload)
           } else {
             if *sig == *trigger.name { true } else { false }
           }
@@ -440,6 +604,224 @@ fn merge_json(a: &mut serde_json::Value, b: &serde_json::Value) {
       a_obj.insert(k.clone(), v.clone());
     }
   }
+}
+
+fn payload_signature(payload: &Option<FlowPayload>) -> String {
+  match payload {
+    // TODO: make it so only special keys from the definition are signatured for json
+    Some(FlowPayload::Json(v)) => format!("json:{}", v.to_string()),
+    Some(FlowPayload::String(v)) => format!("str:{v}"),
+    Some(FlowPayload::Bytes(v)) => format!("bytes:{}", v.len()),
+    Some(FlowPayload::None(_)) => "none".to_string(),
+    None => "none".to_string(),
+  }
+}
+
+fn payload_to_filter(payload: &FlowPayload) -> Option<FlowMatchOperation> {
+  match payload {
+    FlowPayload::Json(i) => Some(FlowMatchOperation::Options {
+      binary: None,
+      contains: None,
+      r#as: Some(i.into_json()),
+    }),
+    FlowPayload::Bytes(_) => None,
+    FlowPayload::String(i) => Some(FlowMatchOperation::Eq(i.clone())),
+    FlowPayload::None(_) => None,
+  }
+}
+
+fn auto_payload_for(def: &StateDefinition, _payload: Option<&FlowPayload>) -> FlowPayload {
+  let Some(cfg) = &def.auto_payload else {
+    return default_payload_for_type(def.payload);
+  };
+
+  let output = if let Some(eval) = &cfg.eval {
+    run_eval(eval.as_str(), cfg.args.clone())
+  } else {
+    String::new()
+  };
+  let lines = output
+    .lines()
+    .map(|x| x.trim().to_string())
+    .filter(|x| !x.is_empty())
+    .collect::<Vec<String>>();
+
+  match def.payload {
+    FlowPayloadType::Json => {
+      let mut obj = serde_json::Map::new();
+      match &cfg.insert {
+        Some(AutoPayloadInsert::One(key)) if key == "root" => {
+          if lines.len() == 1 {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&lines[0]) {
+              return FlowPayload::Json(v.to_string().into());
+            }
+            return FlowPayload::Json(
+              serde_json::Value::String(lines[0].clone())
+                .to_string()
+                .into(),
+            );
+          }
+          return FlowPayload::Json(
+            serde_json::to_value(lines)
+              .unwrap_or_default()
+              .to_string()
+              .into(),
+          );
+        }
+        Some(AutoPayloadInsert::One(key)) => {
+          if let Some(first) = lines.first() {
+            obj.insert(key.clone(), serde_json::Value::String(first.clone()));
+          }
+        }
+        Some(AutoPayloadInsert::Many(keys)) => {
+          for (i, key) in keys.iter().enumerate() {
+            if let Some(line) = lines.get(i) {
+              obj.insert(key.clone(), serde_json::Value::String(line.clone()));
+            }
+          }
+        }
+        None => {
+          if let Some(first) = lines.first() {
+            obj.insert(
+              "value".to_string(),
+              serde_json::Value::String(first.clone()),
+            );
+          }
+        }
+      }
+      FlowPayload::Json(serde_json::Value::Object(obj).to_string().into())
+    }
+    FlowPayloadType::String => FlowPayload::String(lines.join("\n")),
+    FlowPayloadType::Bytes => FlowPayload::Bytes(output.into_bytes()),
+    FlowPayloadType::None => FlowPayload::None(false),
+  }
+}
+
+fn run_eval(cmd: &str, args: Option<Vec<String>>) -> String {
+  let out = Command::new(cmd).args(args.unwrap_or(Vec::new())).output();
+  match out {
+    Ok(o) => String::from_utf8(o.stdout).unwrap_or_default(),
+    Err(err) => {
+      report_error("auto-payload eval failed", err);
+      String::new()
+    }
+  }
+}
+
+fn default_payload_for_type(t: FlowPayloadType) -> FlowPayload {
+  match t {
+    FlowPayloadType::Json => FlowPayload::Json(serde_json::json!({}).to_string().into()),
+    FlowPayloadType::String => FlowPayload::String(String::new()),
+    FlowPayloadType::Bytes => FlowPayload::Bytes(Vec::new()),
+    FlowPayloadType::None => FlowPayload::None(false),
+  }
+}
+
+fn transcendent_payload_for(
+  def: &StateDefinition,
+  source_payload: &FlowPayload,
+) -> Option<FlowPayload> {
+  match def.payload {
+    FlowPayloadType::Json => {
+      if let Some(branch_specs) = &def.branch {
+        map_json_payload(branch_specs, source_payload)
+      } else if let FlowPayload::Json(_) = source_payload {
+        Some(source_payload.clone())
+      } else {
+        None
+      }
+    }
+    FlowPayloadType::String => {
+      if let FlowPayload::String(_) = source_payload {
+        Some(source_payload.clone())
+      } else {
+        None
+      }
+    }
+    FlowPayloadType::Bytes => {
+      if let FlowPayload::Bytes(_) = source_payload {
+        Some(source_payload.clone())
+      } else {
+        None
+      }
+    }
+    FlowPayloadType::None => Some(FlowPayload::None(false)),
+  }
+}
+
+fn payload_compatible(reference: Option<&FlowPayload>, thing: &FlowPayload) -> bool {
+  let Some(reference) = reference else {
+    return true;
+  };
+  match (reference, thing) {
+    (FlowPayload::Json(a), FlowPayload::Json(b)) => json_subset(&a.into_json(), &b.into_json()),
+    (FlowPayload::String(a), FlowPayload::String(b)) => a == b,
+    (FlowPayload::None(_), _) => true,
+    _ => true,
+  }
+}
+
+fn json_subset(reference: &serde_json::Value, thing: &serde_json::Value) -> bool {
+  let Some(ref_obj) = reference.as_object() else {
+    return true;
+  };
+  let Some(thing_obj) = thing.as_object() else {
+    return false;
+  };
+
+  let mut shared = 0usize;
+  for (key, value) in ref_obj {
+    if let Some(candidate_value) = thing_obj.get(key) {
+      shared += 1;
+      if value != candidate_value {
+        return false;
+      }
+    }
+  }
+
+  if shared > 0 {
+    return true;
+  }
+
+  ref_obj.values().all(|value| {
+    thing_obj
+      .values()
+      .any(|candidate_value| candidate_value == value)
+  })
+}
+
+fn branch_target_key(spec: &str) -> &str {
+  spec
+    .split_once(':')
+    .map(|(target, _)| target.trim())
+    .unwrap_or(spec)
+}
+
+fn branch_source_key(spec: &str) -> &str {
+  spec
+    .split_once(':')
+    .map(|(_, source)| source.trim())
+    .unwrap_or(spec)
+}
+
+fn map_json_payload(branch_specs: &[String], source: &FlowPayload) -> Option<FlowPayload> {
+  let FlowPayload::Json(source_json) = source else {
+    return None;
+  };
+  let source_json = source_json.into_json();
+  let source_obj = source_json.as_object()?;
+  let mut mapped = serde_json::Map::new();
+
+  for spec in branch_specs {
+    let source_key = branch_source_key(spec);
+    let target_key = branch_target_key(spec);
+    let value = source_obj.get(source_key)?.clone();
+    mapped.insert(target_key.to_string(), value);
+  }
+
+  Some(FlowPayload::Json(
+    serde_json::Value::Object(mapped).to_string().into(),
+  ))
 }
 
 #[cfg(test)]

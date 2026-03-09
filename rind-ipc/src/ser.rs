@@ -55,6 +55,18 @@ impl ServiceSerialized {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct StateSerialized {
+  pub name: String,
+  pub instances: usize,
+}
+
+impl StateSerialized {
+  pub fn stringify(&self) -> String {
+    serde_json::to_string(self).unwrap_or_default()
+  }
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct MountSerialized {
   pub source: Option<String>,
   pub target: String,

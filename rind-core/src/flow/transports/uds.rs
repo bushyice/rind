@@ -64,9 +64,12 @@ fn start_listener(endpoint: String, path: std::path::PathBuf, clients: ClientMap
             continue;
           }
 
-          let Ok(msg) = serde_json::from_str::<TransportMessage>(payload) else {
-            report_error("uds transport parse error", payload);
-            continue;
+          let msg = match serde_json::from_str::<TransportMessage>(payload) {
+            Ok(msg) => msg,
+            Err(e) => {
+              report_error(format!("uds transport parse error: {e}").as_str(), payload);
+              continue;
+            }
           };
 
           rw_write(&crate::store::STORE, "store write in uds listener")

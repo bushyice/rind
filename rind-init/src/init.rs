@@ -4,12 +4,13 @@ use std::os::unix::io::FromRawFd;
 use std::process::{Child, Command, Stdio};
 
 use libc;
-use rind_common::error::{install_panic_handler, report_error, rw_read};
+use rind_common::error::{install_panic_handler, rw_read};
 use rind_core::error::rw_write;
 use rind_core::store::STORE;
 use rind_core::{config, mount, services, units};
 use rind_daemon::start_daemon;
 
+#[allow(dead_code)]
 fn spawn_tty(tty_path: &str) -> Option<Child> {
   let Ok(tty) = OpenOptions::new().read(true).write(true).open(tty_path) else {
     eprintln!("TTY file {tty_path} not found");
@@ -56,7 +57,9 @@ fn main() {
   };
 
   {
-    rw_write(&STORE, "load enabled").load_enabled();
+    let mut store = rw_write(&STORE, "store write in init boot load");
+    store.load_state();
+    store.load_enabled();
   }
 
   // mount shit
@@ -74,20 +77,11 @@ fn main() {
     _ => {}
   });
 
-  // will be removed
-  std::thread::spawn(|| {
-    let tty = rw_read(&config::CONFIG, "config read in main tty")
-      .shell
-      .tty
-      .to_string();
-    let child = spawn_tty(&tty);
-
-    if let Some(mut child) = child {
-      if let Err(err) = child.wait() {
-        report_error("Failed to wait for shell", err);
-      }
-    }
-  });
+  // bootstrap "activate-on-none" states
+  {
+    let mut store = rw_write(&STORE, "store write in init login_required");
+    store.reconcile_activate_on_none_boot();
+  }
 
   // keep alive
   loop {

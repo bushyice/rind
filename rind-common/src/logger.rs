@@ -1,5 +1,5 @@
 use crate::config::CONFIG;
-use crate::error::{report_error, rw_read};
+use crate::error::rw_read;
 use anyhow::Result;
 use bincode_next::{Decode, Encode, config};
 use once_cell::sync::Lazy;
@@ -49,7 +49,7 @@ pub fn start_logger() -> Arc<Sender<LogEntry>> {
   };
 
   if let Err(err) = fs::create_dir_all(log_path.as_str()) {
-    report_error("failed to create log dir", err);
+    eprintln!("[rind:logger] failed to create log dir: {err}");
   }
 
   let (tx, rx) = mpsc::channel::<LogEntry>();
@@ -146,7 +146,7 @@ fn open_segment(dir: &Path, id: u64) -> BufWriter<File> {
   let file = match OpenOptions::new().create(true).append(true).open(path) {
     Ok(file) => file,
     Err(err) => {
-      report_error("segment open failed", err);
+      eprintln!("[rind:logger] segment open failed: {err}");
       let fallback = std::env::temp_dir().join(format!("{:08}.rlog", id));
       OpenOptions::new()
         .create(true)

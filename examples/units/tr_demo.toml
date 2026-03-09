@@ -1,0 +1,59 @@
+[[service]]
+name = "user_session"
+exec = "/bin/example-active"
+args = ["user-session"]
+restart = false
+start-on = [{ state = "tr_demo@user_active" }]
+
+[[service]]
+name = "user_login"
+exec = "/bin/user_login"
+args = []
+restart = false
+start-on = [{ state = "tr_demo@login_required" }]
+transport = { id = "env", options = ["RIND_LOGIN_TTY=state:tr_demo@login_required"] }
+
+[[service]]
+name = "user_shell"
+exec = "/bin/user_shell"
+args = []
+restart = true
+start-on = [{ state = "tr_demo@user_active" }]
+transport = { id = "env", options = ["RIND_USER_ACTIVE=state:tr_demo@user_active"] }
+
+[[service]]
+name = "niri"
+exec = "/bin/example-active"
+args = ["niri"]
+restart = false
+start-on = [{ state = "tr_demo@niri_active" }]
+branching = { enabled = true, source-state = "tr_demo@niri_active", key = "tty", max-instances = 16 }
+
+[[state]]
+name = "user_active"
+payload = "json"
+branch = ["id"]
+subscribers = [{ id = "uds", options = ["detached=true"] }]
+
+[[state]]
+name = "login_required"
+payload = "string"
+activate-on-none = ["tr_demo@user_active"]
+auto-payload = {
+  # there will be others such as system.field (defined by rind) or { eval = "/bin/sh -c 'ls /dev | grep tty'" }
+  # where for .eval, each line is parsed separately or can be inserted directly as {eval = "...", insert = ["key"] or insert = "root" }
+
+  # example:
+  # for-each = ["system.config.tty"],
+  # input = ["tty"],
+
+  # but for now:
+  eval = "/bin/echo",
+  args = ["/dev/tty1"]
+}
+
+[[state]]
+name = "niri_active"
+payload = "json"
+branch = ["tty:seat"]
+after = ["tr_demo@user_active"]

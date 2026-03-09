@@ -4,7 +4,7 @@ use rind_common::error::{install_panic_handler, report_error, rw_read};
 use rind_ipc::{
   Message, MessagePayload, MessageType,
   send::send_message,
-  ser::{ServiceSerialized, UnitItemsSerialized, UnitSerialized},
+  ser::{ServiceSerialized, StateSerialized, UnitItemsSerialized, UnitSerialized},
 };
 mod macros;
 mod print;
@@ -44,6 +44,12 @@ struct Cli {
   // logs
   #[arg(long, default_missing_value = "*")]
   logs: Option<String>,
+
+  #[arg(short = 'c', long, num_args(0..=1), default_missing_value = "")]
+  state: Option<String>,
+
+  #[arg(short = 'e', long, num_args(0..=1), default_missing_value = "")]
+  signal: Option<String>,
 }
 
 pub fn handle_message(message: Message) {
@@ -95,6 +101,12 @@ fn main() {
           unit_type: rind_ipc::UnitType::Service,
           force: None,
         }
+      } else if let Some(state) = &cli.state {
+        MessagePayload {
+          name: state.clone(),
+          unit_type: rind_ipc::UnitType::State,
+          force: None,
+        }
       } else {
         MessagePayload {
           name: "".to_string(),
@@ -124,6 +136,12 @@ fn main() {
         print::print_service(&service);
       } else {
         report_error("list service parse failed", "invalid service payload");
+      }
+    } else if let Some(_) = &cli.state {
+      if let Some(state) = output.parse_payload::<StateSerialized>() {
+        print::print_state(&state);
+      } else {
+        report_error("list state parse failed", "invalid state payload");
       }
     } else {
       if let Some(units) = output.parse_payload::<Vec<UnitSerialized>>() {

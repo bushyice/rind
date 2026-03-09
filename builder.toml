@@ -8,7 +8,7 @@ build_command = "cargo build --release --target x86_64-unknown-linux-musl"
 binary_target = "target/x86_64-unknown-linux-musl/release"
 
 # Binaries to copy
-binaries = ["init", "rind", "example-active", "example-inactive"]
+binaries = ["init", "rind", "example-active", "example-inactive", "user_login", "user_shell"]
 
 # Files to copy over
 files = ["examples/units:/etc/units", "examples/fallback.toml:/etc/fallback.toml"]

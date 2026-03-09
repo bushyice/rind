@@ -17,7 +17,16 @@ mod tests {
     ($store:ident) => {
       let mut conf = rind_common::config::CONFIG.write().unwrap();
       conf.units.path = rind_common::utils::s("../examples/units");
-      conf.units.state = rind_common::utils::s("../examples/state");
+      let state_path = format!(
+        "/tmp/rind-core-tests-{}-{}.state",
+        std::process::id(),
+        std::time::SystemTime::now()
+          .duration_since(std::time::UNIX_EPOCH)
+          .unwrap_or_default()
+          .as_nanos()
+      );
+      let _ = std::fs::remove_file(state_path.as_str());
+      conf.units.state = rind_common::utils::s(state_path.as_str());
       drop(conf);
 
       match units::load_units() {

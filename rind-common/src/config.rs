@@ -100,6 +100,7 @@ mod tests {
 [units]
 path = "/etc/units"
 state = "/tmp/state.bin"
+fallback = "/etc/fallback.toml"
 [shell]
 exec = "/bin/sh"
 tty = "/dev/tty1"

@@ -1,0 +1,3 @@
+On reboot it hangs or something i'll fix it tomorrow
+I will also do more tests
+I'll also a way to actually quit the shell, and a way to trigger states from the shell

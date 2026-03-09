@@ -19,10 +19,19 @@ path = "demo/inactive.rs"
 name = "example-uds"
 path = "demo/uds_echo.rs"
 
+[[bin]]
+name = "user_login"
+path = "demo/user_login.rs"
+
+[[bin]]
+name = "user_shell"
+path = "demo/user_shell.rs"
+
 [dependencies]
 clap.workspace = true
 rind-ipc = { path = "../rind-ipc", default-features = false, features = [] }
 rind-common = { path = "../rind-common" }
+libc.workspace = true
 
 serde_json.workspace = true
 
