@@ -418,12 +418,14 @@ impl crate::store::Store {
       if let Some(def) = self.lookup::<StateDefinition>(&trigger.name) {
         &def.0
       } else {
+        crate::logwarn!("[DEBUG] check_triggers: state def not found for {}", trigger.name);
         return;
       }
     } else {
       if let Some(def) = self.lookup::<SignalDefinition>(&trigger.name) {
         &def.0
       } else {
+        crate::logwarn!("[DEBUG] check_triggers: signal def not found for {}", trigger.name);
         return;
       }
     };
@@ -457,6 +459,8 @@ impl crate::store::Store {
       }
     }
 
+    crate::logwarn!("[DEBUG] check_triggers {}: to_start={:?} to_stop={:?}", trigger.name, to_start_services, to_stop_services);
+
     for name in to_stop_services {
       if let Some(service) = self.lookup_mut::<Service>(&name) {
         stop_service(service, StopMode::Graceful);
@@ -465,10 +469,6 @@ impl crate::store::Store {
     for name in to_start_services {
       if let Some(service) = self.lookup_mut::<Service>(&name) {
         prepare_service_transport_from_states(service, &states_snapshot, Some(trigger));
-        // Store payload state
-        // if let Some(p) = &payload {
-        //   service.active_payload = Some(serde_json::to_string(p).unwrap_or_default());
-        // }
         start_service(service);
       }
     }

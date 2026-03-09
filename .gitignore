@@ -2,3 +2,5 @@
 /**/target/
 b
 .direnv/
+qemu.log
+serial0

@@ -248,8 +248,17 @@ impl Store {
           .collect()
       })
       .unwrap_or_default();
+    
+    crate::logwarn!("[DEBUG] Extracted lines for active states: {:?}", lines);
+
     for line in lines {
-      self.parse_enabled_line(&line.to_string());
+      if let Some(s) = line.as_str() {
+        crate::logwarn!("[DEBUG] string value parsed: {:?}", s);
+        self.parse_enabled_line(s);
+      } else {
+        crate::logwarn!("[DEBUG] non-string value parsed natively: {:?}", line.to_string());
+        self.parse_enabled_line(&line.to_string());
+      }
     }
 
     if self.enabled.is_empty() {
@@ -344,13 +353,22 @@ impl Store {
     let config = rw_read(&rind_common::config::CONFIG, "config read in load_state");
     let state_path = std::path::Path::new(config.units.state.as_str());
     if let Ok(content) = std::fs::read(&state_path) {
-      if let Ok((states, _)) =
-        bincode_next::serde::decode_from_slice(&content, bincode_next::config::standard())
+      crate::logwarn!("[DEBUG] Successfully read bytes from state file. Length: {}", content.len());
+      if let Ok((mut states, _)) =
+        bincode_next::serde::decode_from_slice::<std::collections::HashMap<String, Vec<crate::flow::FlowInstance>>, _>(&content, bincode_next::config::standard())
       {
+        for branches in states.values_mut() {
+            for branch in branches.iter_mut() {
+                branch.r#type = crate::flow::FlowType::State;
+            }
+        }
         self.states = states;
+        crate::logwarn!("[DEBUG] Decoded states: keys={:?}", self.states.keys());
       } else {
         report_error("load_state decode error", "state file decode failed");
       }
+    } else {
+      crate::logwarn!("[DEBUG] Failed to read {:?}", state_path);
     }
   }
 
@@ -382,6 +400,23 @@ impl Store {
       }
     } else {
       report_error("save_state encode error", "failed to serialize state");
+    }
+  }
+
+  pub fn boot_trigger_states(&mut self) {
+    let mut to_trigger = vec![];
+    for (name, instances) in self.states.clone() {
+      if name == "active" {
+        continue;
+      }
+      for inst in instances {
+        to_trigger.push(inst);
+      }
+    }
+
+    for trigger in to_trigger {
+      self.check_triggers(&trigger, crate::flow::FlowChangeAction::Apply);
+      crate::services::reconcile_state_branching(self, &trigger, crate::flow::FlowChangeAction::Apply);
     }
   }
 }

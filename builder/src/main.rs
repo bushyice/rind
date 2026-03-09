@@ -394,11 +394,9 @@ fn run(profile: &Profile) {
 
   println!("[*] Launching QEMU...");
 
-  let status = cmd.status().unwrap();
-  if !status.success() {
-    eprintln!("QEMU failed");
-    exit(1);
-  }
+  let err = std::os::unix::process::CommandExt::exec(&mut cmd);
+  eprintln!("Failed to launch QEMU: {}", err);
+  exit(1);
 }
 
 fn handle_command(c: &str, profile: &Profile, rootfs: &Path) {
