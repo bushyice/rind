@@ -344,9 +344,16 @@ impl Store {
     let config = rw_read(&rind_common::config::CONFIG, "config read in load_state");
     let state_path = std::path::Path::new(config.units.state.as_str());
     if let Ok(content) = std::fs::read(&state_path) {
-      if let Ok((states, _)) =
-        bincode_next::serde::decode_from_slice(&content, bincode_next::config::standard())
+      if let Ok((mut states, _)) = bincode_next::serde::decode_from_slice::<
+        std::collections::HashMap<String, Vec<crate::flow::FlowInstance>>,
+        _,
+      >(&content, bincode_next::config::standard())
       {
+        for branches in states.values_mut() {
+          for branch in branches.iter_mut() {
+            branch.r#type = crate::flow::FlowType::State;
+          }
+        }
         self.states = states;
       } else {
         report_error("load_state decode error", "state file decode failed");
@@ -382,6 +389,22 @@ impl Store {
       }
     } else {
       report_error("save_state encode error", "failed to serialize state");
+    }
+  }
+
+  pub fn boot_trigger_states(&mut self) {
+    for (name, instances) in self.states.clone() {
+      if name == "active" {
+        continue;
+      }
+      for trigger in instances {
+        self.check_triggers(&trigger, crate::flow::FlowChangeAction::Apply);
+        crate::services::reconcile_state_branching(
+          self,
+          &trigger,
+          crate::flow::FlowChangeAction::Apply,
+        );
+      }
     }
   }
 }
