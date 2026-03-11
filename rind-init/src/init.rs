@@ -60,6 +60,7 @@ fn main() {
     let mut store = rw_write(&STORE, "store write in init boot load");
     store.load_state();
     store.load_enabled();
+    store.boot_trigger_states();
   }
 
   // mount shit
