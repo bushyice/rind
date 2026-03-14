@@ -20,7 +20,7 @@ pub enum RuntimeCommand {
   Stop,
 }
 
-pub struct RuntimePayload(pub serde_json::Value);
+pub struct RuntimePayload<T: serde::de::DeserializeOwned + 'static = serde_json::Value>(pub T);
 
 impl RuntimePayload {
   pub fn get<T: serde::de::DeserializeOwned + 'static>(
@@ -30,11 +30,17 @@ impl RuntimePayload {
     let field = field.into();
     self
       .0
-      .get(field)
-      .and_then(|v| v.as_str()?.try_into().ok())
+      .get(field.clone())
+      .and_then(|v| serde_json::from_value(v.clone()).ok()?)
       .ok_or_else(|| {
         CoreError::InvalidState(format!("Missing required field \"{field}\" in dispatch"))
       })
+  }
+}
+
+impl From<serde_json::Value> for RuntimePayload {
+  fn from(value: serde_json::Value) -> Self {
+    Self(value)
   }
 }
 
@@ -43,7 +49,7 @@ pub trait Runtime: Send {
   fn handle(
     &mut self,
     action: &str,
-    payload: serde_json::Value,
+    payload: RuntimePayload,
     ctx: &RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
@@ -65,7 +71,7 @@ impl RuntimeDispatcher {
     &self,
     runtime_id: impl Into<String>,
     action: impl Into<String>,
-    payload: serde_json::Value,
+    payload: RuntimePayload,
   ) -> Result<(), CoreError> {
     self
       .tx

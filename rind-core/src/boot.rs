@@ -68,7 +68,7 @@ mod tests {
   use crate::orchestrator::{
     BootCycle, BootPhase, Orchestrator, OrchestratorContext, OrchestratorWhen,
   };
-  use crate::runtime::{Runtime, RuntimeCommand, RuntimeDispatcher, start_runtime};
+  use crate::runtime::{Runtime, RuntimeCommand, RuntimeDispatcher, RuntimePayload, start_runtime};
 
   use super::*;
 
@@ -138,7 +138,7 @@ mod tests {
     fn handle(
       &mut self,
       action: &str,
-      _payload: serde_json::Value,
+      _payload: RuntimePayload,
       ctx: &RuntimeContext<'_>,
       _dispatch: &RuntimeDispatcher,
       _log: &LogHandle,
@@ -164,13 +164,13 @@ mod tests {
     fn handle(
       &mut self,
       action: &str,
-      _payload: serde_json::Value,
+      _payload: RuntimePayload,
       _ctx: &RuntimeContext<'_>,
       dispatch: &RuntimeDispatcher,
       _log: &LogHandle,
     ) -> Result<(), CoreError> {
       if action == "kick" {
-        dispatch.dispatch("pong", "from_ping", json!({ "hop": 1 }))?;
+        dispatch.dispatch("pong", "from_ping", json!({ "hop": 1 }).into())?;
       }
       Ok(())
     }
@@ -188,7 +188,7 @@ mod tests {
     fn handle(
       &mut self,
       action: &str,
-      _payload: serde_json::Value,
+      _payload: RuntimePayload,
       ctx: &RuntimeContext<'_>,
       _dispatch: &RuntimeDispatcher,
       _log: &LogHandle,

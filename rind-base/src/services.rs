@@ -12,7 +12,7 @@ use rind_core::orchestrator::{
   BootCycle, BootPhase, Orchestrator, OrchestratorContext, OrchestratorWhen,
 };
 use rind_core::registry::InstanceRegistry;
-use rind_core::runtime::{Runtime, RuntimeDispatcher};
+use rind_core::runtime::{Runtime, RuntimeDispatcher, RuntimePayload};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -74,33 +74,18 @@ impl Runtime for BasicServiceRuntime {
   fn handle(
     &mut self,
     action: &str,
-    payload: serde_json::Value,
+    payload: RuntimePayload,
     _ctx: &RuntimeContext<'_>,
     _dispatch: &RuntimeDispatcher,
     log: &LogHandle,
   ) -> Result<(), CoreError> {
     match action {
       "start" => {
-        let name = payload
-          .get("name")
-          .and_then(|v| v.as_str())
-          .ok_or_else(|| CoreError::InvalidState("service.start missing name".to_string()))?
-          .to_string();
-        let exec = payload
-          .get("exec")
-          .and_then(|v| v.as_str())
-          .ok_or_else(|| CoreError::InvalidState("service.start missing exec".to_string()))?
-          .to_string();
+        let name = payload.get::<String>("name")?;
+        let exec = payload.get::<String>("exec")?;
         let args = payload
-          .get("args")
-          .and_then(|v| v.as_array())
-          .map(|arr| {
-            arr
-              .iter()
-              .filter_map(|x| x.as_str().map(ToString::to_string))
-              .collect::<Vec<_>>()
-          })
-          .unwrap_or_default();
+          .get::<Option<Vec<String>>>("args")?
+          .unwrap_or(Vec::new());
 
         if self.children.contains_key(&name) {
           return Ok(());
@@ -123,11 +108,7 @@ impl Runtime for BasicServiceRuntime {
         log.log(LogLevel::Info, "service-runtime", "service started", fields);
       }
       "stop" => {
-        let name = payload
-          .get("name")
-          .and_then(|v| v.as_str())
-          .ok_or_else(|| CoreError::InvalidState("service.stop missing name".to_string()))?
-          .to_string();
+        let name = payload.get::<String>("name")?;
 
         if let Some(mut child) = self.children.remove(&name) {
           let _ = child.kill();
@@ -310,7 +291,9 @@ mod tests {
   use std::time::Duration;
 
   use rind_core::logging::{LogConfig, start_logger};
-  use rind_core::runtime::{Runtime, RuntimeCommand, RuntimeDispatcher, start_runtime};
+  use rind_core::runtime::{
+    Runtime, RuntimeCommand, RuntimeDispatcher, RuntimePayload, start_runtime,
+  };
 
   use super::*;
 
@@ -326,16 +309,12 @@ mod tests {
     fn handle(
       &mut self,
       action: &str,
-      payload: serde_json::Value,
+      payload: RuntimePayload,
       _ctx: &RuntimeContext<'_>,
       _dispatch: &RuntimeDispatcher,
       _log: &LogHandle,
     ) -> Result<(), CoreError> {
-      let name = payload
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("missing")
-        .to_string();
+      let name = payload.get::<String>("name")?;
       let _ = self.tx.send(format!("{action}:{name}"));
       Ok(())
     }

@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use crate::context::ScopeBuilder;
 use crate::error::CoreError;
 use crate::registry::InstanceRegistry;
-use crate::runtime::{RuntimeCommand, RuntimeHandle};
+use crate::runtime::{RuntimeCommand, RuntimeHandle, RuntimePayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BootCycle {
@@ -35,8 +35,9 @@ impl OrchestratorContext<'_> {
     &self,
     runtime_id: impl Into<String>,
     action: impl Into<String>,
-    payload: serde_json::Value,
+    payload: impl Into<RuntimePayload>,
   ) -> Result<(), CoreError> {
+    let payload = payload.into();
     self.runtime.send(RuntimeCommand::Dispatch {
       runtime_id: runtime_id.into(),
       action: action.into(),
