@@ -1,12 +1,13 @@
 [package]
-name = "rind-common"
+name = "rind-base"
 version.workspace = true
 edition.workspace = true
 
 [lib]
-path = "src/common.rs"
+path = "src/base.rs"
 
 [dependencies]
+rind-core = { path = "../rind-core" }
 serde.workspace = true
 strumbra.workspace = true
 serde_json.workspace = true
@@ -16,3 +17,5 @@ fxhash.workspace = true
 once_cell.workspace = true
 toml.workspace = true
 anyhow.workspace = true
+nix.workspace = true
+libc.workspace = true

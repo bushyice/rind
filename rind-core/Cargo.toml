@@ -7,7 +7,7 @@ edition.workspace = true
 path = "src/core.rs"
 
 [dependencies]
-rind-common = { path = "../rind-common" }
+rind-macros = { path = "../rind-macros" }
 toml.workspace = true
 serde.workspace = true
 once_cell.workspace = true
