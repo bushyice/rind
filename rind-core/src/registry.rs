@@ -45,6 +45,21 @@ impl MetadataRegistry {
       .map(|x| x.iter().map(|x| x.clone()).collect())
   }
 
+  pub fn items<T: Model + 'static>(&self, metadata: &str) -> Option<Vec<(String, Arc<T::M>)>> {
+    let m = self.metadata.get(metadata)?;
+
+    Some(
+      m.groups()
+        .flat_map(|group| {
+          m.get_in_group::<T>(group)
+            .into_iter()
+            .flatten()
+            .map(move |item| (group.to_string(), item.clone()))
+        })
+        .collect(),
+    )
+  }
+
   pub fn ensure_index_for_type<T>(&mut self, metadata: &str) -> anyhow::Result<()>
   where
     T: Model + 'static,
@@ -300,6 +315,9 @@ name = "api"
       .load_group_from_toml(&mut metadata, "demo", src)
       .expect("group should parse");
     registry.insert_metadata(metadata);
+    registry
+      .ensure_index_for_type::<Service>("units")
+      .expect("index build should succeed");
 
     let web = registry
       .find::<Service>("units", "demo@web")

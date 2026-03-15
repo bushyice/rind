@@ -1,8 +1,9 @@
 use crate::context::ScopeBuilder;
 use crate::error::CoreError;
+use crate::logging::{LogConfig, start_logger};
 use crate::orchestrator::{BootCycle, BootPhase, OrchestratorContext, OrchestratorStore};
 use crate::registry::{InstanceMap, MetadataRegistry};
-use crate::runtime::RuntimeHandle;
+use crate::runtime::{RuntimeHandle, start_runtime};
 
 pub struct BootEngine {
   pub orchestrators: OrchestratorStore,
@@ -23,6 +24,12 @@ impl BootEngine {
     let current = self.next_context_id;
     self.next_context_id = self.next_context_id.saturating_add(1);
     current
+  }
+
+  pub fn init_runtime(&self) -> RuntimeHandle {
+    let log = start_logger(LogConfig::default());
+
+    start_runtime(log, self.orchestrators.runtimes())
   }
 
   pub fn run(

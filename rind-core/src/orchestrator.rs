@@ -3,7 +3,7 @@ use std::collections::{HashMap, VecDeque};
 use crate::context::ScopeBuilder;
 use crate::error::CoreError;
 use crate::registry::{InstanceMap, InstanceRegistry, MetadataRegistry};
-use crate::runtime::{RuntimeCommand, RuntimeHandle, RuntimePayload};
+use crate::runtime::{Runtime, RuntimeCommand, RuntimeHandle, RuntimePayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BootCycle {
@@ -63,6 +63,9 @@ pub trait Orchestrator: Send {
     Ok(())
   }
   fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError>;
+  fn runtimes(&self) -> Vec<Box<dyn Runtime>> {
+    Vec::new()
+  }
 }
 
 #[derive(Default)]
@@ -186,6 +189,10 @@ impl OrchestratorStore {
       orchestrator.build_scope(builder)?;
     }
     Ok(())
+  }
+
+  pub fn runtimes(&self) -> Vec<Box<dyn Runtime>> {
+    self.list.iter().flat_map(|x| x.runtimes()).collect()
   }
 }
 

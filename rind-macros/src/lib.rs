@@ -1,11 +1,10 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::{
-  Data, Fields, Generics, Ident, ItemStruct, Token,
+  Fields, Ident, ItemStruct, Token,
   parse::{Parse, ParseStream},
-  parse_macro_input, parse_quote,
+  parse_macro_input,
   punctuated::Punctuated,
-  token::Token,
 };
 
 struct ModelArgs {

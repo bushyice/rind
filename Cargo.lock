@@ -364,6 +364,7 @@ dependencies = [
  "nix",
  "once_cell",
  "rind-core",
+ "rind-ipc",
  "serde",
  "serde_json",
  "strumbra",
@@ -377,6 +378,8 @@ dependencies = [
  "clap",
  "libc",
  "owo-colors",
+ "rind-core",
+ "rind-ipc",
  "serde_json",
 ]
 
@@ -406,6 +409,19 @@ dependencies = [
  "rind-base",
  "rind-core",
  "serde_json",
+]
+
+[[package]]
+name = "rind-ipc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "nix",
+ "rind-core",
+ "serde",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]

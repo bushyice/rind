@@ -7,9 +7,30 @@ edition.workspace = true
 name = "rind"
 path = "src/rind.rs"
 
+[[bin]]
+name = "example-active"
+path = "demo/active.rs"
+
+[[bin]]
+name = "example-inactive"
+path = "demo/inactive.rs"
+
+[[bin]]
+name = "example-uds"
+path = "demo/uds_echo.rs"
+
+[[bin]]
+name = "user_login"
+path = "demo/user_login.rs"
+
+[[bin]]
+name = "user_shell"
+path = "demo/user_shell.rs"
+
 [dependencies]
 clap.workspace = true
-# rind-ipc = { path = "../rind-ipc", default-features = false, features = [] }
+rind-ipc = { path = "../rind-ipc", default-features = false, features = [] }
+rind-core = { path = "../rind-core" }
 libc.workspace = true
 
 serde_json.workspace = true

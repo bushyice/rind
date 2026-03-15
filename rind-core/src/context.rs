@@ -52,6 +52,10 @@ impl RuntimeScope {
   {
     self.values.get_mut(&TypeId::of::<T>())?.downcast_mut::<T>()
   }
+
+  pub fn extend(&mut self, other: RuntimeScope) {
+    self.values.extend(other.values);
+  }
 }
 
 #[derive(Default)]
@@ -83,6 +87,11 @@ impl RuntimeScopes {
   pub fn put_scope(&mut self, runtime_id: impl Into<RuntimeId>, scope: RuntimeScope) {
     self.scopes.insert(runtime_id.into(), scope);
   }
+
+  pub fn insert_scope(&mut self, runtime_id: impl Into<RuntimeId>, scope: RuntimeScope) {
+    let runtime_id = runtime_id.into();
+    self.scopes.entry(runtime_id).or_default().extend(scope);
+  }
 }
 
 #[derive(Default)]
@@ -100,6 +109,14 @@ impl ScopeBuilder {
 
   pub fn build(self) -> RuntimeScopes {
     self.scopes
+  }
+
+  pub fn insert_scope(
+    &mut self,
+    runtime_id: impl Into<RuntimeId>,
+    build: impl FnOnce() -> RuntimeScope,
+  ) {
+    self.scopes.insert_scope(runtime_id, build());
   }
 }
 
@@ -145,5 +162,23 @@ mod tests {
 
     assert_eq!(*value, MyType { value: 42 });
     assert!(scopes.scope("missing").is_none());
+  }
+
+  #[test]
+  fn scope_builder_inserts_runtime_scope_values() {
+    let mut builder = ScopeBuilder::default();
+    builder.insert_scope("svc", || {
+      let mut scope = RuntimeScope::default();
+      scope.insert(MyType { value: 7 });
+      scope
+    });
+
+    let scopes = builder.build();
+    let value = scopes
+      .scope("svc")
+      .and_then(|scope| scope.get::<MyType>())
+      .expect("typed runtime value from runtime scope should exist");
+
+    assert_eq!(*value, MyType { value: 7 });
   }
 }

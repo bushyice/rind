@@ -6,7 +6,7 @@ members = [
   # "rind-common",
   "rind-base",
   "rind-init", "rind-macros",
-  # "rind-ipc",
+  "rind-ipc",
 ]
 resolver = "3"
 

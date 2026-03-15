@@ -118,6 +118,21 @@ impl RuntimeHandle {
     Ok(())
   }
 
+  pub fn dispatch(
+    &self,
+    target: &str,
+    action: &str,
+    payload: RuntimePayload,
+    context_id: usize,
+  ) -> Result<(), CoreError> {
+    self.send(RuntimeCommand::Dispatch {
+      runtime_id: target.to_string(),
+      action: action.to_string(),
+      payload,
+      context_id,
+    })
+  }
+
   pub fn register_scopes(&self, context_id: usize, scopes: RuntimeScopes) -> Result<(), CoreError> {
     self.send(RuntimeCommand::RegisterScopes { context_id, scopes })
   }

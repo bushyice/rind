@@ -1,10 +1,10 @@
 [[service]]
 name = "one"
-exec = "/bin/example-active"
-args = ["arg1", "arg2"]
+run.exec = "/bin/example-active"
+run.args = ["arg1", "arg2"]
 restart = false
 
 [[service]]
 name = "two"
-exec = "/bin/example-inactive"
-args = ["arg1", "arg2"]
+run.exec = "/bin/example-inactive"
+run.args = ["arg1", "arg2"]

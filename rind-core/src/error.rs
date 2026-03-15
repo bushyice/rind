@@ -11,6 +11,8 @@ pub enum CoreError {
   MetadataNotFound(String),
   MissingInstances(String),
   InvalidState(String),
+  EventBusError(String),
+  PersistenceError(String),
   Custom(String),
 }
 
@@ -28,6 +30,8 @@ impl Display for CoreError {
       CoreError::MetadataNotFound(x) => write!(f, "metadata {x} not found"),
       CoreError::MissingInstances(x) => write!(f, "metadata or instance {x} not found"),
       CoreError::InvalidState(x) => write!(f, "invalid state: {x}"),
+      CoreError::EventBusError(x) => write!(f, "event bus error: {x}"),
+      CoreError::PersistenceError(x) => write!(f, "persistence error: {x}"),
       CoreError::Custom(x) => write!(f, "{x}"),
     }
   }

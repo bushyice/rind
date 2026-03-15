@@ -1,3 +1,5 @@
+//! TODO: Better log saving
+
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions, create_dir_all};
 use std::io::{BufWriter, Write};
@@ -85,6 +87,7 @@ fn logger_loop(config: LogConfig, rx: Receiver<LogEntry>) {
     };
 
     let line = serde_json::to_string(&entry).unwrap_or_else(|_| "{}".to_string());
+    println!("{line}");
     let bytes = line.as_bytes();
     if writer.write_all(bytes).is_ok() && writer.write_all(b"\n").is_ok() {
       written += (bytes.len() + 1) as u64;
