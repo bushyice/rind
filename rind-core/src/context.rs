@@ -3,6 +3,8 @@ use std::{
   collections::HashMap,
 };
 
+use crate::registry::InstanceRegistry;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct RuntimeId(String);
 
@@ -73,6 +75,14 @@ impl RuntimeScopes {
   pub fn scope_mut(&mut self, runtime_id: &str) -> Option<&mut RuntimeScope> {
     self.scopes.get_mut(&RuntimeId::from(runtime_id))
   }
+
+  pub fn take_scope(&mut self, runtime_id: &str) -> Option<RuntimeScope> {
+    self.scopes.remove(&RuntimeId::from(runtime_id))
+  }
+
+  pub fn put_scope(&mut self, runtime_id: impl Into<RuntimeId>, scope: RuntimeScope) {
+    self.scopes.insert(runtime_id.into(), scope);
+  }
 }
 
 #[derive(Default)]
@@ -95,12 +105,21 @@ impl ScopeBuilder {
 
 pub struct RuntimeContext<'a> {
   pub runtime_id: &'a str,
-  pub scope: &'a RuntimeScope,
+  pub scope: &'a mut RuntimeScope,
+  pub registry: InstanceRegistry<'a>,
 }
 
 impl<'a> RuntimeContext<'a> {
-  pub fn new(runtime_id: &'a str, scope: &'a RuntimeScope) -> Self {
-    Self { runtime_id, scope }
+  pub fn new(
+    runtime_id: &'a str,
+    scope: &'a mut RuntimeScope,
+    registry: InstanceRegistry<'a>,
+  ) -> Self {
+    Self {
+      runtime_id,
+      scope,
+      registry,
+    }
   }
 }
 

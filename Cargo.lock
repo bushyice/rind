@@ -405,6 +405,7 @@ dependencies = [
  "nix",
  "rind-base",
  "rind-core",
+ "serde_json",
 ]
 
 [[package]]

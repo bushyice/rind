@@ -18,4 +18,6 @@ pub mod prelude {
   pub use orchestrator::*;
   pub use registry::*;
   pub use runtime::*;
+
+  pub use rind_macros::*;
 }

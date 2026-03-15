@@ -1,6 +1,7 @@
 use std::{
   any::{Any, TypeId},
   collections::HashMap,
+  sync::Arc,
 };
 
 use toml::Value;
@@ -19,7 +20,7 @@ pub struct Metadata {
   pub name: String,
   name_to_type: HashMap<String, TypeId>,
   parsers: HashMap<TypeId, ParserFn>,
-  values: HashMap<String, HashMap<TypeId, Box<dyn Any>>>,
+  values: HashMap<String, HashMap<TypeId, Arc<Box<dyn Any>>>>,
 }
 
 impl Metadata {
@@ -43,7 +44,12 @@ impl Metadata {
       type_id,
       Box::new(|value| {
         let parsed: Vec<T::M> = value.try_into()?;
-        Ok(Box::new(parsed))
+        Ok(Box::new(
+          parsed
+            .into_iter()
+            .map(|x| Arc::new(x))
+            .collect::<Vec<Arc<T::M>>>(),
+        ))
       }),
     );
 
@@ -84,17 +90,17 @@ impl Metadata {
       .values
       .entry(group.to_string())
       .or_default()
-      .insert(type_id, parsed);
+      .insert(type_id, Arc::new(parsed));
 
     Ok(())
   }
 
-  pub fn get_in_group<T: Model + 'static>(&self, group: &str) -> Option<&Vec<T::M>> {
+  pub fn get_in_group<T: Model + 'static>(&self, group: &str) -> Option<&Vec<Arc<T::M>>> {
     self
       .values
       .get(group)?
       .get(&TypeId::of::<T::M>())?
-      .downcast_ref::<Vec<T::M>>()
+      .downcast_ref::<Vec<Arc<T::M>>>()
   }
 
   pub fn groups(&self) -> impl Iterator<Item = &str> {

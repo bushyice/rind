@@ -1,4 +1,4 @@
 active_units = [
   "init",
-  "something@{one}",
+  "something@one",
 ]

@@ -77,10 +77,10 @@ pub fn model(attr: TokenStream, item: TokenStream) -> TokenStream {
   let struct_name = input.ident;
   let metadata_name = format_ident!("{}Metadata", struct_name);
 
-  let mut generics = input.generics.clone();
-  if generics.params.is_empty() {
-    generics.params.insert(0, parse_quote!('a));
-  }
+  let generics = input.generics.clone();
+  // if generics.params.is_empty() {
+  //   generics.params.insert(0, parse_quote!('a));
+  // }
   let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
   let Fields::Named(fields) = input2.clone().fields else {
@@ -119,7 +119,7 @@ pub fn model(attr: TokenStream, item: TokenStream) -> TokenStream {
 
       #[derive(#( #model_derives ), *)]
       pub struct #struct_name #generics {
-          pub metadata: &'a #metadata_name,
+          pub metadata: ::std::sync::Arc<#metadata_name>,
           #( #runtime_fields, )*
       }
 

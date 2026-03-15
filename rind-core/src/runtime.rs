@@ -1,10 +1,11 @@
-use std::collections::HashMap;
-use std::sync::mpsc::{self, Sender};
-use std::thread;
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 
-use crate::context::{RuntimeContext, RuntimeScope, RuntimeScopes};
+use crate::context::{RuntimeContext, RuntimeScopes};
 use crate::error::CoreError;
 use crate::logging::{LogHandle, LogLevel};
+use crate::registry::{InstanceMap, InstanceRegistry, MetadataRegistry};
 
 pub enum RuntimeCommand {
   RegisterScopes {
@@ -50,7 +51,7 @@ pub trait Runtime: Send {
     &mut self,
     action: &str,
     payload: RuntimePayload,
-    ctx: &RuntimeContext<'_>,
+    ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
   ) -> Result<(), CoreError>;
@@ -58,13 +59,13 @@ pub trait Runtime: Send {
 
 #[derive(Clone)]
 pub struct RuntimeDispatcher {
-  tx: Sender<RuntimeCommand>,
+  handle: RuntimeHandle,
   context_id: usize,
 }
 
 impl RuntimeDispatcher {
-  fn new(tx: Sender<RuntimeCommand>, context_id: usize) -> Self {
-    Self { tx, context_id }
+  fn new(handle: RuntimeHandle, context_id: usize) -> Self {
+    Self { handle, context_id }
   }
 
   pub fn dispatch(
@@ -73,30 +74,147 @@ impl RuntimeDispatcher {
     action: impl Into<String>,
     payload: RuntimePayload,
   ) -> Result<(), CoreError> {
-    self
-      .tx
-      .send(RuntimeCommand::Dispatch {
-        runtime_id: runtime_id.into(),
-        action: action.into(),
-        payload,
-        context_id: self.context_id,
-      })
-      .map_err(|_| CoreError::RuntimeStopped)
+    self.handle.send(RuntimeCommand::Dispatch {
+      runtime_id: runtime_id.into(),
+      action: action.into(),
+      payload,
+      context_id: self.context_id,
+    })
   }
 }
 
 #[derive(Clone)]
 pub struct RuntimeHandle {
-  tx: Sender<RuntimeCommand>,
+  inner: Rc<RefCell<RuntimeEngine>>,
+}
+
+struct RuntimeEngine {
+  log: LogHandle,
+  runtimes: HashMap<String, Box<dyn Runtime>>,
+  contexts: HashMap<usize, RuntimeScopes>,
+  queue: VecDeque<RuntimeCommand>,
+  runtime_instances: HashMap<String, InstanceMap>,
+  stopped: bool,
 }
 
 impl RuntimeHandle {
   pub fn send(&self, command: RuntimeCommand) -> Result<(), CoreError> {
-    self.tx.send(command).map_err(|_| CoreError::RuntimeStopped)
+    let mut inner = self.inner.borrow_mut();
+    if inner.stopped {
+      return Err(CoreError::RuntimeStopped);
+    }
+
+    match command {
+      RuntimeCommand::RegisterScopes { context_id, scopes } => {
+        inner.contexts.insert(context_id, scopes);
+      }
+      RuntimeCommand::Stop => {
+        inner.stopped = true;
+        inner.queue.clear();
+      }
+      other => inner.queue.push_back(other),
+    }
+
+    Ok(())
   }
 
   pub fn register_scopes(&self, context_id: usize, scopes: RuntimeScopes) -> Result<(), CoreError> {
     self.send(RuntimeCommand::RegisterScopes { context_id, scopes })
+  }
+
+  pub fn flush_context(
+    &self,
+    context_id: usize,
+    metadata: &MetadataRegistry,
+  ) -> Result<(), CoreError> {
+    loop {
+      let command = {
+        let mut inner = self.inner.borrow_mut();
+        let idx = inner
+          .queue
+          .iter()
+          .position(|cmd| matches!(cmd, RuntimeCommand::Dispatch { context_id: cid, .. } if *cid == context_id));
+
+        match idx {
+          Some(i) => inner.queue.remove(i),
+          None => None,
+        }
+      };
+
+      let Some(RuntimeCommand::Dispatch {
+        runtime_id,
+        action,
+        payload,
+        context_id: cid,
+      }) = command
+      else {
+        break;
+      };
+
+      let (mut runtime, mut scope, mut runtime_instances, log) = {
+        let mut inner = self.inner.borrow_mut();
+        if inner.stopped {
+          return Err(CoreError::RuntimeStopped);
+        }
+
+        let runtime = match inner.runtimes.remove(&runtime_id) {
+          Some(runtime) => runtime,
+          None => {
+            let mut fields = HashMap::new();
+            fields.insert("runtime_id".to_string(), runtime_id.clone());
+            inner.log.log(
+              LogLevel::Warn,
+              "runtime",
+              "runtime id not found".to_string(),
+              fields,
+            );
+            continue;
+          }
+        };
+
+        let scope = inner
+          .contexts
+          .get_mut(&cid)
+          .and_then(|scopes| scopes.take_scope(runtime_id.as_str()))
+          .unwrap_or_default();
+        let runtime_instances = inner
+          .runtime_instances
+          .remove(&runtime_id)
+          .unwrap_or_default();
+        let log = inner.log.clone();
+        (runtime, scope, runtime_instances, log)
+      };
+
+      let registry = InstanceRegistry::new(metadata, &mut runtime_instances);
+      let mut ctx = RuntimeContext::new(runtime_id.as_str(), &mut scope, registry);
+      let dispatch = RuntimeDispatcher::new(self.clone(), cid);
+
+      if let Err(err) = runtime.handle(action.as_str(), payload, &mut ctx, &dispatch, &log) {
+        let mut fields = HashMap::new();
+        fields.insert("runtime_id".to_string(), runtime_id.clone());
+        fields.insert("action".to_string(), action.clone());
+        fields.insert("context_id".to_string(), cid.to_string());
+        log.log(
+          LogLevel::Error,
+          "runtime",
+          format!("runtime dispatch failed: {err}"),
+          fields,
+        );
+      }
+
+      {
+        let mut inner = self.inner.borrow_mut();
+        inner.runtimes.insert(runtime_id.clone(), runtime);
+        inner
+          .runtime_instances
+          .insert(runtime_id.clone(), runtime_instances);
+        if let Some(scopes) = inner.contexts.get_mut(&cid) {
+          scopes.put_scope(runtime_id, scope);
+        }
+      }
+    }
+
+    Ok(())
   }
 }
 
@@ -106,60 +224,14 @@ pub fn start_runtime(log: LogHandle, runtimes: Vec<Box<dyn Runtime>>) -> Runtime
     map.insert(runtime.id().to_string(), runtime);
   }
 
-  let (tx, rx) = mpsc::channel::<RuntimeCommand>();
-  let worker_tx = tx.clone();
-  thread::spawn(move || {
-    let mut runtimes = map;
-    let mut contexts = HashMap::<usize, RuntimeScopes>::new();
-    while let Ok(command) = rx.recv() {
-      match command {
-        RuntimeCommand::RegisterScopes { context_id, scopes } => {
-          contexts.insert(context_id, scopes);
-        }
-        RuntimeCommand::Dispatch {
-          runtime_id,
-          action,
-          payload,
-          context_id,
-        } => {
-          if let Some(runtime) = runtimes.get_mut(&runtime_id) {
-            let fallback_scope = RuntimeScope::default();
-            let scope = contexts
-              .get(&context_id)
-              .and_then(|scopes| scopes.scope(runtime_id.as_str()))
-              .unwrap_or(&fallback_scope);
-            let runtime_ctx = RuntimeContext::new(runtime_id.as_str(), scope);
-            let dispatch = RuntimeDispatcher::new(worker_tx.clone(), context_id);
-
-            if let Err(err) =
-              runtime.handle(action.as_str(), payload, &runtime_ctx, &dispatch, &log)
-            {
-              let mut fields = HashMap::new();
-              fields.insert("runtime_id".to_string(), runtime_id.clone());
-              fields.insert("action".to_string(), action.clone());
-              fields.insert("context_id".to_string(), context_id.to_string());
-              log.log(
-                LogLevel::Error,
-                "runtime",
-                format!("runtime dispatch failed: {err}"),
-                fields,
-              );
-            }
-          } else {
-            let mut fields = HashMap::new();
-            fields.insert("runtime_id".to_string(), runtime_id);
-            log.log(
-              LogLevel::Warn,
-              "runtime",
-              "runtime id not found".to_string(),
-              fields,
-            );
-          }
-        }
-        RuntimeCommand::Stop => break,
-      }
-    }
-  });
-
-  RuntimeHandle { tx }
+  RuntimeHandle {
+    inner: Rc::new(RefCell::new(RuntimeEngine {
+      log,
+      runtimes: map,
+      contexts: HashMap::new(),
+      queue: VecDeque::new(),
+      runtime_instances: HashMap::new(),
+      stopped: false,
+    })),
+  }
 }

@@ -1,7 +1,7 @@
 use crate::context::ScopeBuilder;
 use crate::error::CoreError;
 use crate::orchestrator::{BootCycle, BootPhase, OrchestratorContext, OrchestratorStore};
-use crate::registry::InstanceRegistry;
+use crate::registry::{InstanceMap, MetadataRegistry};
 use crate::runtime::RuntimeHandle;
 
 pub struct BootEngine {
@@ -27,7 +27,8 @@ impl BootEngine {
 
   pub fn run(
     &mut self,
-    registry: &mut InstanceRegistry,
+    metadata: &mut MetadataRegistry,
+    instances: &mut InstanceMap,
     runtime: &RuntimeHandle,
   ) -> Result<(), CoreError> {
     for cycle in [
@@ -43,12 +44,17 @@ impl BootEngine {
           .build_scope_cycle_phase(cycle, phase, &mut builder)?;
         runtime.register_scopes(context_id, builder.build())?;
 
-        let mut ctx = OrchestratorContext {
-          context_id,
-          registry,
-          runtime,
-        };
-        self.orchestrators.run_cycle_phase(cycle, phase, &mut ctx)?;
+        {
+          let mut ctx = OrchestratorContext {
+            context_id,
+            metadata,
+            instances,
+            runtime,
+          };
+          self.orchestrators.run_cycle_phase(cycle, phase, &mut ctx)?;
+        }
+
+        runtime.flush_context(context_id, metadata)?;
       }
     }
 
@@ -68,6 +74,7 @@ mod tests {
   use crate::orchestrator::{
     BootCycle, BootPhase, Orchestrator, OrchestratorContext, OrchestratorWhen,
   };
+  use crate::registry::{InstanceMap, MetadataRegistry};
   use crate::runtime::{Runtime, RuntimeCommand, RuntimeDispatcher, RuntimePayload, start_runtime};
 
   use super::*;
@@ -139,7 +146,7 @@ mod tests {
       &mut self,
       action: &str,
       _payload: RuntimePayload,
-      ctx: &RuntimeContext<'_>,
+      ctx: &mut RuntimeContext<'_>,
       _dispatch: &RuntimeDispatcher,
       _log: &LogHandle,
     ) -> Result<(), CoreError> {
@@ -165,7 +172,7 @@ mod tests {
       &mut self,
       action: &str,
       _payload: RuntimePayload,
-      _ctx: &RuntimeContext<'_>,
+      _ctx: &mut RuntimeContext<'_>,
       dispatch: &RuntimeDispatcher,
       _log: &LogHandle,
     ) -> Result<(), CoreError> {
@@ -189,7 +196,7 @@ mod tests {
       &mut self,
       action: &str,
       _payload: RuntimePayload,
-      ctx: &RuntimeContext<'_>,
+      ctx: &mut RuntimeContext<'_>,
       _dispatch: &RuntimeDispatcher,
       _log: &LogHandle,
     ) -> Result<(), CoreError> {
@@ -252,9 +259,10 @@ mod tests {
       .orchestrators
       .push(ScopeOrchestrator::new(BootPhase::Start, "alpha", "hello"));
 
-    let mut registry = InstanceRegistry::default();
+    let mut metadata = MetadataRegistry::default();
+    let mut instances = InstanceMap::default();
     boot
-      .run(&mut registry, &runtime)
+      .run(&mut metadata, &mut instances, &runtime)
       .expect("boot run should succeed");
 
     let value = rx
@@ -277,9 +285,10 @@ mod tests {
     let mut boot = BootEngine::default();
     boot.orchestrators.push(KickoffOrchestrator);
 
-    let mut registry = InstanceRegistry::default();
+    let mut metadata = MetadataRegistry::default();
+    let mut instances = InstanceMap::default();
     boot
-      .run(&mut registry, &runtime)
+      .run(&mut metadata, &mut instances, &runtime)
       .expect("boot run should succeed");
 
     let value = rx
@@ -306,9 +315,10 @@ mod tests {
       .orchestrators
       .push(ScopeOrchestrator::new(BootPhase::End, "alpha", "from_end"));
 
-    let mut registry = InstanceRegistry::default();
+    let mut metadata = MetadataRegistry::default();
+    let mut instances = InstanceMap::default();
     boot
-      .run(&mut registry, &runtime)
+      .run(&mut metadata, &mut instances, &runtime)
       .expect("boot run should succeed");
 
     let first = rx

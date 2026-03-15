@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::context::ScopeBuilder;
 use crate::error::CoreError;
-use crate::registry::InstanceRegistry;
+use crate::registry::{InstanceMap, InstanceRegistry, MetadataRegistry};
 use crate::runtime::{RuntimeCommand, RuntimeHandle, RuntimePayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -26,11 +26,16 @@ pub struct OrchestratorWhen<'a> {
 
 pub struct OrchestratorContext<'a> {
   pub context_id: usize,
-  pub registry: &'a mut InstanceRegistry,
+  pub metadata: &'a mut MetadataRegistry,
+  pub instances: &'a mut InstanceMap,
   pub runtime: &'a RuntimeHandle,
 }
 
 impl OrchestratorContext<'_> {
+  pub fn registry(&mut self) -> InstanceRegistry<'_> {
+    InstanceRegistry::new(&*self.metadata, self.instances)
+  }
+
   pub fn dispatch(
     &self,
     runtime_id: impl Into<String>,
@@ -157,7 +162,6 @@ impl OrchestratorStore {
         .list
         .get_mut(idx)
         .ok_or_else(|| CoreError::InvalidState("orchestrator index out of bounds".to_string()))?;
-      // Such a cool little way to enforce stage logic
       if cycle == BootCycle::Collect {
         orchestrator.preload(ctx)?;
       } else {

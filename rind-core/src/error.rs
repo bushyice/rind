@@ -39,4 +39,10 @@ impl CoreError {
   }
 }
 
+impl From<anyhow::Error> for CoreError {
+  fn from(value: anyhow::Error) -> Self {
+    Self::Custom(value.to_string())
+  }
+}
+
 impl std::error::Error for CoreError {}
