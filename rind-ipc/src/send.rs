@@ -6,9 +6,7 @@ use crate::Message;
 pub fn send_message(msg: Message) -> anyhow::Result<Message> {
   let mut stream = UnixStream::connect("/tmp/rind.sock")?;
 
-  let msg = toml::to_string(&msg)?;
-
-  let payload = msg.into_bytes();
+  let payload = serde_json::to_vec(&msg)?;
   let len = (payload.len() as u32).to_be_bytes();
 
   stream.write_all(&len)?;
@@ -21,7 +19,5 @@ pub fn send_message(msg: Message) -> anyhow::Result<Message> {
   let mut buf = vec![0u8; len];
   stream.read_exact(&mut buf)?;
 
-  let msgstr = String::from_utf8_lossy(&buf).to_string();
-
-  Ok(toml::from_str(&msgstr)?)
+  Ok(serde_json::from_slice(&buf)?)
 }

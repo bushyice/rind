@@ -42,6 +42,13 @@ impl RunOptions {
       RunOptions::Many(k) => k.iter(),
     }
   }
+
+  pub fn to_string(&self) -> Vec<String> {
+    self
+      .as_many()
+      .map(|x| format!("{} {}", x.exec, x.args.join(" ")))
+      .collect::<Vec<String>>()
+  }
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -128,6 +135,21 @@ impl ChildInstanceGroup {
       .0
       .iter()
       .position(|inst| inst.child.as_ref().map(|c| c.id() as i32) == Some(pid))
+  }
+
+  pub fn is_active(&self) -> bool {
+    self.0.iter().any(|x| x.state == ServiceState::Active)
+  }
+
+  pub fn pid(&self) -> Vec<u32> {
+    self.0.iter().filter_map(|x| x.pid()).collect()
+  }
+
+  pub fn last_state(&self) -> String {
+    self
+      .0
+      .last()
+      .map_or("Inactive".to_string(), |x| format!("{:?}", x.state))
   }
 }
 
@@ -577,7 +599,7 @@ impl Runtime for ServiceRuntime {
             let ser =
               ctx
                 .registry
-                .instantiate("units", &format!("{unit}@{}", service.name), |x| {
+                .instantiate_one("units", &format!("{unit}@{}", service.name), |x| {
                   Ok(Service::new(x))
                 })?;
 

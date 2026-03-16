@@ -8,6 +8,7 @@ use crate::runtime::{RuntimeHandle, start_runtime};
 pub struct BootEngine {
   pub orchestrators: OrchestratorStore,
   next_context_id: usize,
+  persistent_context_ids: Vec<usize>,
 }
 
 impl Default for BootEngine {
@@ -15,6 +16,7 @@ impl Default for BootEngine {
     Self {
       orchestrators: OrchestratorStore::default(),
       next_context_id: 1,
+      persistent_context_ids: Vec::new(),
     }
   }
 }
@@ -38,6 +40,8 @@ impl BootEngine {
     instances: &mut InstanceMap,
     runtime: &RuntimeHandle,
   ) -> Result<(), CoreError> {
+    self.persistent_context_ids.clear();
+
     for cycle in [
       BootCycle::Collect,
       BootCycle::Runtime,
@@ -61,6 +65,35 @@ impl BootEngine {
           self.orchestrators.run_cycle_phase(cycle, phase, &mut ctx)?;
         }
 
+        runtime.flush_context(context_id, metadata)?;
+
+        if cycle == BootCycle::Runtime && phase == BootPhase::Start {
+          self.persistent_context_ids.push(context_id);
+        }
+      }
+    }
+
+    Ok(())
+  }
+
+  pub fn pump_once(
+    &mut self,
+    metadata: &mut MetadataRegistry,
+    instances: &mut InstanceMap,
+    runtime: &RuntimeHandle,
+  ) -> Result<(), CoreError> {
+    let context_ids = self.persistent_context_ids.clone();
+    for context_id in context_ids {
+      for phase in [BootPhase::Start, BootPhase::End] {
+        let mut ctx = OrchestratorContext {
+          context_id,
+          metadata,
+          instances,
+          runtime,
+        };
+        self
+          .orchestrators
+          .run_cycle_phase(BootCycle::Pump, phase, &mut ctx)?;
         runtime.flush_context(context_id, metadata)?;
       }
     }

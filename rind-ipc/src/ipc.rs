@@ -3,7 +3,7 @@ pub mod recv;
 pub mod send;
 pub mod ser;
 
-#[derive(Debug, Copy, Clone, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, Copy, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 pub enum UnitType {
   Flow,
   State,
@@ -67,33 +67,38 @@ impl Message {
   }
 
   pub fn with_payload(mut self, payload: MessagePayload) -> Self {
-    self.payload = toml::to_string(&payload).ok();
+    self.payload = serde_json::to_string(&payload).ok();
     self
   }
 
   pub fn with_vec<T: serde::Serialize>(mut self, payload: Vec<T>) -> Self {
-    self.payload = toml::to_string(&ArrayPayload { items: payload }).ok();
+    self.payload = serde_json::to_string(&ArrayPayload { items: payload }).ok();
     self
   }
 
   pub fn as_string(self) -> String {
-    toml::to_string(&self).unwrap_or_default()
+    serde_json::to_string(&self).unwrap_or_default()
   }
 
   pub fn parse_vec_payload<T: serde::de::DeserializeOwned>(&self) -> Option<Vec<T>> {
-    self.parse_payload::<ArrayPayload<T>>().map(|x| x.items)
+    self
+      .parse_payload::<ArrayPayload<T>>()
+      .ok()
+      .map(|x| x.items)
   }
 
-  pub fn parse_payload<T: serde::de::DeserializeOwned>(&self) -> Option<T> {
+  pub fn parse_payload<T: serde::de::DeserializeOwned>(&self) -> Result<T, String> {
     let Some(ref payload) = self.payload else {
-      return None;
+      return Err("Payload Not found".into());
     };
-    if let Ok(p) = serde_json::from_str(payload) {
-      Some(p)
-    } else if let Ok(p) = toml::from_str(payload) {
-      Some(p)
+
+    if let Ok(p) = match serde_json::from_str::<T>(payload) {
+      Err(e) => return Err(e.to_string()),
+      Ok(e) => Ok::<T, String>(e),
+    } {
+      Ok(p)
     } else {
-      None
+      Err("Nothing".into())
     }
   }
 }
@@ -115,7 +120,7 @@ mod tests {
       unit_type: UnitType::Service,
       force: Some(true),
     });
-    let parsed = msg.parse_payload::<MessagePayload>();
+    let parsed = msg.parse_payload::<MessagePayload>().ok();
     assert!(parsed.is_some());
     let payload = parsed.unwrap_or(MessagePayload {
       name: String::new(),
@@ -138,13 +143,13 @@ mod tests {
       r#type: MessageType::List,
       payload: Some(json_payload),
     };
-    assert!(json_msg.parse_payload::<MessagePayload>().is_some());
+    assert!(json_msg.parse_payload::<MessagePayload>().ok().is_some());
 
     let invalid = Message {
       r#type: MessageType::List,
       payload: Some("not-json-not-toml".to_string()),
     };
-    assert!(invalid.parse_payload::<MessagePayload>().is_none());
+    assert!(invalid.parse_payload::<MessagePayload>().ok().is_none());
   }
 
   #[test]

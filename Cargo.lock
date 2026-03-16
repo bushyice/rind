@@ -390,6 +390,7 @@ dependencies = [
  "anyhow",
  "bincode-next",
  "bitflags",
+ "crc32fast",
  "libc",
  "nix",
  "once_cell",

@@ -31,10 +31,10 @@ pub fn recv_message(mut stream: UnixStream, handle_client: ClientHandler) {
       }
     };
 
-    let msg: Message = match toml::from_str(&raw) {
+    let msg: Message = match serde_json::from_str(&raw) {
       Ok(m) => m,
       Err(e) => {
-        eprintln!("toml parse error: {e}");
+        eprintln!("json parse error: {e}");
         continue;
       }
     };

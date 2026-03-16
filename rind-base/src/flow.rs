@@ -134,11 +134,25 @@ pub struct FlowInstance {
 
 impl From<StateEntry> for FlowInstance {
   fn from(value: StateEntry) -> Self {
-    Self {
-      name: value.name,
-      payload: FlowPayload::from_json(Some(value.payload)),
+    let cfg = bincode_next::config::standard();
+    if let Ok((instance, _)) =
+      bincode_next::serde::decode_from_slice::<FlowInstance, _>(&value.data, cfg)
+    {
+      return instance;
+    }
+    FlowInstance {
+      name: String::new(),
+      payload: FlowPayload::None(false),
       r#type: FlowType::State,
     }
+  }
+}
+
+impl From<&FlowInstance> for StateEntry {
+  fn from(value: &FlowInstance) -> Self {
+    let cfg = bincode_next::config::standard();
+    let data = bincode_next::serde::encode_to_vec(value, cfg).unwrap_or_default();
+    StateEntry { data }
   }
 }
 
@@ -212,10 +226,26 @@ impl StateMachine {
       .map(|(name, i)| {
         (
           name.clone(),
-          i.into_iter().map(FlowInstance::from).collect(),
+          i.into_iter()
+            .map(FlowInstance::from)
+            .filter(|x| !x.name.is_empty())
+            .collect(),
         )
       })
       .collect();
+  }
+
+  pub fn snapshot_for_persistence(&self) -> StateSnapshot {
+    self
+      .states
+      .iter()
+      .map(|(name, states)| {
+        (
+          name.clone(),
+          states.iter().map(StateEntry::from).collect::<Vec<_>>(),
+        )
+      })
+      .collect()
   }
 }
 
@@ -302,6 +332,21 @@ impl FlowRuntime {
         state_defs.iter().find(|(_, d)| d.name == item_name)
       })
       .and_then(|(_, d)| d.subscribers.as_deref())
+  }
+
+  fn save_state_machine(
+    sm: &StateMachine,
+    persistence: Option<&Arc<RwLock<StatePersistence>>>,
+  ) -> Result<(), CoreError> {
+    let Some(persistence) = persistence else {
+      return Ok(());
+    };
+    let snapshot = sm.snapshot_for_persistence();
+    persistence
+      .write()
+      .map_err(CoreError::custom)?
+      .save(snapshot);
+    Ok(())
   }
 
   fn payload_type_ok(expected: FlowPayloadType, payload: &FlowPayload) -> bool {
@@ -693,6 +738,7 @@ impl Runtime for FlowRuntime {
       .get::<StateMachineShared>()
       .cloned()
       .ok_or_else(|| CoreError::InvalidState("state machine not found in scope".into()))?;
+    let persistence = ctx.scope.get::<Arc<RwLock<StatePersistence>>>().cloned();
 
     let event_bus = ctx.scope.get::<EventBus>().cloned().unwrap_or_default();
 
@@ -717,6 +763,7 @@ impl Runtime for FlowRuntime {
           &event_bus,
           dispatch,
         )?;
+        Self::save_state_machine(&sm, persistence.as_ref())?;
       }
       "remove_state" => {
         let name = payload.get::<String>("name")?;
@@ -737,6 +784,7 @@ impl Runtime for FlowRuntime {
           &event_bus,
           dispatch,
         );
+        Self::save_state_machine(&sm, persistence.as_ref())?;
       }
       "emit_signal" => {
         let name = payload.get::<String>("name")?;
@@ -778,6 +826,7 @@ impl Runtime for FlowRuntime {
           &event_bus,
           dispatch,
         );
+        Self::save_state_machine(&sm, persistence.as_ref())?;
       }
       _ => {}
     }

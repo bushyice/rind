@@ -144,10 +144,12 @@ impl Orchestrator for UnitsOrchestrator {
   fn build_scope(&mut self, builder: &mut ScopeBuilder) -> Result<(), CoreError> {
     let sm = self.state_machine.clone();
     let eb = self.event_bus.clone();
+    let persistence = self.state_persistence.clone();
     builder.insert_scope("flow", move || {
       let mut scope = RuntimeScope::default();
       scope.insert::<StateMachineShared>(sm.clone());
       scope.insert::<EventBus>(eb.clone());
+      scope.insert::<Arc<RwLock<StatePersistence>>>(persistence.clone());
       scope
     });
 

@@ -60,6 +60,12 @@ impl MetadataRegistry {
     )
   }
 
+  pub fn groups(&self, metadata: &str) -> Option<Vec<&str>> {
+    let m = self.metadata.get(metadata)?;
+
+    Some(m.groups().collect())
+  }
+
   pub fn ensure_index_for_type<T>(&mut self, metadata: &str) -> anyhow::Result<()>
   where
     T: Model + 'static,
@@ -206,7 +212,7 @@ impl<'a> InstanceRegistry<'a> {
     }
   }
 
-  pub fn instances<T>(&self, metadata: &str, name: &str) -> anyhow::Result<Vec<&Box<T>>>
+  pub fn instances<T>(&self, metadata: &str, name: &str) -> anyhow::Result<Vec<&T>>
   where
     T: Model + 'static,
   {
@@ -217,12 +223,12 @@ impl<'a> InstanceRegistry<'a> {
         .get(&full_name)
         .ok_or(CoreError::MissingInstances(full_name))?
         .iter()
-        .map(|x| x.downcast_ref::<Box<T>>().expect("instance type mismatch"))
+        .map(|x| x.downcast_ref::<T>().expect("instance type mismatch"))
         .collect(),
     )
   }
 
-  pub fn instances_mut<T>(&mut self, metadata: &str, name: &str) -> anyhow::Result<Vec<&mut Box<T>>>
+  pub fn instances_mut<T>(&mut self, metadata: &str, name: &str) -> anyhow::Result<Vec<&mut T>>
   where
     T: Model + 'static,
   {
@@ -233,12 +239,12 @@ impl<'a> InstanceRegistry<'a> {
         .get_mut(&full_name)
         .ok_or(CoreError::MissingInstances(full_name.to_string()))?
         .iter_mut()
-        .map(|x| x.downcast_mut::<Box<T>>().expect("instance type mismatch"))
+        .map(|x| x.downcast_mut::<T>().expect("instance type mismatch"))
         .collect(),
     )
   }
 
-  pub fn as_one<T>(&self, metadata: &str, name: &str) -> anyhow::Result<&Box<T>>
+  pub fn as_one<T>(&self, metadata: &str, name: &str) -> anyhow::Result<&T>
   where
     T: Model + 'static,
   {
@@ -252,12 +258,12 @@ impl<'a> InstanceRegistry<'a> {
       instances
         .last()
         .expect("instance entry unexpectedly empty")
-        .downcast_ref::<Box<T>>()
+        .downcast_ref::<T>()
         .expect("instance type mismatch"),
     )
   }
 
-  pub fn as_one_mut<T>(&mut self, metadata: &str, name: &str) -> anyhow::Result<&mut Box<T>>
+  pub fn as_one_mut<T>(&mut self, metadata: &str, name: &str) -> anyhow::Result<&mut T>
   where
     T: Model + 'static,
   {
@@ -271,7 +277,7 @@ impl<'a> InstanceRegistry<'a> {
       instances
         .last_mut()
         .expect("instance entry unexpectedly empty")
-        .downcast_mut::<Box<T>>()
+        .downcast_mut::<T>()
         .expect("instance type mismatch"),
     )
   }

@@ -10,6 +10,7 @@ pub enum BootCycle {
   Collect,
   Runtime,
   PostRuntime,
+  Pump,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

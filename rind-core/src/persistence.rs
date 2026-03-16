@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::fs;
+use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Sender};
@@ -15,8 +16,7 @@ pub type StateSnapshot = HashMap<String, Vec<StateEntry>>;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateEntry {
-  pub name: String,
-  pub payload: serde_json::Value,
+  pub data: Vec<u8>,
 }
 
 enum PersistCommand {
@@ -58,11 +58,14 @@ impl StatePersistence {
       return Ok(StateSnapshot::default());
     }
 
-    let content = fs::read_to_string(path)
+    let mut file =
+      fs::File::open(path).map_err(|e| CoreError::PersistenceError(format!("open failed: {e}")))?;
+    let mut content = Vec::new();
+    file
+      .read_to_end(&mut content)
       .map_err(|e| CoreError::PersistenceError(format!("read failed: {e}")))?;
 
-    let snapshot: StateSnapshot = serde_json::from_str(&content)
-      .map_err(|e| CoreError::PersistenceError(format!("decode failed: {e}")))?;
+    let snapshot = decode_snapshot(&content)?;
 
     Ok(snapshot)
   }
@@ -81,8 +84,7 @@ impl StatePersistence {
 }
 
 fn write_snapshot(path: &Path, snapshot: &StateSnapshot) -> Result<(), CoreError> {
-  let encoded = serde_json::to_vec(snapshot)
-    .map_err(|e| CoreError::PersistenceError(format!("encode failed: {e}")))?;
+  let encoded = encode_snapshot(snapshot)?;
 
   if let Some(parent) = path.parent() {
     fs::create_dir_all(parent)
@@ -100,8 +102,72 @@ fn write_snapshot(path: &Path, snapshot: &StateSnapshot) -> Result<(), CoreError
     .map_err(|e| CoreError::PersistenceError(format!("sync failed: {e}")))?;
 
   fs::rename(&tmp, path).map_err(|e| CoreError::PersistenceError(format!("rename failed: {e}")))?;
+  sync_parent_dir(path)?;
 
   Ok(())
+}
+
+const MAGIC: [u8; 4] = *b"RIND";
+const VERSION: u16 = 1;
+
+fn encode_snapshot(snapshot: &StateSnapshot) -> Result<Vec<u8>, CoreError> {
+  let cfg = bincode_next::config::standard();
+  let payload = bincode_next::serde::encode_to_vec(snapshot, cfg)
+    .map_err(|e| CoreError::PersistenceError(format!("encode failed: {e}")))?;
+
+  let checksum = crc32fast::hash(&payload);
+  let mut out = Vec::with_capacity(4 + 2 + 4 + payload.len());
+  out.extend_from_slice(&MAGIC);
+  out.extend_from_slice(&VERSION.to_le_bytes());
+  out.extend_from_slice(&checksum.to_le_bytes());
+  out.extend_from_slice(&payload);
+  Ok(out)
+}
+
+fn decode_snapshot(content: &[u8]) -> Result<StateSnapshot, CoreError> {
+  if content.len() < 10 {
+    return Err(CoreError::PersistenceError(
+      "decode failed: snapshot too small".to_string(),
+    ));
+  }
+
+  if content[0..4] != MAGIC {
+    return Err(CoreError::PersistenceError(
+      "decode failed: invalid snapshot magic".to_string(),
+    ));
+  }
+
+  let version = u16::from_le_bytes([content[4], content[5]]);
+  if version != VERSION {
+    return Err(CoreError::PersistenceError(format!(
+      "decode failed: unsupported snapshot version {version}"
+    )));
+  }
+
+  let expected = u32::from_le_bytes([content[6], content[7], content[8], content[9]]);
+  let payload = &content[10..];
+  let actual = crc32fast::hash(payload);
+  if expected != actual {
+    return Err(CoreError::PersistenceError(
+      "decode failed: snapshot checksum mismatch".to_string(),
+    ));
+  }
+
+  let cfg = bincode_next::config::standard();
+  let (snapshot, _): (StateSnapshot, usize) = bincode_next::serde::decode_from_slice(payload, cfg)
+    .map_err(|e| CoreError::PersistenceError(format!("decode failed: {e}")))?;
+  Ok(snapshot)
+}
+
+fn sync_parent_dir(path: &Path) -> Result<(), CoreError> {
+  let Some(parent) = path.parent() else {
+    return Ok(());
+  };
+  let dir = fs::File::open(parent)
+    .map_err(|e| CoreError::PersistenceError(format!("open parent dir failed: {e}")))?;
+  dir
+    .sync_all()
+    .map_err(|e| CoreError::PersistenceError(format!("sync parent dir failed: {e}")))
 }
 
 #[cfg(test)]
@@ -129,8 +195,7 @@ mod tests {
     snapshot.insert(
       "test@active".into(),
       vec![StateEntry {
-        name: "active".into(),
-        payload: serde_json::json!({"id": "unit_a"}),
+        data: b"hello".to_vec(),
       }],
     );
 
@@ -163,8 +228,7 @@ mod tests {
     snapshot.insert(
       "async@test".into(),
       vec![StateEntry {
-        name: "test".into(),
-        payload: serde_json::json!("hello"),
+        data: b"hello".to_vec(),
       }],
     );
 

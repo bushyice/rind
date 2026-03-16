@@ -39,7 +39,7 @@ pub fn print_unit(unit_name: &String, unit: &UnitItemsSerialized) {
           .join(", ")
           .yellow(),
         if s.restart { "R" } else { "-" }.red(),
-        s.args.join(" ")
+        s.run.join(" ")
       );
     }
   }
@@ -103,11 +103,11 @@ pub fn print_service(service: &ServiceSerialized) {
     None => println!("   {}: {}", "State".bold(), state),
   }
 
-  println!("   {}: {}", "Exec".bold(), service.exec.cyan());
+  println!("   {}: {}", "Exec".bold(), service.run.join(", ").cyan());
 
-  if !service.args.is_empty() {
-    println!("   {}: {}", "Args".bold(), service.args.join(" ").dimmed());
-  }
+  // if !service.args.is_empty() {
+  //   println!("   {}: {}", "Args".bold(), service.args.join(" ").dimmed());
+  // }
 
   println!(
     "   {}: {}",

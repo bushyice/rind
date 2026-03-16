@@ -5,8 +5,8 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crate::mount::Mount;
-use crate::services::{Service, ServiceState};
+use crate::mount::{Mount, is_mounted};
+use crate::services::Service;
 use rind_core::prelude::*;
 use rind_ipc::{
   Message, MessagePayload, MessageType, UnitType,
@@ -57,6 +57,7 @@ impl Runtime for IpcRuntime {
             let listener = match UnixListener::bind(socket_path) {
               Ok(l) => l,
               Err(e) => {
+                // TODO: i'll use log instead
                 eprintln!("[ipc] failed to bind {}: {}", socket_path, e);
                 return;
               }
@@ -105,7 +106,7 @@ fn handle_client_connection(mut stream: UnixStream, parent_tx: Sender<IpcRequest
       Err(_) => continue,
     };
 
-    let msg: Message = match toml::from_str(&raw) {
+    let msg: Message = match serde_json::from_str(&raw) {
       Ok(m) => m,
       Err(_) => continue,
     };
@@ -140,176 +141,147 @@ fn handle_ipc_message(
 ) -> Message {
   match msg.r#type {
     MessageType::List => {
-      let Some(payload) = msg.parse_payload::<MessagePayload>() else {
-        return Message::from_type(MessageType::Error).with("Payload Incorrect".into());
+      let Some(payload) = msg.parse_payload::<MessagePayload>().ok() else {
+        return Message::from_type(MessageType::Error)
+          .with(format!("Incorrect Payload: {:?}", msg.payload));
       };
 
-      if matches!(payload.unit_type, UnitType::Unit) {
-        let mut services = Vec::new();
-        let mut mounts = Vec::new();
+      if payload.unit_type == UnitType::Unit {
+        let services = if let Some(services) = ctx
+          .registry
+          .metadata
+          .group_items::<Service>("units", &payload.name)
+        {
+          services
+        } else {
+          Vec::new()
+        };
+        let mounts = if let Some(mounts) = ctx
+          .registry
+          .metadata
+          .group_items::<Mount>("units", &payload.name)
+        {
+          mounts
+        } else {
+          Vec::new()
+        };
 
-        if let Some(instances) = ctx.registry.instances.get("units") {
-          for inst in instances {
-            if let Some(service) = inst.downcast_ref::<Service>() {
-              if service.metadata.name.starts_with(&payload.name) {
-                let state_str = format!(
-                  "{:?}",
-                  service
-                    .instances
-                    .0
-                    .first()
-                    .map(|i| &i.state)
-                    .unwrap_or(&ServiceState::Inactive)
-                );
-                let pid = service
-                  .instances
-                  .0
-                  .first()
-                  .and_then(|i| i.child.as_ref().map(|c| c.id()));
+        let ser_instances: HashMap<&String, (String, Vec<u32>)> = services
+          .iter()
+          .filter_map(|ser| {
+            ctx
+              .registry
+              .as_one::<Service>("units", &format!("{}@{}", payload.name, ser.name))
+              .map_or(None, |x| {
+                Some((&ser.name, (x.instances.last_state(), x.instances.pid())))
+              })
+          })
+          .collect();
 
-                services.push(ServiceSerialized {
-                  name: service.metadata.name.clone(),
-                  last_state: state_str,
-                  after: service.metadata.after.clone(),
-                  restart: service.metadata.restart.is_some(),
-                  args: service
-                    .metadata
-                    .run
-                    .as_many()
-                    .next()
-                    .map(|r| r.args.clone())
-                    .unwrap_or_default(),
-                  exec: service
-                    .metadata
-                    .run
-                    .as_many()
-                    .next()
-                    .map(|r| r.exec.clone())
-                    .unwrap_or_default(),
-                  pid,
-                });
-              }
-            } else if let Some(mount) = inst.downcast_ref::<Mount>() {
-              if mount.metadata.name().starts_with(&payload.name) {
-                mounts.push(MountSerialized {
-                  source: mount.metadata.source.clone(),
-                  target: mount.metadata.target.clone(),
-                  fstype: mount.metadata.fstype.clone(),
-                  mounted: mount.is_mounted,
-                });
-              }
-            }
+        Message::from_type(MessageType::List).with(
+          UnitItemsSerialized {
+            mounts: mounts
+              .iter()
+              .map(|mnt| MountSerialized {
+                fstype: mnt.fstype.clone(),
+                mounted: is_mounted(&mnt.target).unwrap_or(false),
+                source: mnt.source.clone(),
+                target: mnt.target.clone(),
+              })
+              .collect(),
+            services: services
+              .iter()
+              .map(|svc| ServiceSerialized {
+                after: svc.after.clone(),
+                run: svc.run.to_string(),
+                last_state: ser_instances
+                  .get(&svc.name)
+                  .map_or("Inactive".into(), |x| x.0.clone()),
+                name: svc.name().to_string(),
+                pid: ser_instances.get(&svc.name).map_or(None, |x| Some(x.1[0])),
+                restart: svc.restart.as_ref().map_or(false, |_| true),
+              })
+              .collect(),
           }
-        }
+          .stringify(),
+        )
+      } else if payload.unit_type == UnitType::Service {
+        let Some(payload) = msg.parse_payload::<MessagePayload>().ok() else {
+          return Message::from_type(MessageType::Error)
+            .with(format!("Incorrect Payload: {:?}", msg.payload));
+        };
 
-        Message::from_type(MessageType::List)
-          .with(UnitItemsSerialized { mounts, services }.stringify())
-      } else if matches!(payload.unit_type, UnitType::Service) {
-        if let Some(instances) = ctx.registry.instances.get("units") {
-          if let Some(inst) = instances.iter().find(|i| {
-            i.downcast_ref::<Service>()
-              .map(|s| s.metadata.name == payload.name)
-              .unwrap_or(false)
-          }) {
-            let service = inst.downcast_ref::<Service>().unwrap();
-            let state_str = format!(
-              "{:?}",
-              service
-                .instances
-                .0
-                .first()
-                .map(|i| &i.state)
-                .unwrap_or(&ServiceState::Inactive)
-            );
-            let pid = service
-              .instances
-              .0
-              .first()
-              .and_then(|i| i.child.as_ref().map(|c| c.id()));
+        let Some(service_meta) = ctx
+          .registry
+          .metadata
+          .find::<Service>("units", &payload.name)
+        else {
+          return Message::from_type(MessageType::Error)
+            .with(format!("Service not found: {}", payload.name));
+        };
 
-            return Message::from_type(MessageType::List).with(
-              ServiceSerialized {
-                name: service.metadata.name.clone(),
-                last_state: state_str,
-                after: service.metadata.after.clone(),
-                restart: service.metadata.restart.is_some(),
-                args: service
-                  .metadata
-                  .run
-                  .as_many()
-                  .next()
-                  .map(|r| r.args.clone())
-                  .unwrap_or_default(),
-                exec: service
-                  .metadata
-                  .run
-                  .as_many()
-                  .next()
-                  .map(|r| r.exec.clone())
-                  .unwrap_or_default(),
-                pid,
-              }
-              .stringify(),
-            );
+        let service = if let Ok(s) = ctx.registry.as_one::<Service>("units", &payload.name) {
+          s
+        } else {
+          &Service::new(service_meta)
+        };
+
+        Message::from_type(MessageType::List).with(
+          ServiceSerialized {
+            name: service.metadata.name.clone(),
+            after: service.metadata.after.clone(),
+            last_state: service.instances.last_state(),
+            pid: service.instances.pid().get(0).cloned(),
+            restart: service.metadata.restart.as_ref().map_or(false, |_| true),
+            run: service.metadata.run.to_string(),
           }
-        }
-        Message::from_type(MessageType::Error).with("Service not found".into())
+          .stringify(),
+        )
       } else {
         let mut units_map: HashMap<String, UnitSerialized> = HashMap::new();
 
-        if let Some(instances) = ctx.registry.instances.get("units") {
-          for inst in instances {
-            if let Some(service) = inst.downcast_ref::<Service>() {
-              let unit_name = service
-                .metadata
-                .name
-                .split('@')
-                .next()
-                .unwrap_or(&service.metadata.name)
-                .to_string();
-              let entry = units_map
-                .entry(unit_name.clone())
-                .or_insert(UnitSerialized {
-                  name: unit_name,
-                  services: 0,
-                  active_services: 0,
-                  mounts: 0,
-                  mounted: 0,
-                });
+        if let Some(groups) = ctx.registry.metadata.groups("units") {
+          for group in groups {
+            let services = if let Some(services) = ctx
+              .registry
+              .metadata
+              .group_items::<Service>("units", &group)
+            {
+              services
+            } else {
+              Vec::new()
+            };
+            let mounts =
+              if let Some(mounts) = ctx.registry.metadata.group_items::<Mount>("units", &group) {
+                mounts
+              } else {
+                Vec::new()
+              };
 
-              entry.services += 1;
-              let is_active = service
-                .instances
-                .0
-                .first()
-                .map(|i| matches!(i.state, ServiceState::Active | ServiceState::Starting))
-                .unwrap_or(false);
-              if is_active {
-                entry.active_services += 1;
-              }
-            } else if let Some(mount) = inst.downcast_ref::<Mount>() {
-              let unit_name = mount
-                .metadata
-                .name()
-                .split('@')
-                .next()
-                .unwrap_or(&mount.metadata.name())
-                .to_string();
-              let entry = units_map
-                .entry(unit_name.clone())
-                .or_insert(UnitSerialized {
-                  name: unit_name,
-                  services: 0,
-                  active_services: 0,
-                  mounts: 0,
-                  mounted: 0,
-                });
-
-              entry.mounts += 1;
-              if mount.is_mounted {
-                entry.mounted += 1;
-              }
-            }
+            let mounted = mounts
+              .iter()
+              .filter(|mnt| is_mounted(&mnt.target).unwrap_or(false))
+              .count();
+            let active = services
+              .iter()
+              .filter(|s| {
+                ctx
+                  .registry
+                  .instances::<Service>("units", &format!("{group}@{}", s.name))
+                  .ok()
+                  .map_or(false, |x| x.iter().any(|x| x.instances.is_active()))
+              })
+              .count();
+            units_map.insert(
+              group.to_string(),
+              UnitSerialized {
+                active_services: active,
+                mounted: mounted,
+                mounts: mounts.len(),
+                name: group.to_string(),
+                services: services.len(),
+              },
+            );
           }
         }
 
@@ -319,8 +291,8 @@ fn handle_ipc_message(
       }
     }
     MessageType::Start => {
-      let Some(payload) = msg.parse_payload::<MessagePayload>() else {
-        return Message::nack("invalid start payload");
+      let Some(payload) = msg.parse_payload::<MessagePayload>().ok() else {
+        return Message::nack("`start payload");
       };
 
       let _ = dispatch.dispatch(
@@ -331,7 +303,7 @@ fn handle_ipc_message(
       Message::ack(format!("started {}", payload.name))
     }
     MessageType::Stop => {
-      let Some(payload) = msg.parse_payload::<MessagePayload>() else {
+      let Some(payload) = msg.parse_payload::<MessagePayload>().ok() else {
         return Message::nack("invalid stop payload");
       };
 

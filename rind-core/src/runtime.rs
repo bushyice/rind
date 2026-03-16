@@ -93,7 +93,7 @@ struct RuntimeEngine {
   runtimes: HashMap<String, Box<dyn Runtime>>,
   contexts: HashMap<usize, RuntimeScopes>,
   queue: VecDeque<RuntimeCommand>,
-  runtime_instances: HashMap<String, InstanceMap>,
+  instances: InstanceMap,
   stopped: bool,
 }
 
@@ -166,7 +166,7 @@ impl RuntimeHandle {
         break;
       };
 
-      let (mut runtime, mut scope, mut runtime_instances, log) = {
+      let (mut runtime, mut scope, mut instances, log) = {
         let mut inner = self.inner.borrow_mut();
         if inner.stopped {
           return Err(CoreError::RuntimeStopped);
@@ -192,15 +192,12 @@ impl RuntimeHandle {
           .get_mut(&cid)
           .and_then(|scopes| scopes.take_scope(runtime_id.as_str()))
           .unwrap_or_default();
-        let runtime_instances = inner
-          .runtime_instances
-          .remove(&runtime_id)
-          .unwrap_or_default();
+        let instances = std::mem::take(&mut inner.instances);
         let log = inner.log.clone();
-        (runtime, scope, runtime_instances, log)
+        (runtime, scope, instances, log)
       };
 
-      let registry = InstanceRegistry::new(metadata, &mut runtime_instances);
+      let registry = InstanceRegistry::new(metadata, &mut instances);
       let mut ctx = RuntimeContext::new(runtime_id.as_str(), &mut scope, registry);
       let dispatch = RuntimeDispatcher::new(self.clone(), cid);
 
@@ -220,9 +217,7 @@ impl RuntimeHandle {
       {
         let mut inner = self.inner.borrow_mut();
         inner.runtimes.insert(runtime_id.clone(), runtime);
-        inner
-          .runtime_instances
-          .insert(runtime_id.clone(), runtime_instances);
+        inner.instances = instances;
         if let Some(scopes) = inner.contexts.get_mut(&cid) {
           scopes.put_scope(runtime_id, scope);
         }
@@ -245,7 +240,7 @@ pub fn start_runtime(log: LogHandle, runtimes: Vec<Box<dyn Runtime>>) -> Runtime
       runtimes: map,
       contexts: HashMap::new(),
       queue: VecDeque::new(),
-      runtime_instances: HashMap::new(),
+      instances: InstanceMap::default(),
       stopped: false,
     })),
   }

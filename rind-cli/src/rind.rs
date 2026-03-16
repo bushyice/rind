@@ -55,6 +55,18 @@ pub fn report_error(msg: &str, err: impl std::fmt::Display) {
   eprintln!("{} {}: {}", "Error".on_red().black(), msg, err);
 }
 
+pub fn handle_parse<T>(result: Result<T, String>, payload: String) -> Option<T> {
+  match result {
+    Err(e) => {
+      if e != "Nothing" {
+        report_error(&e, payload);
+      }
+      None
+    }
+    Ok(e) => Some(e),
+  }
+}
+
 pub fn handle_message(message: Message) {
   match message.r#type {
     MessageType::Ack => {
@@ -124,29 +136,28 @@ fn main() {
       }
     };
 
-    // let units_ser = UnitsSerialized::from_string(output.payload.unwrap());
-    // let units = units_ser.to_units();
+    let p = output.payload.clone().unwrap_or("".into());
 
     if let Some(unit_name) = &cli.unit {
-      if let Some(unit) = output.parse_payload::<UnitItemsSerialized>() {
+      if let Some(unit) = handle_parse(output.parse_payload::<UnitItemsSerialized>(), p) {
         print::print_unit(unit_name, &unit);
       } else {
         report_error("list unit parse failed", "invalid unit payload");
       }
     } else if let Some(_) = &cli.service {
-      if let Some(service) = output.parse_payload::<ServiceSerialized>() {
+      if let Some(service) = handle_parse(output.parse_payload::<ServiceSerialized>(), p) {
         print::print_service(&service);
       } else {
         report_error("list service parse failed", "invalid service payload");
       }
     } else if let Some(_) = &cli.state {
-      if let Some(state) = output.parse_payload::<StateSerialized>() {
+      if let Some(state) = handle_parse(output.parse_payload::<StateSerialized>(), p) {
         print::print_state(&state);
       } else {
         report_error("list state parse failed", "invalid state payload");
       }
     } else {
-      if let Some(units) = output.parse_payload::<Vec<UnitSerialized>>() {
+      if let Some(units) = handle_parse(output.parse_payload::<Vec<UnitSerialized>>(), p) {
         print::print_units(&units);
       } else {
         report_error("list units parse failed", "invalid units payload");

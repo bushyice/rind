@@ -30,25 +30,40 @@
 
 
 ## Todo
-- [x] **Core Architecture**: Unit loading, store management, ...
+- [x] **Core Architecture**: Core system architecture
+    - [x] Metadata and Models 
+    - [ ] Logger
+    - [x] Errors
+    - [x] Runtimes
+    - [x] Contexts
+        - [x] Registries
+        - [x] Scope
+    - [x] Events 
+        - [x] Dispatch 
+    - [x] Orchestrators 
+    - [x] Boot Cycles
+- [x] **Base Components**: Main unit components
+    - [x] Models for units, services, mounts, states and signals 
+    - [ ] Reaper
+    - [ ] Auto service stopping
 - [x] **Flow System**: Signal/State definitions and broadcasting.
 - [x] **Payloads**: Typed support for JSON, String, and Binary data.
-- [x] **Transport Protocols**: Transport protocols.
-    - [x] `stdio`.
+- [ ] **Transport Protocols**: Transport protocols.
+    - [ ] `stdio`.
     - [x] `uds`.
     - [x] `env`.
     - [x] `args`.
 - [x] **Service Management**:
     - [x] Process spawning and killing stuff.
-    - [x] Dependency based startup (`after`).
-    - [x] Restart polcies.
-- [x] **State Branching**: Many state payloads at once.
-- [x] **Service Branching**: Service per state branching.
+    - [ ] Dependency based startup (`after`).
+    - [ ] Restart polcies.
+- [ ] **State Branching**: Many state payloads at once.
+- [ ] **Service Branching**: Service per state branching.
 - [x] **State Persistence**: Continuity of state across restarts.
 - [x] **Detached Transports/Subscribers**: Independent messaging access for external programs.
 - [ ] **Daemon & CLI**: The cli.
     - [x] Listing stuff.
-    - [x] Enable/Disable/Start/Stop.
+    - [x] Start/Stop.
     - [ ] States and Signal control(maybe with permissions if those happen).
 - [ ] **State Transcendence**: Auto-activation of states based on dependencies (e.g. `SwayActive` on `UserLoggedIn`).
 - [ ] **Outputs**: Signal/State output collectd from services.
@@ -185,6 +200,7 @@ These are all the concepts i am planning to add, more might come up next time i 
 - `qemu`
 - `cpio`
 - `gzip`
+- `mkfs.ext4`
 
 ## Build System
 
@@ -196,7 +212,11 @@ Inside of `builder.toml`, you can configure settings for how you want the builde
 
 ## Build Commands
 
-To get help, you can just execute the builder executable without any arguments and it will print help.
+To get help, you can just execute the builder executable without any arguments and it will print help, but here's a quick start:
+- When you build first time do: `builder ar` or `builder i`
+- When you change code and rebuild: `builder bpdr` (build, prepare rootfs, prepare disk image, run)
+- If you changed something like bzimage or maybe busybox configs, do: `builder i`
+- If you just wanna run and don't wanna clean up the disk image, do: `builder r` (eg. rebooting or testing persistence)
 
 ## Devenv
 

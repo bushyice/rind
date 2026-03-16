@@ -79,6 +79,34 @@ impl Orchestrator for RuntimeProviderOrchestrator {
   }
 }
 
+struct PumpOrchestrator;
+
+impl Orchestrator for PumpOrchestrator {
+  fn id(&self) -> &str {
+    "pump"
+  }
+
+  fn depends_on(&self) -> &[String] {
+    &[]
+  }
+
+  fn when(&self) -> OrchestratorWhen<'static> {
+    OrchestratorWhen {
+      cycle: &[BootCycle::Pump],
+      phase: BootPhase::Start,
+    }
+  }
+
+  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
+    ctx.dispatch("reaper", "reap_once", json!({}))?;
+    ctx.dispatch("reaper", "timeout_sweep", json!({}))?;
+    ctx.dispatch("services", "drain_events", json!({}))?;
+    ctx.dispatch("transport", "drain_incoming", json!({}))?;
+    ctx.dispatch("ipc", "drain_requests", json!({}))?;
+    Ok(())
+  }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
   let units_dir = if let Ok(path) = std::env::var("RIND_UNITS_DIR") {
     PathBuf::from(path)
@@ -92,6 +120,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   boot.orchestrators.push(RuntimeProviderOrchestrator);
   boot.orchestrators.push(UnitsOrchestrator::new(units_dir));
   boot.orchestrators.push(BootOrchestrator);
+  boot.orchestrators.push(PumpOrchestrator);
 
   let mut metadata = MetadataRegistry::default();
   let mut instances = InstanceMap::default();
@@ -102,15 +131,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .map_err(|e| format!("boot failed: {e}"))?;
 
   loop {
-    // TODO: Add LoopDispatch boot cycle
-    // clean up thread + keep alive
-    let _ = runtime.dispatch("reaper", "reap_once", json!({}).into(), 1);
-    let _ = runtime.dispatch("reaper", "timeout_sweep", json!({}).into(), 1);
-    let _ = runtime.dispatch("services", "drain_events", json!({}).into(), 1);
-    let _ = runtime.dispatch("transport", "drain_incoming", json!({}).into(), 1);
-    let _ = runtime.dispatch("ipc", "drain_requests", json!({}).into(), 1);
-
-    let _ = runtime.flush_context(1, &mut metadata);
+    let _ = boot.pump_once(&mut metadata, &mut instances, &runtime);
     std::thread::sleep(std::time::Duration::from_millis(50));
   }
 }
