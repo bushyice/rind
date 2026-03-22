@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use rind_core::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::flow::FlowPayload;
+use crate::flow::{FlowMatchOperation, FlowPayload};
 
 #[derive(Serialize, Deserialize, Copy, Clone)]
 pub enum TransportMessageType {
@@ -23,10 +23,11 @@ pub enum TransportMessageAction {
   Remove,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct TransportMessage {
   pub r#type: TransportMessageType,
   pub payload: Option<FlowPayload>,
+  pub branch: Option<FlowMatchOperation>,
   pub name: Option<String>,
   #[serde(default)]
   pub action: TransportMessageAction,
@@ -176,12 +177,14 @@ pub fn start_stdout_listener(
 
 pub struct TransportRuntime {
   uds: UdsTransport,
+  stdio_endpoints: std::collections::HashSet<String>,
 }
 
 impl Default for TransportRuntime {
   fn default() -> Self {
     Self {
       uds: UdsTransport::default(),
+      stdio_endpoints: std::collections::HashSet::new(),
     }
   }
 }
@@ -204,6 +207,14 @@ impl Runtime for TransportRuntime {
         let endpoint = payload.get::<String>("endpoint")?;
         self.uds.setup(&endpoint);
       }
+      "register_stdio" => {
+        let endpoint = payload.get::<String>("endpoint")?;
+        self.stdio_endpoints.insert(endpoint);
+      }
+      "unregister_stdio" => {
+        let endpoint = payload.get::<String>("endpoint")?;
+        self.stdio_endpoints.remove(&endpoint);
+      }
       "send" => {
         let endpoint = payload.get::<String>("endpoint")?;
         let name: Option<String> = payload
@@ -211,6 +222,10 @@ impl Runtime for TransportRuntime {
           .get("name")
           .and_then(|v| v.as_str())
           .map(|s| s.to_string());
+        let branch = payload
+          .0
+          .get("branch")
+          .and_then(|v| serde_json::from_value::<FlowMatchOperation>(v.clone()).ok()); // FIX: clone?
         let flow_payload = payload.0.get("payload").cloned();
         let action_str: String = payload
           .0
@@ -238,8 +253,21 @@ impl Runtime for TransportRuntime {
           } else {
             TransportMessageAction::Set
           },
+          branch,
         };
-        self.uds.send_message(&endpoint, &msg);
+        if self.stdio_endpoints.contains(&endpoint) {
+          let _ = dispatch.dispatch(
+            "services",
+            "send_stdio",
+            serde_json::json!({
+              "endpoint": endpoint,
+              "message": msg
+            })
+            .into(),
+          );
+        } else {
+          self.uds.send_message(&endpoint, &msg);
+        }
       }
       "drain_incoming" => {
         if let Ok(rx) = self.uds.incoming_rx.lock() {
@@ -253,7 +281,7 @@ impl Runtime for TransportRuntime {
                       payload["filter"] = p.to_json();
                     }
                     let _ = dispatch.dispatch("flow", "remove_state", payload.into());
-                  } else {
+                  } else if msg.action == TransportMessageAction::Set {
                     let mut payload = serde_json::json!({ "name": name });
                     if let Some(p) = &msg.payload {
                       payload["payload"] = p.to_json();

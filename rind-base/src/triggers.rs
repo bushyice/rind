@@ -15,8 +15,15 @@ pub fn check_condition(cond: &FlowItem, trigger: &FlowInstance) -> bool {
         if trigger.r#type != FlowType::State || *state_name != trigger.name {
           return false;
         }
+        if let Some(target_op) = target {
+          if !match_operation(target_op, &trigger.payload) {
+            return false;
+          }
+        }
         if let Some(branch_op) = branch {
-          return match_operation(branch_op, &trigger.payload);
+          if !match_operation(branch_op, &trigger.payload) {
+            return false;
+          }
         }
         true
       } else if let Some(sig_name) = signal {
@@ -24,7 +31,14 @@ pub fn check_condition(cond: &FlowItem, trigger: &FlowInstance) -> bool {
           return false;
         }
         if let Some(target_op) = target {
-          return match_operation(target_op, &trigger.payload);
+          if !match_operation(target_op, &trigger.payload) {
+            return false;
+          }
+        }
+        if let Some(branch_op) = branch {
+          if !match_operation(branch_op, &trigger.payload) {
+            return false;
+          }
         }
         true
       } else {

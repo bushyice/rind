@@ -1,5 +1,3 @@
-//! TODO: Better log saving
-
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions, create_dir_all};
 use std::io::{BufWriter, Write};
@@ -86,15 +84,17 @@ fn logger_loop(config: LogConfig, rx: Receiver<LogEntry>) {
       continue;
     };
 
-    let line = serde_json::to_string(&entry).unwrap_or_else(|_| "{}".to_string());
-    println!("{line}");
-    let bytes = line.as_bytes();
-    if writer.write_all(bytes).is_ok() && writer.write_all(b"\n").is_ok() {
-      written += (bytes.len() + 1) as u64;
+    println!("{entry:?}");
+
+    if let Ok(bytes) = encode_record(&entry) {
+      if writer.write_all(&bytes).is_ok() {
+        written += bytes.len() as u64;
+      }
     }
 
     if written >= config.segment_max_bytes {
       let _ = writer.flush();
+      let _ = writer.get_ref().sync_data();
       segment_id += 1;
       writer = open_segment(config.dir.as_path(), segment_id);
       written = 0;
@@ -103,7 +103,7 @@ fn logger_loop(config: LogConfig, rx: Receiver<LogEntry>) {
 }
 
 fn open_segment(dir: &Path, id: u64) -> BufWriter<File> {
-  let path = dir.join(format!("{id:08}.jsonl"));
+  let path = dir.join(format!("{id:08}.rlog"));
   let file = OpenOptions::new()
     .create(true)
     .append(true)
@@ -112,10 +112,28 @@ fn open_segment(dir: &Path, id: u64) -> BufWriter<File> {
       OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/rind-fallback.jsonl")
+        .open("/tmp/rind-fallback.rlog")
         .unwrap_or_else(|err| panic!("failed to open fallback log file: {err}"))
     });
   BufWriter::new(file)
+}
+
+const MAGIC: u32 = 0x524C4F47; // "RLOG"
+
+fn encode_record(entry: &LogEntry) -> Result<Vec<u8>, String> {
+  let cfg = bincode_next::config::standard();
+  let payload = bincode_next::serde::encode_to_vec(entry, cfg).map_err(|e| e.to_string())?;
+  let payload_len = payload.len() as u32;
+  let crc = crc32fast::hash(&payload);
+
+  let total_len = 4 + payload_len + 4;
+  let mut out = Vec::with_capacity(4 + 4 + total_len as usize);
+  out.extend_from_slice(&MAGIC.to_be_bytes());
+  out.extend_from_slice(&total_len.to_be_bytes());
+  out.extend_from_slice(&payload_len.to_be_bytes());
+  out.extend_from_slice(&payload);
+  out.extend_from_slice(&crc.to_be_bytes());
+  Ok(out)
 }
 
 fn now_unix_sec() -> u64 {

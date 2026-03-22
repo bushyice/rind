@@ -32,7 +32,7 @@
 ## Todo
 - [x] **Core Architecture**: Core system architecture
     - [x] Metadata and Models 
-    - [ ] Logger
+    - [x] Logger
     - [x] Errors
     - [x] Runtimes
     - [x] Contexts
@@ -49,7 +49,7 @@
 - [x] **Flow System**: Signal/State definitions and broadcasting.
 - [x] **Payloads**: Typed support for JSON, String, and Binary data.
 - [ ] **Transport Protocols**: Transport protocols.
-    - [ ] `stdio`.
+    - [x] `stdio`.
     - [x] `uds`.
     - [x] `env`.
     - [x] `args`.
@@ -57,17 +57,18 @@
     - [x] Process spawning and killing stuff.
     - [ ] Dependency based startup (`after`).
     - [ ] Restart polcies.
-- [ ] **State Branching**: Many state payloads at once.
-- [ ] **Service Branching**: Service per state branching.
+- [x] **State Branching**: Many state payloads at once.
+- [x] **Service Branching**: Service per state branching.
 - [x] **State Persistence**: Continuity of state across restarts.
 - [x] **Detached Transports/Subscribers**: Independent messaging access for external programs.
 - [ ] **Daemon & CLI**: The cli.
     - [x] Listing stuff.
     - [x] Start/Stop.
     - [ ] States and Signal control(maybe with permissions if those happen).
-- [ ] **State Transcendence**: Auto-activation of states based on dependencies (e.g. `SwayActive` on `UserLoggedIn`).
-- [ ] **Outputs**: Signal/State output collectd from services.
-- [ ] **Piping**: Piping outputs and payloads into other states/signals.
+- [x] **State Transcendence**: Auto-activation of states based on dependencies (e.g. `SwayActive` on `UserLoggedIn`).
+- [ ] **Piping**: Piping and payloads into other states/signals.
+    - [x] Simple circumstantial piping
+    - [ ] General piping
 - [ ] **Advanced Triggering**: More complex state based service triggers.
 - [ ] **Userspace Isolation**: Isolate units for user and system.
 - [ ] **Plugins**: Cycle-based internal programs with access to `rind`'s internal state.
@@ -154,12 +155,6 @@ However, services can also be branched to satisfy the multiple branches of state
 So imagine if states can depend on other states, but also depending on the branches, wouldn't that be cool? then you could have `NiriActive(tty)` for each `UserActive` state. This way, you could have something like `DankShellActive(niri_pid)` state that depends on `NiriActive`, and you keep going until the whole thing is state-tree based. This allows you to link up whole systems and even make them profile-based.
 
 __PS: I actually spelled it as "transcendance" before i wrote this readme, I searched up midway__
-
-### Outputs: Who said whaaa?
-
-So, let's say you ran a state through a service(when it starts for example), and let's say that service responded, but it doesn't have to put a new state into the pool just to respond, it can do that as an output(through transport protocols). For example when `UserActive` first starts, if the first service that starts is `user-env-manager`, instead of firing `LoadEnv()` it can just respond an output that will be attached to this state branch and can be accesed by every service that runs after `user-env-manager`.
-
-__BTW: Everytime I use `{:?}` I whisper "whaaa" for some fucking reason__
 
 ### Piping: Okay maybe i need to stop?
 

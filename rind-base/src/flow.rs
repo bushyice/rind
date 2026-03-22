@@ -222,12 +222,14 @@ pub struct State {
 
 #[model(
   meta_name = name,
-  meta_fields(name, payload, subscribers, broadcast),
+  meta_fields(name, payload, after, branch, subscribers, broadcast),
   derive_metadata(Debug, Clone)
 )]
 pub struct Signal {
   pub name: String,
   pub payload: FlowPayloadType,
+  pub after: Option<Vec<FlowItem>>,
+  pub branch: Option<Vec<String>>,
   pub subscribers: Option<Vec<TransportMethod>>,
   pub broadcast: Option<Vec<String>>,
 }
@@ -591,6 +593,45 @@ impl FlowRuntime {
     Ok(())
   }
 
+  fn reconcile_signal_transcendence(
+    sm: &StateMachine,
+    source: &FlowInstance,
+    signal_defs: &[(String, Arc<SignalMetadata>)],
+    event_bus: &EventBus,
+    emitted: &mut HashSet<String>,
+  ) {
+    let dependents: Vec<(String, FlowPayload)> = signal_defs
+      .iter()
+      .filter_map(|(full_name, def)| {
+        let after = def.after.as_ref()?;
+        if !after.iter().any(|cond| check_condition(cond, source)) {
+          return None;
+        }
+        let all_active = after
+          .iter()
+          .all(|cond| condition_matches(sm, cond, Some(source), None));
+        if !all_active {
+          return None;
+        }
+        let payload = if let Some(branch_specs) = &def.branch {
+          map_json_payload(branch_specs, &source.payload)?
+        } else {
+          source.payload.clone()
+        };
+        Some((full_name.clone(), payload))
+      })
+      .collect();
+
+    for (signal_name, payload) in dependents {
+      let sig = format!("{signal_name}|{}", payload.to_string_payload());
+      if emitted.contains(&sig) {
+        continue;
+      }
+      emitted.insert(sig);
+      let _ = Self::emit_signal(signal_name, Some(payload), signal_defs, event_bus);
+    }
+  }
+
   fn reconcile_transcendence(
     sm: &mut StateMachine,
     source: &FlowInstance,
@@ -619,7 +660,7 @@ impl FlowRuntime {
 
         let all_active = after
           .iter()
-          .all(|cond| condition_is_active(sm, cond, Some(&payload)));
+          .all(|cond| condition_matches(sm, cond, Some(source), Some(&payload)));
 
         match action {
           FlowAction::Apply if !all_active => None,
@@ -809,7 +850,21 @@ impl Runtime for FlowRuntime {
       "emit_signal" => {
         let name = payload.get::<String>("name")?;
         let flow_payload = FlowPayload::from_json(payload.0.get("payload").cloned());
-        Self::emit_signal(name, Some(flow_payload), &signal_defs, &event_bus)?;
+        Self::emit_signal(name.clone(), Some(flow_payload.clone()), &signal_defs, &event_bus)?;
+        let source = FlowInstance {
+          name,
+          payload: flow_payload,
+          r#type: FlowType::Signal,
+        };
+        let mut emitted = HashSet::new();
+        let sm = sm_shared.read().map_err(CoreError::custom)?;
+        Self::reconcile_signal_transcendence(
+          &sm,
+          &source,
+          &signal_defs,
+          &event_bus,
+          &mut emitted,
+        );
       }
       "bootstrap" => {
         Self::setup_all_state_subscribers(dispatch, &state_defs);
@@ -870,6 +925,20 @@ pub fn condition_is_active(
     }
   }
   false
+}
+
+pub fn condition_matches(
+  sm: &StateMachine,
+  cond: &FlowItem,
+  event: Option<&FlowInstance>,
+  payload: Option<&FlowPayload>,
+) -> bool {
+  if let Some(event) = event {
+    if check_condition(cond, event) && payload_compatible(payload, &event.payload) {
+      return true;
+    }
+  }
+  condition_is_active(sm, cond, payload)
 }
 
 fn auto_payload_for(def: &StateMetadata, _payload: Option<&FlowPayload>) -> FlowPayload {

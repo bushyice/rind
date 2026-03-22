@@ -1,20 +1,21 @@
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
-use std::any::Any;
 use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader};
 use std::ops::{Deref, DerefMut};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Instant;
 
 use rind_core::prelude::*;
 
 use crate::flow::{FlowInstance, FlowItem, FlowPayload, FlowType, StateMachineShared, Trigger};
-use crate::transport::TransportMethod;
-use crate::triggers::{check_condition, payload_compatible};
+use crate::transport::{TransportMessage, TransportMethod, start_stdout_listener};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RunOption {
@@ -222,11 +223,20 @@ impl Service {
 
 pub struct ServiceRuntime {
   event_rx: Option<rind_core::events::Subscription<rind_core::prelude::FlowEvent>>,
+  stdio_tx: Sender<(String, TransportMessage)>,
+  stdio_rx: Receiver<(String, TransportMessage)>,
+  stdio_writers: Mutex<HashMap<String, Vec<Sender<TransportMessage>>>>,
 }
 
 impl Default for ServiceRuntime {
   fn default() -> Self {
-    Self { event_rx: None }
+    let (stdio_tx, stdio_rx) = mpsc::channel();
+    Self {
+      event_rx: None,
+      stdio_tx,
+      stdio_rx,
+      stdio_writers: Mutex::new(HashMap::new()),
+    }
   }
 }
 
@@ -234,6 +244,7 @@ impl ServiceRuntime {
   pub fn spawn_all(
     &self,
     service: &Service,
+    log: &LogHandle,
     branch_key: Option<&str>,
     sm_shared: Option<&StateMachineShared>,
   ) -> anyhow::Result<Vec<ChildInstance>> {
@@ -241,7 +252,7 @@ impl ServiceRuntime {
       .metadata
       .run
       .as_many()
-      .map(|run| self.spawn_process(service, run, branch_key, sm_shared))
+      .map(|run| self.spawn_process(service, run, log, branch_key, sm_shared))
       .collect()
   }
 
@@ -258,7 +269,7 @@ impl ServiceRuntime {
       self.log_fields(service, "start"),
     );
 
-    let instances = self.spawn_all(service, None, sm_shared)?;
+    let instances = self.spawn_all(service, log, None, sm_shared)?;
     service.instances.extend(instances);
     Ok(())
   }
@@ -274,6 +285,7 @@ impl ServiceRuntime {
     &self,
     service: &Service,
     run: &RunOption,
+    log: &LogHandle,
     branch_key: Option<&str>,
     sm_shared: Option<&StateMachineShared>,
   ) -> anyhow::Result<ChildInstance> {
@@ -283,11 +295,36 @@ impl ServiceRuntime {
     if let Some(transport) = &service.metadata.transport {
       if let Some(sm_shared) = sm_shared {
         if let Ok(sm) = sm_shared.read() {
-          let resolve_state = |name: &str| -> Option<String> {
-            sm.states
-              .get(name)
+          let resolve_state = |spec: &str| -> Option<String> {
+            let (state_name, path) = spec
+              .split_once('/')
+              .map(|(name, p)| (name, Some(p)))
+              .unwrap_or((spec, None));
+            let payload = sm
+              .states
+              .get(state_name)
               .and_then(|v| v.first())
-              .map(|x| x.payload.to_string_payload())
+              .map(|x| x.payload.clone())?;
+            let Some(path) = path else {
+              return Some(payload.to_string_payload());
+            };
+
+            match payload {
+              FlowPayload::Json(json) => {
+                let mut cur = json.into_json();
+                for key in path.split('.') {
+                  cur = cur.get(key)?.clone();
+                }
+                if let Some(s) = cur.as_str() {
+                  Some(s.to_string())
+                } else {
+                  Some(cur.to_string())
+                }
+              }
+              FlowPayload::String(s) => Some(s),
+              FlowPayload::Bytes(b) => Some(String::from_utf8(b).unwrap_or_default()),
+              FlowPayload::None(_) => Some(String::new()),
+            }
           };
 
           match transport {
@@ -327,6 +364,7 @@ impl ServiceRuntime {
       let mut cmd = Command::new(&run.exec);
       cmd
         .args(&args)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .pre_exec(|| {
@@ -341,6 +379,31 @@ impl ServiceRuntime {
       }
       cmd.spawn()?
     };
+
+    let mut child = child;
+    if service
+      .metadata
+      .transport
+      .as_ref()
+      .map(is_stdio_transport)
+      .unwrap_or(false)
+    {
+      start_stdout_listener(
+        service.metadata.name.clone(),
+        &mut child,
+        self.stdio_tx.clone(),
+      );
+      let (tx, rx) = mpsc::channel::<TransportMessage>();
+      start_stdin_writer(service.metadata.name.clone(), &mut child, log.clone(), rx);
+      if let Ok(mut writers) = self.stdio_writers.lock() {
+        writers
+          .entry(service.metadata.name.clone())
+          .or_default()
+          .push(tx);
+      }
+    } else {
+      start_service_stream_logs(service.metadata.name.clone(), &mut child, log.clone());
+    }
 
     Ok(ChildInstance::new(
       branch_key.map(|x| x.to_string()).unwrap_or_default(),
@@ -363,6 +426,7 @@ impl ServiceRuntime {
 
     match self.spawn_service(service, log, sm_shared) {
       Ok(_) => {
+        self.register_stdio_transport(service, dispatch);
         if let Some(inst) = service.instances.as_one_mut() {
           inst.state = ServiceState::Active;
           self.run_triggers(service.metadata.on_start.as_ref(), dispatch);
@@ -431,16 +495,21 @@ impl ServiceRuntime {
     dispatch: &RuntimeDispatcher,
   ) -> Option<ServiceExitAction> {
     let idx = service.instances.find_by_pid(pid)?;
-    let inst = &mut service.instances.0[idx];
+    let (manually_stopped, retry_count) = {
+      let inst = &mut service.instances.0[idx];
 
-    if matches!(inst.state, ServiceState::Active | ServiceState::Stopping) {
-      self.run_triggers(service.metadata.on_stop.as_ref(), dispatch);
-    }
+      if matches!(inst.state, ServiceState::Active | ServiceState::Stopping) {
+        self.run_triggers(service.metadata.on_stop.as_ref(), dispatch);
+      }
 
-    inst.state = ServiceState::Exited(code);
-    inst.child = None;
+      inst.state = ServiceState::Exited(code);
+      inst.child = None;
+      (inst.manually_stopped, inst.retry_count)
+    };
 
-    if inst.manually_stopped {
+    self.maybe_unregister_stdio_transport(service, dispatch);
+
+    if manually_stopped {
       return Some(ServiceExitAction::StopDependents);
     }
 
@@ -448,8 +517,10 @@ impl ServiceRuntime {
     match restart_policy {
       Some(RestartPolicy::Bool(true)) => Some(ServiceExitAction::Restart),
       Some(RestartPolicy::OnFailure { max_retries }) => {
-        if code != 0 && *max_retries > 0 && inst.retry_count < *max_retries {
-          inst.retry_count += 1;
+        if code != 0 && *max_retries > 0 && retry_count < *max_retries {
+          if let Some(inst) = service.instances.0.get_mut(idx) {
+            inst.retry_count += 1;
+          }
           Some(ServiceExitAction::Restart)
         } else {
           Some(ServiceExitAction::StopDependents)
@@ -503,6 +574,135 @@ impl ServiceRuntime {
       }
     }
   }
+
+  fn register_stdio_transport(&self, service: &Service, dispatch: &RuntimeDispatcher) {
+    if !service
+      .metadata
+      .transport
+      .as_ref()
+      .map(is_stdio_transport)
+      .unwrap_or(false)
+    {
+      return;
+    }
+    let _ = dispatch.dispatch(
+      "transport",
+      "register_stdio",
+      serde_json::json!({ "endpoint": service.metadata.name }).into(),
+    );
+  }
+
+  fn maybe_unregister_stdio_transport(&self, service: &Service, dispatch: &RuntimeDispatcher) {
+    if !service
+      .metadata
+      .transport
+      .as_ref()
+      .map(is_stdio_transport)
+      .unwrap_or(false)
+    {
+      return;
+    }
+    let active = service.instances.iter().any(|inst| inst.child.is_some());
+    if active {
+      return;
+    }
+    let _ = dispatch.dispatch(
+      "transport",
+      "unregister_stdio",
+      serde_json::json!({ "endpoint": service.metadata.name }).into(),
+    );
+  }
+
+  fn send_stdio_message(&self, endpoint: &str, message: TransportMessage) {
+    let Ok(mut writers) = self.stdio_writers.lock() else {
+      return;
+    };
+    let Some(entries) = writers.get_mut(endpoint) else {
+      return;
+    };
+    entries.retain(|tx| tx.send(message.clone()).is_ok());
+    if entries.is_empty() {
+      writers.remove(endpoint);
+    }
+  }
+
+  fn broadcast_stdio_event(&self, event: &rind_core::prelude::FlowEvent) {
+    let Ok(mut writers) = self.stdio_writers.lock() else {
+      return;
+    };
+
+    let msg = TransportMessage {
+      r#type: match event.flow_type {
+        rind_core::prelude::FlowEventType::State => crate::transport::TransportMessageType::State,
+        rind_core::prelude::FlowEventType::Signal => crate::transport::TransportMessageType::Signal,
+      },
+      payload: Some(FlowPayload::from_json(Some(event.payload.clone()))),
+      branch: None,
+      name: Some(event.name.clone()),
+      action: if event.action == FlowAction::Revert {
+        crate::transport::TransportMessageAction::Remove
+      } else {
+        crate::transport::TransportMessageAction::Set
+      },
+    };
+
+    for entries in writers.values_mut() {
+      entries.retain(|tx| tx.send(msg.clone()).is_ok());
+    }
+    writers.retain(|_, entries| !entries.is_empty());
+  }
+
+  fn stdio_log_entry(
+    &self,
+    service_name: &str,
+    message: &TransportMessage,
+  ) -> (LogLevel, String, HashMap<String, String>) {
+    let mut level = LogLevel::Info;
+    let mut text = String::new();
+    let mut fields = HashMap::new();
+    fields.insert("service".to_string(), service_name.to_string());
+    fields.insert("source".to_string(), "stdio".to_string());
+
+    if let Some(payload) = message.payload.as_ref() {
+      match payload {
+        FlowPayload::String(s) => {
+          text = s.clone();
+        }
+        FlowPayload::Bytes(b) => {
+          text = String::from_utf8(b.clone()).unwrap_or_default();
+        }
+        FlowPayload::Json(json) => {
+          let value = json.into_json();
+          if let Some(s) = value.get("message").and_then(|v| v.as_str()) {
+            text = s.to_string();
+          } else {
+            text = value.to_string();
+          }
+
+          if let Some(lvl) = value.get("level").and_then(|v| v.as_str()) {
+            level = parse_log_level(lvl);
+          }
+
+          if let Some(extra) = value.get("fields").and_then(|v| v.as_object()) {
+            for (k, v) in extra {
+              let val = v
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| v.to_string());
+              fields.insert(k.clone(), val);
+            }
+          }
+        }
+        FlowPayload::None(_) => {}
+      }
+    }
+
+    if text.is_empty() {
+      text = "log".to_string();
+    }
+
+    (level, text, fields)
+  }
 }
 
 enum ServiceExitAction {
@@ -510,10 +710,98 @@ enum ServiceExitAction {
   StopDependents,
 }
 
+fn is_stdio_transport(method: &TransportMethod) -> bool {
+  match method {
+    TransportMethod::Type(id) => id.0 == "stdio",
+    TransportMethod::Options { id, .. } => id.0 == "stdio",
+    TransportMethod::Object { id, .. } => id.0 == "stdio",
+  }
+}
+
+fn parse_log_level(input: &str) -> LogLevel {
+  match input.to_ascii_lowercase().as_str() {
+    "trace" => LogLevel::Trace,
+    "debug" => LogLevel::Debug,
+    "warn" | "warning" => LogLevel::Warn,
+    "error" => LogLevel::Error,
+    "fatal" => LogLevel::Fatal,
+    _ => LogLevel::Info,
+  }
+}
+
+fn start_service_stream_logs(service_name: String, child: &mut Child, log: LogHandle) {
+  if let Some(stdout) = child.stdout.take() {
+    let service_name = service_name.clone();
+    let log = log.clone();
+    std::thread::spawn(move || {
+      let reader = BufReader::new(stdout);
+      for line in reader.lines().map_while(Result::ok) {
+        if line.trim().is_empty() {
+          continue;
+        }
+        let mut fields = HashMap::new();
+        fields.insert("service".to_string(), service_name.clone());
+        fields.insert("stream".to_string(), "stdout".to_string());
+        log.log(LogLevel::Info, "service-output", line, fields);
+      }
+    });
+  }
+
+  if let Some(stderr) = child.stderr.take() {
+    std::thread::spawn(move || {
+      let reader = BufReader::new(stderr);
+      for line in reader.lines().map_while(Result::ok) {
+        if line.trim().is_empty() {
+          continue;
+        }
+        let mut fields = HashMap::new();
+        fields.insert("service".to_string(), service_name.clone());
+        fields.insert("stream".to_string(), "stderr".to_string());
+        log.log(LogLevel::Warn, "service-output", line, fields);
+      }
+    });
+  }
+}
+
+fn start_stdin_writer(
+  service_name: String,
+  child: &mut Child,
+  log: LogHandle,
+  rx: Receiver<TransportMessage>,
+) {
+  let Some(mut stdin) = child.stdin.take() else {
+    return;
+  };
+
+  std::thread::spawn(move || {
+    while let Ok(msg) = rx.recv() {
+      let Ok(frame) = serde_json::to_string(&msg) else {
+        continue;
+      };
+
+      if std::io::Write::write_all(&mut stdin, frame.as_bytes()).is_err()
+        || std::io::Write::write_all(&mut stdin, b"\n").is_err()
+        || std::io::Write::flush(&mut stdin).is_err()
+      {
+        let mut fields = HashMap::new();
+        fields.insert("service".to_string(), service_name.clone());
+        log.log(
+          LogLevel::Warn,
+          "service-transport",
+          "stdio egress failed",
+          fields,
+        );
+        break;
+      }
+    }
+  });
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct EmitTrigger {
   pub service: Option<String>,
   pub state: Option<String>,
+  pub flow_type: Option<FlowType>,
   pub payload: Option<FlowPayload>,
   pub action: FlowAction,
 }
@@ -539,19 +827,51 @@ impl Runtime for ServiceRuntime {
           self.event_rx = Some(event_bus.subscribe::<rind_core::prelude::FlowEvent>());
         }
       }
+      "send_stdio" => {
+        let endpoint = payload.get::<String>("endpoint")?;
+        let message = payload
+          .0
+          .get("message")
+          .cloned()
+          .ok_or_else(|| CoreError::InvalidState("missing `message` for send_stdio".into()))
+          .and_then(|v| {
+            serde_json::from_value::<TransportMessage>(v)
+              .map_err(|e| CoreError::InvalidState(format!("invalid send_stdio message: {e}")))
+          })?;
+        self.send_stdio_message(endpoint.as_str(), message);
+      }
       "drain_events" => {
         if let Some(rx) = &self.event_rx {
-          // TODO: Fix this part
-          // let mut triggered = false;
           while let Some(w) = rx.try_recv() {
-            // triggered = true;
+            self.broadcast_stdio_event(&w);
             let mut trig = EmitTrigger::default();
             trig.state = Some(w.name);
             trig.payload = Some(FlowPayload::from_json(Some(w.payload)));
+            trig.flow_type = Some(match w.flow_type {
+              rind_core::prelude::FlowEventType::State => FlowType::State,
+              rind_core::prelude::FlowEventType::Signal => FlowType::Signal,
+            });
             trig.action = w.action;
             let val: serde_json::Value = trig.into();
             let _ = dispatch.dispatch("services", "evaluate_triggers", val.into());
           }
+        }
+
+        while let Ok((service_name, message)) = self.stdio_rx.try_recv() {
+          if message.name.as_deref() == Some("log") {
+            let (level, message_text, fields) = self.stdio_log_entry(&service_name, &message);
+            log.log(level, "service-transport", message_text, fields);
+            continue;
+          }
+          let _ = dispatch.dispatch(
+            "transport",
+            "ingest",
+            serde_json::json!({
+              "endpoint": service_name,
+              "message": message
+            })
+            .into(),
+          );
         }
       }
       "evaluate_triggers" => {
@@ -563,6 +883,18 @@ impl Runtime for ServiceRuntime {
         };
         let Ok(sm) = sm_lock.read() else {
           return Ok(());
+        };
+        let emit_event = match (
+          emit_trig.state.as_ref(),
+          emit_trig.flow_type,
+          emit_trig.payload.as_ref(),
+        ) {
+          (Some(name), Some(flow_type), Some(payload)) => Some(FlowInstance {
+            name: name.clone(),
+            payload: payload.clone(),
+            r#type: flow_type,
+          }),
+          _ => None,
         };
 
         let services = ctx
@@ -586,45 +918,37 @@ impl Runtime for ServiceRuntime {
                   .stop_on
                   .as_ref()
                   .map(|conds| {
-                    conds
-                      .iter()
-                      .any(|cond| crate::flow::condition_is_active(&sm, cond, None))
+                    conds.iter().any(|cond| {
+                      crate::flow::condition_matches(&sm, cond, emit_event.as_ref(), None)
+                    })
                   })
-                  .unwrap_or(false)
-                  || {
-                    if let Some(ref state) = emit_trig.state
-                      && emit_trig.action == FlowAction::Revert
-                    {
-                      if let Some(ref states) = service.metadata.start_on
-                        && let Some(qry) = states.iter().find(|st| st.name() == state)
-                      {
-                        // TODO: This will work but, instead use the payload matcher to match the payload
-                        // and quit
-                        if let Some(ref p) = emit_trig.payload {
-                          let instance = FlowInstance {
-                            name: state.clone(),
-                            payload: p.clone(),
-                            r#type: FlowType::State,
-                          };
-                          check_condition(qry, &instance)
-                        } else {
-                          true
-                        }
-                        // !crate::flow::condition_is_active(&sm, qry, emit_trig.payload.as_ref())
-                      } else {
-                        false
-                      }
-                    } else {
-                      false
+                  .unwrap_or(false);
+
+                // TODO: Should it ignore stop_on?
+                let auto_stop_on_revert = if service.metadata.stop_on.is_none() {
+                  match (
+                    emit_trig.action,
+                    emit_event.as_ref(),
+                    service.metadata.start_on.as_ref(),
+                  ) {
+                    (FlowAction::Revert, Some(event), Some(start_conds)) => {
+                      start_conds.iter().any(|cond| {
+                        crate::triggers::check_condition(cond, event)
+                          && !crate::flow::condition_is_active(&sm, cond, Some(&event.payload))
+                      })
                     }
-                  };
+                    _ => false,
+                  }
+                } else {
+                  false
+                };
 
                 is_running = service
                   .instances
                   .iter()
                   .any(|i| i.state == ServiceState::Active || i.state == ServiceState::Starting);
 
-                if should_stop && is_running {
+                if (should_stop || auto_stop_on_revert) && is_running {
                   self.stop_service(service, StopMode::Graceful, log, dispatch);
                 }
               }
@@ -637,24 +961,9 @@ impl Runtime for ServiceRuntime {
             .map(|conds| {
               conds
                 .iter()
-                .all(|cond| crate::flow::condition_is_active(&sm, cond, None))
+                .all(|cond| crate::flow::condition_matches(&sm, cond, emit_event.as_ref(), None))
             })
-            .unwrap_or(false)
-            || {
-              if let Some(ref state) = emit_trig.state
-                && emit_trig.action == FlowAction::Apply
-              {
-                if let Some(ref states) = service.start_on
-                  && let Some(qry) = states.iter().find(|st| st.name() == state)
-                {
-                  crate::flow::condition_is_active(&sm, qry, emit_trig.payload.as_ref())
-                } else {
-                  false
-                }
-              } else {
-                false
-              }
-            };
+            .unwrap_or(false);
 
           if should_start && !is_running {
             let ser =
@@ -663,6 +972,52 @@ impl Runtime for ServiceRuntime {
                 .instantiate_one("units", &format!("{unit}@{}", service.name), |x| {
                   Ok(Service::new(x))
                 })?;
+
+            if let Some(branching) = &ser.metadata.branching {
+              if branching.enabled {
+                let branches = sm
+                  .states
+                  .get(&branching.source_state)
+                  .cloned()
+                  .unwrap_or_default();
+
+                let mut started = 0usize;
+                for branch in branches {
+                  let key = if let Some(key_name) = &branching.key {
+                    branch
+                      .payload
+                      .get_json_field(key_name)
+                      .map(|v| v.to_string())
+                      .unwrap_or_default()
+                  } else {
+                    branch.payload.to_string_payload()
+                  };
+                  if key.is_empty() {
+                    continue;
+                  }
+                  if ser.instances.iter().any(|i| i.key == key) {
+                    continue;
+                  }
+                  if let Some(max) = branching.max_instances {
+                    if ser.instances.len() >= max || started >= max {
+                      break;
+                    }
+                  }
+                  if let Ok(instances) = self.spawn_all(ser, log, Some(&key), sm_shared.as_ref()) {
+                    ser.instances.extend(instances);
+                    self.register_stdio_transport(ser, dispatch);
+                    let _ = dispatch.dispatch(
+                      "transport",
+                      "register_stdio",
+                      serde_json::json!({ "endpoint": format!("{unit}@{}", ser.metadata.name) })
+                        .into(),
+                    );
+                    started += 1;
+                  }
+                }
+                continue;
+              }
+            }
 
             self.start_service(ser, log, sm_shared.as_ref(), dispatch);
           }
@@ -675,6 +1030,19 @@ impl Runtime for ServiceRuntime {
           .instantiate_one::<Service>("units", &name, |x| Ok(Service::new(x)))?;
         let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
         self.start_service(service, log, sm_shared.as_ref(), dispatch);
+        if service
+          .metadata
+          .transport
+          .as_ref()
+          .map(is_stdio_transport)
+          .unwrap_or(false)
+        {
+          let _ = dispatch.dispatch(
+            "transport",
+            "register_stdio",
+            serde_json::json!({ "endpoint": name }).into(),
+          );
+        }
       }
       "stop" => {
         let name = payload.get::<String>("name")?;
