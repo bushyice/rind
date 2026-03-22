@@ -37,6 +37,10 @@ impl RuntimePayload {
         CoreError::InvalidState(format!("Missing required field \"{field}\" in dispatch"))
       })
   }
+
+  pub fn r#as<T: serde::de::DeserializeOwned + 'static>(&self) -> Result<T, CoreError> {
+    serde_json::from_value(self.0.clone()).map_err(CoreError::custom)
+  }
 }
 
 impl From<serde_json::Value> for RuntimePayload {

@@ -24,6 +24,26 @@ pub enum FlowItem {
   },
 }
 
+impl FlowItem {
+  pub fn name(&self) -> &String {
+    match self {
+      FlowItem::Simple(s) => s,
+      FlowItem::Detailed {
+        state,
+        signal,
+        target: _,
+        branch: _,
+      } => {
+        if let Some(state) = state {
+          state
+        } else {
+          signal.as_ref().unwrap()
+        }
+      }
+    }
+  }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum FlowMatchOperation {

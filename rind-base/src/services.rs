@@ -1,6 +1,7 @@
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::os::unix::process::CommandExt;
@@ -11,8 +12,9 @@ use std::time::Instant;
 
 use rind_core::prelude::*;
 
-use crate::flow::{FlowItem, StateMachineShared, Trigger};
+use crate::flow::{FlowInstance, FlowItem, FlowPayload, FlowType, StateMachineShared, Trigger};
 use crate::transport::TransportMethod;
+use crate::triggers::{check_condition, payload_compatible};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RunOption {
@@ -508,6 +510,20 @@ enum ServiceExitAction {
   StopDependents,
 }
 
+#[derive(Default, Serialize, Deserialize)]
+pub struct EmitTrigger {
+  pub service: Option<String>,
+  pub state: Option<String>,
+  pub payload: Option<FlowPayload>,
+  pub action: FlowAction,
+}
+
+impl Into<serde_json::Value> for EmitTrigger {
+  fn into(self) -> serde_json::Value {
+    serde_json::to_value(self).unwrap_or_default()
+  }
+}
+
 impl Runtime for ServiceRuntime {
   fn handle(
     &mut self,
@@ -525,20 +541,22 @@ impl Runtime for ServiceRuntime {
       }
       "drain_events" => {
         if let Some(rx) = &self.event_rx {
-          let mut triggered = false;
-          while let Some(_) = rx.try_recv() {
-            triggered = true;
-          }
-          if triggered {
-            let _ = dispatch.dispatch(
-              "services",
-              "evaluate_triggers",
-              serde_json::json!({}).into(),
-            );
+          // TODO: Fix this part
+          // let mut triggered = false;
+          while let Some(w) = rx.try_recv() {
+            // triggered = true;
+            let mut trig = EmitTrigger::default();
+            trig.state = Some(w.name);
+            trig.payload = Some(FlowPayload::from_json(Some(w.payload)));
+            trig.action = w.action;
+            let val: serde_json::Value = trig.into();
+            let _ = dispatch.dispatch("services", "evaluate_triggers", val.into());
           }
         }
       }
       "evaluate_triggers" => {
+        let emit_trig = payload.r#as::<EmitTrigger>().unwrap_or_default();
+
         let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
         let Some(sm_lock) = &sm_shared else {
           return Ok(());
@@ -555,6 +573,7 @@ impl Runtime for ServiceRuntime {
 
         for (unit, service) in services {
           let mut is_running = false;
+
           if let Some(instances) = ctx
             .registry
             .instances
@@ -571,7 +590,34 @@ impl Runtime for ServiceRuntime {
                       .iter()
                       .any(|cond| crate::flow::condition_is_active(&sm, cond, None))
                   })
-                  .unwrap_or(false);
+                  .unwrap_or(false)
+                  || {
+                    if let Some(ref state) = emit_trig.state
+                      && emit_trig.action == FlowAction::Revert
+                    {
+                      if let Some(ref states) = service.metadata.start_on
+                        && let Some(qry) = states.iter().find(|st| st.name() == state)
+                      {
+                        // TODO: This will work but, instead use the payload matcher to match the payload
+                        // and quit
+                        if let Some(ref p) = emit_trig.payload {
+                          let instance = FlowInstance {
+                            name: state.clone(),
+                            payload: p.clone(),
+                            r#type: FlowType::State,
+                          };
+                          check_condition(qry, &instance)
+                        } else {
+                          true
+                        }
+                        // !crate::flow::condition_is_active(&sm, qry, emit_trig.payload.as_ref())
+                      } else {
+                        false
+                      }
+                    } else {
+                      false
+                    }
+                  };
 
                 is_running = service
                   .instances
@@ -593,7 +639,22 @@ impl Runtime for ServiceRuntime {
                 .iter()
                 .all(|cond| crate::flow::condition_is_active(&sm, cond, None))
             })
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || {
+              if let Some(ref state) = emit_trig.state
+                && emit_trig.action == FlowAction::Apply
+              {
+                if let Some(ref states) = service.start_on
+                  && let Some(qry) = states.iter().find(|st| st.name() == state)
+                {
+                  crate::flow::condition_is_active(&sm, qry, emit_trig.payload.as_ref())
+                } else {
+                  false
+                }
+              } else {
+                false
+              }
+            };
 
           if should_start && !is_running {
             let ser =
