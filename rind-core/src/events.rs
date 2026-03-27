@@ -1,3 +1,5 @@
+
+
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -38,6 +40,19 @@ pub enum ServiceEventKind {
   Exited { code: i32 },
   Stopped,
   Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserEvent {
+  pub username: String,
+  pub tty: String,
+  pub kind: UserEventKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UserEventKind {
+  Login,
+  Logout,
 }
 
 struct ErasedChannel {

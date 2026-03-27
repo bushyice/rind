@@ -2,13 +2,14 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use rind_core::prelude::*;
+use rind_core::user::{PamHandle, UserStore};
 
 use crate::flow::{Signal, State, StateMachine, StateMachineShared};
 use crate::mount::Mount;
 use crate::services::Service;
 
 pub const UNITS_META: &str = "units";
-const BUILTIN_UNIT: &str = "__rind";
+const BUILTIN_UNIT: &str = "rind";
 
 pub struct UnitsOrchestrator {
   units_dir: PathBuf,
@@ -44,6 +45,49 @@ impl UnitsOrchestrator {
     for entry in dir {
       let entry = entry.map_err(|e| CoreError::Custom(format!("dir entry error: {e}")))?;
       let path = entry.path();
+
+      if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+        if let Ok(sub_dir) = std::fs::read_dir(&path) {
+          for sub_entry in sub_dir {
+            let sub_entry =
+              sub_entry.map_err(|e| CoreError::Custom(format!("dir entry error: {e}")))?;
+            let sub_path = sub_entry.path();
+            if !sub_entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+              continue;
+            }
+            if sub_path.extension().map_or(true, |ext| ext != "toml") {
+              continue;
+            }
+            let group = format!(
+              "{}/{}",
+              path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown"),
+              sub_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown")
+            );
+            let content = std::fs::read_to_string(&sub_path).map_err(|e| {
+              CoreError::Custom(format!(
+                "failed to read unit file {}: {e}",
+                sub_path.display()
+              ))
+            })?;
+            ctx
+              .metadata
+              .load_group_from_toml(&mut metadata, &group, &content)
+              .map_err(|e| {
+                CoreError::Custom(format!(
+                  "failed to parse unit file {}: {e}",
+                  sub_path.display()
+                ))
+              })?;
+          }
+        }
+        continue;
+      }
 
       if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
         continue;
@@ -83,11 +127,20 @@ impl UnitsOrchestrator {
   }
 
   fn add_builtin_defs(metadata: &mut Metadata) {
-    let builtin_toml = format!(
-      r#"
+    let builtin_toml = r#"
 [[state]]
 name = "active"
 payload = "string"
+
+[[state]]
+name = "_user_session"
+payload = "json"
+branch = ["username"]
+
+[[state]]
+name = "user_auto_login"
+payload = "json"
+branch = ["username"]
 
 [[signal]]
 name = "activate"
@@ -96,10 +149,17 @@ payload = "string"
 [[signal]]
 name = "deactivate"
 payload = "string"
-"#
-    );
 
-    let _ = metadata.from_toml(&builtin_toml, BUILTIN_UNIT);
+[[signal]]
+name = "request_login"
+payload = "json"
+
+[[signal]]
+name = "request_logout"
+payload = "json"
+"#;
+
+    let _ = metadata.from_toml(builtin_toml, BUILTIN_UNIT);
   }
 }
 
@@ -142,48 +202,43 @@ impl Orchestrator for UnitsOrchestrator {
   }
 
   fn build_scope(&mut self, builder: &mut ScopeBuilder) -> Result<(), CoreError> {
+    let user_store = Arc::new(UserStore::load_system().unwrap_or_default());
+    let pam_handle = Arc::new(PamHandle::new(user_store.clone()));
+
     let sm = self.state_machine.clone();
-    let eb = self.event_bus.clone();
     let persistence = self.state_persistence.clone();
     builder.insert_scope("flow", move || {
       let mut scope = RuntimeScope::default();
       scope.insert::<StateMachineShared>(sm.clone());
-      scope.insert::<EventBus>(eb.clone());
       scope.insert::<Arc<RwLock<StatePersistence>>>(persistence.clone());
       scope
     });
 
     let sm = self.state_machine.clone();
-    let eb = self.event_bus.clone();
+    let pam = pam_handle.clone();
     builder.insert_scope("services", move || {
       let mut scope = RuntimeScope::default();
       scope.insert::<StateMachineShared>(sm.clone());
-      scope.insert::<EventBus>(eb.clone());
+      scope.insert::<Arc<PamHandle>>(pam.clone());
       scope
     });
 
     let sm = self.state_machine.clone();
-    let eb = self.event_bus.clone();
     builder.insert_scope("mounts", move || {
       let mut scope = RuntimeScope::default();
       scope.insert::<StateMachineShared>(sm.clone());
-      scope.insert::<EventBus>(eb.clone());
+      scope
+    });
+
+    let pam = pam_handle.clone();
+    builder.insert_scope("ipc", move || {
+      let mut scope = RuntimeScope::default();
+      scope.insert::<Arc<PamHandle>>(pam.clone());
       scope
     });
 
     let eb = self.event_bus.clone();
-    builder.insert_scope("transport", move || {
-      let mut scope = RuntimeScope::default();
-      scope.insert::<EventBus>(eb.clone());
-      scope
-    });
-
-    let eb = self.event_bus.clone();
-    builder.insert_scope("reaper", move || {
-      let mut scope = RuntimeScope::default();
-      scope.insert::<EventBus>(eb.clone());
-      scope
-    });
+    builder.globals(move |scope| scope.insert::<EventBus>(eb.clone()));
 
     Ok(())
   }

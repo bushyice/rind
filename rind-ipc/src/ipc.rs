@@ -24,6 +24,8 @@ pub enum MessageType {
   Ack,
   Nack,
   Error,
+  Login,
+  Logout,
   Unknown,
 }
 
@@ -38,6 +40,19 @@ pub struct MessagePayload {
   pub name: String,
   pub unit_type: UnitType,
   pub force: Option<bool>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct LoginPayload {
+  pub username: String,
+  pub password: Option<String>,
+  pub tty: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct LogoutPayload {
+  pub username: String,
+  pub tty: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

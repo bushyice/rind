@@ -1,3 +1,12 @@
+/*
+ * TODO: Userspace Update
+ * - spaces (user/system), give the uid/gid for services.
+ * - starting active services in start_all
+ * - start_all based on the space
+ * - Fetch isolated user services from units/username
+ * - add working_dir
+ */
+
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
@@ -181,11 +190,91 @@ pub struct BranchingConfig {
   pub max_instances: Option<usize>,
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum ServiceSpace {
+  #[default]
+  System,
+  User,
+  UserSelective {
+    user: String,
+  },
+}
+
+impl serde::Serialize for ServiceSpace {
+  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+  where
+    S: serde::Serializer,
+  {
+    match self {
+      ServiceSpace::System => serializer.serialize_str("system"),
+      ServiceSpace::User => serializer.serialize_str("user"),
+      ServiceSpace::UserSelective { user } => {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(1))?;
+        map.serialize_entry("user", user)?;
+        map.end()
+      }
+    }
+  }
+}
+
+impl<'de> serde::Deserialize<'de> for ServiceSpace {
+  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+  where
+    D: serde::Deserializer<'de>,
+  {
+    use serde::de::{self, MapAccess, Visitor};
+    use std::fmt;
+
+    struct SpaceVisitor;
+
+    impl<'de> Visitor<'de> for SpaceVisitor {
+      type Value = ServiceSpace;
+
+      fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("string 'system' or 'user', or a map with a 'user' key")
+      }
+
+      fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+      where
+        E: de::Error,
+      {
+        match value {
+          "system" => Ok(ServiceSpace::System),
+          "user" => Ok(ServiceSpace::User),
+          _ => Err(de::Error::unknown_variant(value, &["system", "user"])),
+        }
+      }
+
+      fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
+      where
+        M: MapAccess<'de>,
+      {
+        let mut user: Option<String> = None;
+        while let Some(key) = access.next_key::<String>()? {
+          if key == "user" {
+            user = Some(access.next_value()?);
+          } else {
+            let _: serde::de::IgnoredAny = access.next_value()?;
+          }
+        }
+        if let Some(user) = user {
+          Ok(ServiceSpace::UserSelective { user })
+        } else {
+          Err(de::Error::missing_field("user"))
+        }
+      }
+    }
+
+    deserializer.deserialize_any(SpaceVisitor)
+  }
+}
+
 #[model(
   meta_name = name,
   meta_fields(
     name, run, after, branching, restart, start_on, stop_on, on_start, on_stop,
-    transport
+    transport, working_dir, space
   ),
   derive_metadata(Debug)
 )]
@@ -202,6 +291,10 @@ pub struct Service {
   pub on_start: Option<Vec<Trigger>>,
   #[serde(rename = "on-stop")]
   pub on_stop: Option<Vec<Trigger>>,
+  #[serde(rename = "working-dir")]
+  pub working_dir: Option<String>,
+  #[serde(default, rename = "space")]
+  pub space: ServiceSpace,
   pub transport: Option<TransportMethod>,
   pub branching: Option<BranchingConfig>,
   pub restart: Option<RestartPolicy>,
@@ -371,6 +464,42 @@ impl ServiceRuntime {
           libc::setsid();
           Ok(())
         });
+      let user_info = match &service.metadata.space {
+        ServiceSpace::UserSelective { user } => rind_core::user::UserStore::load_system()
+          .ok()
+          .and_then(|store| {
+            store
+              .lookup_by_name(user)
+              .map(|u| (u.uid, u.gid, u.home.clone()))
+          }),
+        ServiceSpace::User => {
+          if let Some(user) = branch_key {
+            rind_core::user::UserStore::load_system()
+              .ok()
+              .and_then(|store| {
+                store
+                  .lookup_by_name(user)
+                  .map(|u| (u.uid, u.gid, u.home.clone()))
+              })
+          } else {
+            None
+          }
+        }
+        ServiceSpace::System => None,
+      };
+
+      if let Some((uid, gid, home)) = user_info {
+        cmd.uid(uid);
+        cmd.gid(gid);
+        if let Some(user) = branch_key.or(match &service.metadata.space {
+          ServiceSpace::UserSelective { user } => Some(user),
+          _ => None,
+        }) {
+          envs.insert("HOME".to_string(), home);
+          envs.insert("USER".to_string(), user.to_string());
+        }
+      }
+
       if let Some(key) = branch_key {
         cmd.env("RIND_BRANCH_KEY", key);
       }
@@ -995,6 +1124,20 @@ impl Runtime for ServiceRuntime {
                   if key.is_empty() {
                     continue;
                   }
+
+                  if let ServiceSpace::User = ser.metadata.space {
+                    let owner_user = if unit.contains('/') {
+                      unit.split('/').next()
+                    } else {
+                      None
+                    };
+                    if let Some(owner) = owner_user {
+                      if key != owner {
+                        continue;
+                      }
+                    }
+                  }
+
                   if ser.instances.iter().any(|i| i.key == key) {
                     continue;
                   }

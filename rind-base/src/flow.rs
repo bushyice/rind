@@ -261,11 +261,15 @@ impl StateMachine {
     self
       .states
       .iter()
-      .map(|(name, states)| {
-        (
+      .filter_map(|(name, states)| {
+        // State impermanence
+        if name.starts_with("_") {
+          return None;
+        }
+        Some((
           name.clone(),
           states.iter().map(StateEntry::from).collect::<Vec<_>>(),
-        )
+        ))
       })
       .collect()
   }
@@ -850,7 +854,12 @@ impl Runtime for FlowRuntime {
       "emit_signal" => {
         let name = payload.get::<String>("name")?;
         let flow_payload = FlowPayload::from_json(payload.0.get("payload").cloned());
-        Self::emit_signal(name.clone(), Some(flow_payload.clone()), &signal_defs, &event_bus)?;
+        Self::emit_signal(
+          name.clone(),
+          Some(flow_payload.clone()),
+          &signal_defs,
+          &event_bus,
+        )?;
         let source = FlowInstance {
           name,
           payload: flow_payload,
@@ -858,13 +867,7 @@ impl Runtime for FlowRuntime {
         };
         let mut emitted = HashSet::new();
         let sm = sm_shared.read().map_err(CoreError::custom)?;
-        Self::reconcile_signal_transcendence(
-          &sm,
-          &source,
-          &signal_defs,
-          &event_bus,
-          &mut emitted,
-        );
+        Self::reconcile_signal_transcendence(&sm, &source, &signal_defs, &event_bus, &mut emitted);
       }
       "bootstrap" => {
         Self::setup_all_state_subscribers(dispatch, &state_defs);

@@ -34,5 +34,6 @@ rind-core = { path = "../rind-core" }
 libc.workspace = true
 
 serde_json.workspace = true
+serde.workspace = true
 
 owo-colors = "4.3.0"

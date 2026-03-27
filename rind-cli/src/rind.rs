@@ -1,3 +1,8 @@
+/*
+ * TODO: Userspace Update
+ * - permissions.
+ */
+
 use clap::{CommandFactory, Parser};
 use owo_colors::OwoColorize;
 use rind_ipc::{
@@ -49,6 +54,21 @@ struct Cli {
 
   #[arg(short = 'e', long, num_args(0..=1), default_missing_value = "")]
   signal: Option<String>,
+
+  #[arg(long)]
+  login: bool,
+
+  #[arg(long)]
+  logout: bool,
+
+  #[arg(long)]
+  user: Option<String>,
+
+  #[arg(long)]
+  password: Option<String>,
+
+  #[arg(long)]
+  tty: Option<String>,
 }
 
 pub fn report_error(msg: &str, err: impl std::fmt::Display) {
@@ -163,31 +183,75 @@ fn main() {
         report_error("list units parse failed", "invalid units payload");
       }
     }
-  } else if cli.start {
-    if let Some(s) = &cli.service {
-      handle!(action!(Start, s.clone(), Service, None));
-    }
-  } else if cli.stop {
-    if let Some(s) = &cli.service {
-      handle!(action!(Stop, s.clone(), Service, Some(cli.force)));
-    }
-  } else if cli.enable {
-    if let Some(s) = &cli.service {
-      handle!(action!(Enable, s.clone(), Service, None));
-    } else if let Some(s) = &cli.mount {
-      handle!(action!(Enable, s.clone(), Mount, None));
-    } else if let Some(s) = &cli.unit {
-      handle!(action!(Enable, s.clone(), Unit, None));
-    }
-  } else if cli.disable {
-    if let Some(s) = &cli.service {
-      handle!(action!(Disable, s.clone(), Service, Some(cli.force)));
-    } else if let Some(s) = &cli.mount {
-      handle!(action!(Disable, s.clone(), Mount, None));
-    } else if let Some(s) = &cli.unit {
-      handle!(action!(Disable, s.clone(), Unit, None));
-    }
   } else {
-    Cli::command().print_help().ok();
+    let uid = unsafe { libc::getuid() };
+    if uid != 0 {
+      report_error(
+        "permission denied",
+        "must be root to perform system actions",
+      );
+      return;
+    }
+
+    if cli.start {
+      if let Some(s) = &cli.service {
+        handle!(action!(Start, s.clone(), Service, None));
+      }
+    } else if cli.stop {
+      if let Some(s) = &cli.service {
+        handle!(action!(Stop, s.clone(), Service, Some(cli.force)));
+      }
+    } else if cli.enable {
+      if let Some(s) = &cli.service {
+        handle!(action!(Enable, s.clone(), Service, None));
+      } else if let Some(s) = &cli.mount {
+        handle!(action!(Enable, s.clone(), Mount, None));
+      } else if let Some(s) = &cli.unit {
+        handle!(action!(Enable, s.clone(), Unit, None));
+      }
+    } else if cli.disable {
+      if let Some(s) = &cli.service {
+        handle!(action!(Disable, s.clone(), Service, Some(cli.force)));
+      } else if let Some(s) = &cli.mount {
+        handle!(action!(Disable, s.clone(), Mount, None));
+      } else if let Some(s) = &cli.unit {
+        handle!(action!(Disable, s.clone(), Unit, None));
+      }
+    } else if cli.login || cli.logout {
+      let username = cli.user.unwrap_or_else(|| "makano".to_string());
+      let tty = cli.tty.unwrap_or_else(|| "tty1".to_string());
+
+      if cli.login {
+        let payload = rind_ipc::LoginPayload {
+          username,
+          password: cli.password.clone(),
+          tty,
+        };
+        let output = match send_message(
+          Message::from_type(MessageType::Login).with(serde_json::to_string(&payload).unwrap()),
+        ) {
+          Ok(m) => m,
+          Err(e) => {
+            report_error("login request failed", e);
+            return;
+          }
+        };
+        handle_message(output);
+      } else {
+        let payload = rind_ipc::LogoutPayload { username, tty };
+        let output = match send_message(
+          Message::from_type(MessageType::Logout).with(serde_json::to_string(&payload).unwrap()),
+        ) {
+          Ok(m) => m,
+          Err(e) => {
+            report_error("logout request failed", e);
+            return;
+          }
+        };
+        handle_message(output);
+      }
+    } else {
+      Cli::command().print_help().ok();
+    }
   }
 }

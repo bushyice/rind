@@ -31,7 +31,10 @@ busybox_applets = [
   "uptime",
   "stat",
   "find",
-  "dmesg"
+  "dmesg",
+  "su",
+  "switch_root",
+  "whoami"
 ]
 
 # Utilities
@@ -69,6 +72,14 @@ run_options = ["console=ttyS0/ root=/dev/vda rw"]
 # Depricated
 nodes = [
   # { path = "/dev/null", node_type = "c", major = 1, minor = 3, mode = 0o666 },
-  # { path = "/dev/tty1", node_type = "c", major = 4, minor = 1, mode = 0o666 },
   # { path = "/dev/console", node_type = "c", major = 5, minor = 1, mode = 0o666 }
 ]
+
+[[profile.main.user]]
+username = "makano"
+password = "a"
+uid = 1000
+gid = 1000
+home = "/home/makano"
+shell = "/bin/sh"
+groups = ["wheel"]

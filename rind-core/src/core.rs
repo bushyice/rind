@@ -5,9 +5,11 @@ pub mod events;
 pub mod logging;
 pub mod metadata;
 pub mod orchestrator;
+pub mod permissions;
 pub mod persistence;
 pub mod registry;
 pub mod runtime;
+pub mod user;
 
 pub mod prelude {
   pub use super::*;
@@ -19,9 +21,11 @@ pub mod prelude {
   pub use logging::*;
   pub use metadata::*;
   pub use orchestrator::*;
+  pub use permissions::*;
   pub use persistence::*;
   pub use registry::*;
   pub use runtime::*;
+  pub use user::*;
 
   pub use rind_macros::*;
 }

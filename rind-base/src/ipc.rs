@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
+
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -9,7 +11,7 @@ use crate::mount::{Mount, is_mounted};
 use crate::services::Service;
 use rind_core::prelude::*;
 use rind_ipc::{
-  Message, MessagePayload, MessageType, UnitType,
+  LoginPayload, LogoutPayload, Message, MessagePayload, MessageType, UnitType,
   ser::{MountSerialized, ServiceSerialized, UnitItemsSerialized, UnitSerialized, serialize_many},
 };
 
@@ -62,6 +64,9 @@ impl Runtime for IpcRuntime {
                 return;
               }
             };
+
+            std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666))
+              .expect("failed to allow permissions");
 
             for stream in listener.incoming() {
               if let Ok(stream) = stream {
@@ -310,6 +315,85 @@ fn handle_ipc_message(
       let force = payload.force.unwrap_or(false);
       let _ = dispatch.dispatch("services", "stop", serde_json::json!({ "name": payload.name, "mode": if force { "force" } else { "graceful" } }).into());
       Message::ack(format!("stopped {}", payload.name))
+    }
+    MessageType::Login => {
+      let Some(payload) = msg.parse_payload::<LoginPayload>().ok() else {
+        return Message::nack("invalid login payload");
+      };
+
+      let pam = ctx
+        .scope
+        .get::<Arc<rind_core::user::PamHandle>>()
+        .expect("PamHandle not in scope");
+
+      let password = payload.password.as_deref().unwrap_or("");
+      if let Err(e) = pam.pam_authenticate(&payload.username, password) {
+        return Message::nack(format!("authentication failed: {e:?}"));
+      }
+
+      if let Err(e) = pam.pam_acct_mgmt(&payload.username) {
+        return Message::nack(format!("account validation failed: {e:?}"));
+      }
+
+      let session = match pam.pam_open_session(&payload.username, &payload.tty) {
+        Ok(s) => s,
+        Err(e) => return Message::nack(format!("session error: {e:?}")),
+      };
+
+      let _ = dispatch.dispatch(
+        "flow",
+        "set_state",
+        serde_json::json!({
+          "name": "rind@_user_session",
+          "payload": {
+            "username": payload.username.clone(),
+            "tty": payload.tty.clone(),
+            "session_id": session.id,
+          }
+        })
+        .into(),
+      );
+
+      Message::ack(format!("logged in successfully as {}", payload.username))
+    }
+    MessageType::Logout => {
+      let Some(payload) = msg.parse_payload::<LogoutPayload>().ok() else {
+        return Message::nack("invalid logout payload");
+      };
+
+      let pam = ctx
+        .scope
+        .get::<Arc<rind_core::user::PamHandle>>()
+        .expect("PamHandle not in scope");
+      let sessions = pam.sessions_for(&payload.username);
+
+      let mut closed = false;
+      for session in sessions {
+        if session.tty == payload.tty {
+          let _ = pam.pam_close_session(session.id);
+          closed = true;
+        }
+      }
+
+      if closed {
+        let _ = dispatch.dispatch(
+          "flow",
+          "remove_state",
+          serde_json::json!({
+            "name": "_user_session",
+            "payload": {
+              "username": payload.username.clone(),
+            }
+          })
+          .into(),
+        );
+        Message::ack(format!("logged out {}", payload.username))
+      } else {
+        Message::nack(format!(
+          "no active session for {} on tty {}",
+          payload.username, payload.tty
+        ))
+      }
     }
     _ => Message::from_type(MessageType::Unknown),
   }

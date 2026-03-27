@@ -25,6 +25,17 @@ struct RinbConfig {
 }
 
 #[derive(Debug, Deserialize)]
+struct UserConfig {
+  username: String,
+  password: Option<String>,
+  uid: u32,
+  gid: u32,
+  home: String,
+  shell: String,
+  groups: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
 struct Profile {
   build_command: Option<String>,
   binary_target: Option<String>,
@@ -38,6 +49,7 @@ struct Profile {
   nodes: Option<Vec<NodeConfig>>,
   busybox_url: Option<String>,
   busybox_applets: Option<Vec<String>>,
+  user: Option<Vec<UserConfig>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -248,6 +260,84 @@ fn builder_i(profile: &Profile, rootfs: &Path) {
   }
 }
 
+fn builder_u(profile: &Profile, rootfs: &Path) {
+  let etc_dir = rootfs.join("etc");
+  fs::create_dir_all(&etc_dir).unwrap();
+
+  let mut passwd = String::new();
+  let mut shadow = String::new();
+  let mut group_map: HashMap<String, (u32, Vec<String>)> = HashMap::new();
+
+  passwd.push_str("root:x:0:0:root:/root:/bin/sh\n");
+  shadow.push_str("root:*:19000:0:99999:7:::\n");
+  group_map.insert("root".into(), (0, vec!["root".into()]));
+  group_map.insert("wheel".into(), (10, vec!["root".into()]));
+
+  if let Some(users) = &profile.user {
+    println!("[*] Generating user databases...");
+
+    for user in users {
+      let home_path = rootfs.join(user.home.trim_start_matches('/'));
+      fs::create_dir_all(&home_path).unwrap();
+
+      unsafe {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+
+        let path_c = CString::new(home_path.as_os_str().as_bytes()).unwrap();
+
+        if libc::chown(path_c.as_ptr(), user.uid, user.gid) != 0 {
+          panic!("failed to chown {}", home_path.display());
+        }
+      }
+
+      passwd.push_str(&format!(
+        "{}:x:{}:{}:Linux User:{}:{}\n",
+        user.username, user.uid, user.gid, user.home, user.shell
+      ));
+
+      let hash = if let Some(pass) = &user.password {
+        sha_crypt::sha512_simple(pass, &sha_crypt::Sha512Params::new(5000).unwrap())
+          .unwrap_or("*".to_string())
+      } else {
+        "*".to_string()
+      };
+
+      shadow.push_str(&format!("{}:{}:19000:0:99999:7:::\n", user.username, hash));
+
+      let primary_group = user.username.clone();
+      group_map
+        .entry(primary_group)
+        .or_insert((user.gid, Vec::new()))
+        .1
+        .push(user.username.clone());
+
+      if let Some(groups) = &user.groups {
+        for g in groups {
+          group_map
+            .entry(g.clone())
+            .or_insert((1000, Vec::new()))
+            .1
+            .push(user.username.clone());
+        }
+      }
+    }
+  }
+
+  let mut group_str = String::new();
+  for (name, (gid, members)) in group_map {
+    group_str.push_str(&format!("{}:x:{}:{}\n", name, gid, members.join(",")));
+  }
+
+  fs::write(etc_dir.join("passwd"), passwd).unwrap();
+  fs::write(etc_dir.join("shadow"), shadow).unwrap();
+  fs::write(etc_dir.join("group"), group_str).unwrap();
+
+  let mut perms = fs::metadata(etc_dir.join("shadow")).unwrap().permissions();
+  perms.set_mode(0o600);
+  fs::set_permissions(etc_dir.join("shadow"), perms).unwrap();
+}
+
 fn builder_d(profile: &Profile, rootfs: &Path) {
   match profile.disk_mode.as_deref().unwrap_or("cpio") {
     "cpio" => {
@@ -320,10 +410,16 @@ fn copy_into_ext4(fs: &mut Ext4Fs, rootfs: &Path, current: &Path) -> std::io::Re
 
     let meta = std::fs::metadata(&path)?;
     let mode = meta.mode() & 0o7777;
+    let uid = meta.uid();
+    let gid = meta.gid();
 
     if path.is_dir() {
-      fs.mkdir(&target_path, 0o755)
+      fs.mkdir(&target_path, mode)
         .expect("Failed to create directory");
+      fs.set_owner(&target_path, uid, gid)
+        .expect("Failed to set directory owner");
+      fs.set_permissions(&target_path, mode)
+        .expect("Failed to set directory mode");
 
       copy_into_ext4(fs, rootfs, &path)?;
     } else {
@@ -334,6 +430,8 @@ fn copy_into_ext4(fs: &mut Ext4Fs, rootfs: &Path, current: &Path) -> std::io::Re
         .expect("Failed to open file");
 
       file.write_all(&bytes).expect("Failed to write file");
+      fs.set_owner(&target_path, uid, gid)
+        .expect("Failed to set file owner");
       fs.set_permissions(&target_path, mode)
         .expect("Failed to set file mode");
     }
@@ -408,11 +506,13 @@ fn handle_command(c: &str, profile: &Profile, rootfs: &Path) {
     "i" => builder_i(profile, &rootfs),
     "d" => builder_d(profile, &rootfs),
     "p" => prepare_rootfs(profile, &rootfs),
+    "u" => builder_u(profile, &rootfs),
     "a" => {
       builder_b(profile);
       builder_i(profile, &rootfs);
       prepare_rootfs(profile, &rootfs);
       builder_n(profile, &rootfs);
+      builder_u(profile, &rootfs);
       builder_d(profile, &rootfs);
     }
     "r" => {
@@ -429,7 +529,7 @@ fn main() {
   let args: Vec<String> = std::env::args().collect();
   if args.len() < 2 {
     eprintln!("Usage: builder <builder_command>");
-    eprintln!("Commands: a, b, d, n, i, p, r");
+    eprintln!("Commands: a, b, d, n, i, p, r, u");
     eprintln!("Examples:");
     eprintln!("build all: a");
     eprintln!("build cargo: b");
@@ -437,6 +537,7 @@ fn main() {
     eprintln!("prepare rootfs: p");
     eprintln!("install urls: i");
     eprintln!("build disk: d");
+    eprintln!("make users: u");
     eprintln!("run: r");
     eprintln!(
       "you can use multiple commands, for example this builds cargo, prepares disk and runs: bdr"

@@ -1,7 +1,11 @@
 use std::{
   any::{Any, TypeId},
-  collections::HashMap,
+  collections::{HashMap, HashSet},
+  sync::{Arc, RwLock},
+  time::Instant,
 };
+
+use crate::user::UserRecord;
 
 use crate::registry::InstanceRegistry;
 
@@ -61,6 +65,8 @@ impl RuntimeScope {
 #[derive(Default)]
 pub struct RuntimeScopes {
   scopes: HashMap<RuntimeId, RuntimeScope>,
+  globals: Vec<Box<dyn Fn(&mut RuntimeScope) -> ()>>,
+  globals_applied: HashSet<RuntimeId>,
 }
 
 impl RuntimeScopes {
@@ -84,6 +90,19 @@ impl RuntimeScopes {
     self.scopes.remove(&RuntimeId::from(runtime_id))
   }
 
+  pub fn take_or_build_scope(&mut self, runtime_id: impl Into<RuntimeId>) -> RuntimeScope {
+    let runtime_id = runtime_id.into();
+    let mut scope = self.scopes.remove(&runtime_id).unwrap_or_default();
+
+    if self.globals_applied.insert(runtime_id) {
+      for global in &self.globals {
+        global(&mut scope);
+      }
+    }
+
+    scope
+  }
+
   pub fn put_scope(&mut self, runtime_id: impl Into<RuntimeId>, scope: RuntimeScope) {
     self.scopes.insert(runtime_id.into(), scope);
   }
@@ -91,6 +110,12 @@ impl RuntimeScopes {
   pub fn insert_scope(&mut self, runtime_id: impl Into<RuntimeId>, scope: RuntimeScope) {
     let runtime_id = runtime_id.into();
     self.scopes.entry(runtime_id).or_default().extend(scope);
+  }
+
+  pub fn insert_globals(&self, scope: &mut RuntimeScope) {
+    for global in self.globals.iter() {
+      global(scope);
+    }
   }
 }
 
@@ -111,6 +136,10 @@ impl ScopeBuilder {
     self.scopes
   }
 
+  pub fn globals(&mut self, definer: impl Fn(&mut RuntimeScope) + 'static) {
+    self.scopes.globals.push(Box::new(definer));
+  }
+
   pub fn insert_scope(
     &mut self,
     runtime_id: impl Into<RuntimeId>,
@@ -120,10 +149,55 @@ impl ScopeBuilder {
   }
 }
 
+#[derive(Debug, Clone)]
+pub struct UserContext {
+  pub record: UserRecord,
+  pub groups: Vec<String>,
+}
+
+impl UserContext {
+  pub fn new(record: UserRecord, groups: Vec<String>) -> Self {
+    Self { record, groups }
+  }
+
+  pub fn in_group(&self, group: &str) -> bool {
+    self.groups.iter().any(|g| g == group)
+  }
+
+  pub fn is_root(&self) -> bool {
+    self.record.uid == 0
+  }
+
+  pub fn is_privileged(&self) -> bool {
+    self.is_root() || self.in_group("wheel") || self.in_group("sudo")
+  }
+}
+
+#[derive(Debug, Clone)]
+pub struct UserSession {
+  pub id: u64,
+  pub user: UserContext,
+  pub tty: String,
+  pub started_at: Instant,
+}
+
+pub type UserSessionStore = Arc<RwLock<HashMap<u64, UserSession>>>;
+
+pub fn new_session_store() -> UserSessionStore {
+  Arc::new(RwLock::new(HashMap::new()))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSpace {
+  System,
+  User(u32),
+}
+
 pub struct RuntimeContext<'a> {
   pub runtime_id: &'a str,
   pub scope: &'a mut RuntimeScope,
   pub registry: InstanceRegistry<'a>,
+  pub space: RuntimeSpace,
 }
 
 impl<'a> RuntimeContext<'a> {
@@ -136,6 +210,7 @@ impl<'a> RuntimeContext<'a> {
       runtime_id,
       scope,
       registry,
+      space: RuntimeSpace::System,
     }
   }
 }
@@ -143,6 +218,8 @@ impl<'a> RuntimeContext<'a> {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use std::sync::Arc;
+  use std::sync::atomic::{AtomicUsize, Ordering};
 
   #[derive(Debug, Default, PartialEq, Eq)]
   struct MyType {
@@ -180,5 +257,23 @@ mod tests {
       .expect("typed runtime value from runtime scope should exist");
 
     assert_eq!(*value, MyType { value: 7 });
+  }
+
+  #[test]
+  fn take_or_build_scope_applies_globals_once_per_runtime() {
+    let mut builder = ScopeBuilder::default();
+    let counter = Arc::new(AtomicUsize::new(0));
+    let counter_clone = counter.clone();
+    builder.globals(move |_scope| {
+      counter_clone.fetch_add(1, Ordering::SeqCst);
+    });
+
+    let mut scopes = builder.build();
+    let scope = scopes.take_or_build_scope("svc");
+    scopes.put_scope("svc", scope);
+    let scope = scopes.take_or_build_scope("svc");
+    scopes.put_scope("svc", scope);
+
+    assert_eq!(counter.load(Ordering::SeqCst), 1);
   }
 }

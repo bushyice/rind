@@ -1,3 +1,11 @@
+/*
+ * TODO: Userspace Update
+ * - spaces (user/system), give the uid/gid for services.
+ * - active/inactive services in start_all
+ * - start_all based on the space
+ * - Fetch isolated user services from units/username
+ */
+
 use std::path::PathBuf;
 
 use rind_base::flow::FlowRuntime;
@@ -131,7 +139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .map_err(|e| format!("boot failed: {e}"))?;
 
   loop {
-    let _ = boot.pump_once(&mut metadata, &mut instances, &runtime);
+    let _ = boot.pump_once(&mut metadata, &mut instances, &runtime, None);
     std::thread::sleep(std::time::Duration::from_millis(50));
   }
 }

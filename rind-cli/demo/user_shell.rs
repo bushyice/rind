@@ -1,10 +1,31 @@
+/*
+ * TODO: Userspace Update
+ * - stuff
+ */
+
 use std::fs::OpenOptions;
 use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+
+fn get_user_info(username: &str) -> Option<(u32, u32, String)> {
+  let file = std::fs::read_to_string("/etc/passwd").ok()?;
+  for line in file.lines() {
+    let parts: Vec<&str> = line.split(':').collect();
+    if parts.len() >= 6 && parts[0] == username {
+      let uid = parts[2].parse().ok()?;
+      let gid = parts[3].parse().ok()?;
+      let home = parts[5].to_string();
+      return Some((uid, gid, home));
+    }
+  }
+  None
+}
 
 fn resolve_params() -> (String, String) {
   let raw = std::env::var("RIND_USER_ACTIVE").unwrap_or_default();
   if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+    println!("{v:?}");
     return (
       if let Some(tty) = v.get("tty").and_then(|x| x.as_str()) {
         if tty.starts_with("/dev/") {
@@ -21,7 +42,7 @@ fn resolve_params() -> (String, String) {
       } else {
         "/dev/tty1".to_string()
       },
-      if let Some(username) = v.get("id").and_then(|x| x.as_str()) {
+      if let Some(username) = v.get("username").and_then(|x| x.as_str()) {
         username.to_string()
       } else {
         "unknown".into()
@@ -56,7 +77,15 @@ fn main() {
 
   let _ = unsafe { libc::ioctl(fd, libc::TIOCSCTTY, 0) };
 
-  let mut child = match Command::new("/bin/sh")
+  let mut cmd = Command::new("/bin/sh");
+  if let Some((uid, gid, home)) = get_user_info(&user) {
+    cmd.uid(uid);
+    cmd.gid(gid);
+    cmd.env("HOME", home.clone());
+    cmd.current_dir(home);
+  }
+
+  let mut child = match cmd
     .arg("-i")
     .env("USER", user)
     .stdin(stdin)
