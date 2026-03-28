@@ -1,5 +1,3 @@
-
-
 use std::any::{Any, TypeId};
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -20,6 +18,20 @@ pub struct FlowEvent {
   pub payload: serde_json::Value,
   pub action: FlowAction,
   pub flow_type: FlowEventType,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LoginAction {
+  #[default]
+  Login,
+  Logout,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginEvent {
+  pub session_id: u64,
+  pub uid: u32,
+  pub action: LoginAction,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

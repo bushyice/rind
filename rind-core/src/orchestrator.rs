@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 
-use crate::context::{RuntimeSpace, ScopeBuilder};
+use crate::context::ScopeBuilder;
 use crate::error::CoreError;
 use crate::registry::{InstanceMap, InstanceRegistry, MetadataRegistry};
 use crate::runtime::{Runtime, RuntimeCommand, RuntimeHandle, RuntimePayload};
@@ -11,8 +11,6 @@ pub enum BootCycle {
   Runtime,
   PostRuntime,
   Pump,
-  UserLogin,  //(Option<u32>),
-  UserLogout, //(Option<u32>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -32,7 +30,6 @@ pub struct OrchestratorContext<'a> {
   pub metadata: &'a mut MetadataRegistry,
   pub instances: &'a mut InstanceMap,
   pub runtime: &'a RuntimeHandle,
-  pub space: RuntimeSpace,
 }
 
 impl OrchestratorContext<'_> {

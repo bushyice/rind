@@ -16,15 +16,20 @@ pub struct UnitsOrchestrator {
   state_machine: StateMachineShared,
   state_persistence: Arc<RwLock<StatePersistence>>,
   event_bus: EventBus,
+  users: UserStoreShared,
+  permissions: PermissionStore,
 }
 
 impl UnitsOrchestrator {
   pub fn new(units_dir: impl Into<PathBuf>) -> Self {
+    let users = Arc::new(UserStore::load_system().unwrap_or_default());
     Self {
       units_dir: units_dir.into(),
       state_machine: Arc::new(RwLock::new(StateMachine::default())),
       state_persistence: Arc::new(RwLock::new(StatePersistence::new(state_path()))),
       event_bus: EventBus::new(),
+      permissions: PermissionStore::new(users.clone()),
+      users,
     }
   }
 
@@ -198,36 +203,24 @@ impl Orchestrator for UnitsOrchestrator {
       .write()
       .map_err(CoreError::custom)?
       .load_from_persistence(loaded);
+
     Ok(())
   }
 
   fn build_scope(&mut self, builder: &mut ScopeBuilder) -> Result<(), CoreError> {
-    let user_store = Arc::new(UserStore::load_system().unwrap_or_default());
-    let permissions = PermissionStore::new(user_store.clone());
-    let pam_handle = Arc::new(PamHandle::new(user_store.clone()));
+    let pam_handle = Arc::new(PamHandle::new(self.users.clone()));
 
-    let sm = self.state_machine.clone();
     let persistence = self.state_persistence.clone();
     builder.insert_scope("flow", move || {
       let mut scope = RuntimeScope::default();
-      scope.insert::<StateMachineShared>(sm.clone());
       scope.insert::<Arc<RwLock<StatePersistence>>>(persistence.clone());
       scope
     });
 
-    let sm = self.state_machine.clone();
     let pam = pam_handle.clone();
     builder.insert_scope("services", move || {
       let mut scope = RuntimeScope::default();
-      scope.insert::<StateMachineShared>(sm.clone());
       scope.insert::<Arc<PamHandle>>(pam.clone());
-      scope
-    });
-
-    let sm = self.state_machine.clone();
-    builder.insert_scope("mounts", move || {
-      let mut scope = RuntimeScope::default();
-      scope.insert::<StateMachineShared>(sm.clone());
       scope
     });
 
@@ -245,9 +238,11 @@ impl Orchestrator for UnitsOrchestrator {
     // Strung out like laundry on every line.
     // Why do I run back to you like I don't mind if you fuck up my life?
     let eb = self.event_bus.clone();
-    let permissions = permissions.clone();
+    let permissions = self.permissions.clone();
+    let sm = self.state_machine.clone();
     builder.globals(move |scope| {
       scope.insert::<EventBus>(eb.clone());
+      scope.insert::<StateMachineShared>(sm.clone());
       scope.insert::<PermissionStore>(permissions.clone());
     });
 

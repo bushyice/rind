@@ -7,7 +7,7 @@ use std::{
 use crate::{error::CoreError, user::UserStoreShared};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PermissionId(u16);
+pub struct PermissionId(pub u16);
 
 impl From<u16> for PermissionId {
   fn from(value: u16) -> Self {
@@ -17,7 +17,6 @@ impl From<u16> for PermissionId {
 
 #[derive(Default)]
 pub struct PermissionStoreInner {
-  permissions: HashMap<PermissionId, String>,
   overlay_uid_grants: HashMap<u32, HashSet<u16>>,
   overlay_uid_revokes: HashMap<u32, HashSet<u16>>,
   overlay_gid_grants: HashMap<u32, HashSet<u16>>,
@@ -38,18 +37,19 @@ impl PermissionStore {
     }
   }
 
-  pub fn register(&mut self, name: impl Into<String>, permid: impl Into<PermissionId>) {
-    let permid = permid.into();
-    let mut inner = self.inner.write().expect("permission store lock");
-    inner.permissions.insert(permid, name.into());
-  }
-
   pub fn user_has(&self, uid: u32, perm: PermissionId) -> bool {
+    // should this be?
+    if uid == 0 {
+      return true;
+    }
+
     let inner = self.inner.read().expect("permission store lock");
 
     let Some(user) = self.users.lookup_by_uid(uid) else {
       return false;
     };
+
+    let groups = self.users.groups_for(user);
 
     let revoked = inner
       .overlay_uid_revokes
@@ -66,6 +66,13 @@ impl PermissionStore {
         .get(&uid)
         .map(|x| x.contains(&perm.0))
         .unwrap_or(false)
+      || groups.iter().any(|x| {
+        self
+          .users
+          .group_by_name(x)
+          .map(|x| self.group_has(x.gid, perm))
+          .unwrap_or(false)
+      })
   }
 
   pub fn group_has(&self, gid: u32, perm: PermissionId) -> bool {

@@ -139,7 +139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .map_err(|e| format!("boot failed: {e}"))?;
 
   loop {
-    let _ = boot.pump_once(&mut metadata, &mut instances, &runtime, None);
+    let _ = boot.pump_once(&mut metadata, &mut instances, &runtime);
     std::thread::sleep(std::time::Duration::from_millis(50));
   }
 }

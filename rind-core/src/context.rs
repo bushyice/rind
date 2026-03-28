@@ -187,17 +187,10 @@ pub fn new_session_store() -> UserSessionStore {
   Arc::new(RwLock::new(HashMap::new()))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RuntimeSpace {
-  System,
-  User(u32),
-}
-
 pub struct RuntimeContext<'a> {
   pub runtime_id: &'a str,
   pub scope: &'a mut RuntimeScope,
   pub registry: InstanceRegistry<'a>,
-  pub space: RuntimeSpace,
 }
 
 impl<'a> RuntimeContext<'a> {
@@ -210,7 +203,6 @@ impl<'a> RuntimeContext<'a> {
       runtime_id,
       scope,
       registry,
-      space: RuntimeSpace::System,
     }
   }
 }

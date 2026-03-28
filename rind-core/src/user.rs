@@ -272,6 +272,10 @@ impl UserStore {
     self.groups.iter().find(|g| g.gid == gid)
   }
 
+  pub fn group_by_name(&self, name: &str) -> Option<&GroupEntry> {
+    self.groups.iter().find(|g| g.name == name)
+  }
+
   pub fn shadow_for(&self, username: &str) -> Option<&ShadowEntry> {
     self.shadows.iter().find(|s| s.username == username)
   }

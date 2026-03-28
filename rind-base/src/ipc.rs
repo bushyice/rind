@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 use crate::mount::{Mount, is_mounted};
+use crate::permissions::{PERM_LOGIN, PERM_SYSTEM_SERVICES};
 use crate::services::Service;
 use rind_core::prelude::*;
 use rind_ipc::{
@@ -170,6 +171,13 @@ fn handle_ipc_message(
   dispatch: &RuntimeDispatcher,
   _log: &LogHandle,
 ) -> Message {
+  let pm = ctx
+    .scope
+    .get::<PermissionStore>()
+    .cloned()
+    .unwrap_or_default();
+
+  let event_bus = ctx.scope.get::<EventBus>().cloned().unwrap_or_default();
   match msg.r#type {
     MessageType::List => {
       let Some(payload) = msg.parse_payload::<MessagePayload>().ok() else {
@@ -328,8 +336,7 @@ fn handle_ipc_message(
         return Message::nack("`start payload");
       };
 
-      // Temporary check
-      if msg.from_uid.is_none() || msg.from_uid.unwrap() != 0 {
+      if msg.from_uid.is_none() || !pm.user_has(msg.from_uid.unwrap(), PERM_SYSTEM_SERVICES) {
         return Message::nack("Permission Denied");
       }
 
@@ -345,8 +352,7 @@ fn handle_ipc_message(
         return Message::nack("invalid stop payload");
       };
 
-      // Temporary check
-      if msg.from_uid.is_none() || msg.from_uid.unwrap() != 0 {
+      if msg.from_uid.is_none() || !pm.user_has(msg.from_uid.unwrap(), PERM_SYSTEM_SERVICES) {
         return Message::nack("Permission Denied");
       }
 
@@ -359,8 +365,7 @@ fn handle_ipc_message(
         return Message::nack("invalid login payload");
       };
 
-      // Temporary check
-      if msg.from_uid.is_none() || msg.from_uid.unwrap() != 0 {
+      if msg.from_uid.is_none() || !pm.user_has(msg.from_uid.unwrap(), PERM_LOGIN) {
         return Message::nack("Permission Denied");
       }
 
@@ -368,6 +373,10 @@ fn handle_ipc_message(
         .scope
         .get::<Arc<rind_core::user::PamHandle>>()
         .expect("PamHandle not in scope");
+
+      let Some(user) = pam.store().lookup_by_name(&payload.username) else {
+        return Message::nack("user not found");
+      };
 
       let password = payload.password.as_deref().unwrap_or("");
       if let Err(e) = pam.pam_authenticate(&payload.username, password) {
@@ -382,6 +391,12 @@ fn handle_ipc_message(
         Ok(s) => s,
         Err(e) => return Message::nack(format!("session error: {e:?}")),
       };
+
+      event_bus.emit(LoginEvent {
+        action: LoginAction::Login,
+        session_id: session.id,
+        uid: user.uid,
+      });
 
       let _ = dispatch.dispatch(
         "flow",
@@ -424,14 +439,22 @@ fn handle_ipc_message(
       let sessions = pam.sessions_for(&payload.username);
 
       let mut closed = false;
+      let mut session_id = 0;
       for session in sessions {
         if session.tty == payload.tty {
+          session_id = session.id;
           let _ = pam.pam_close_session(session.id);
           closed = true;
         }
       }
 
       if closed {
+        event_bus.emit(LoginEvent {
+          action: LoginAction::Logout,
+          session_id: session_id,
+          uid: user.uid,
+        });
+
         let _ = dispatch.dispatch(
           "flow",
           "remove_state",

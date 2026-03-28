@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
-use crate::context::{RuntimeContext, RuntimeScopes, RuntimeSpace};
+use crate::context::{RuntimeContext, RuntimeScopes};
 use crate::error::CoreError;
 use crate::logging::{LogHandle, LogLevel};
 use crate::registry::{InstanceMap, InstanceRegistry, MetadataRegistry};
@@ -145,7 +145,6 @@ impl RuntimeHandle {
     &self,
     context_id: usize,
     metadata: &MetadataRegistry,
-    space: RuntimeSpace,
   ) -> Result<(), CoreError> {
     loop {
       let command = {
@@ -206,7 +205,6 @@ impl RuntimeHandle {
 
       let registry = InstanceRegistry::new(metadata, &mut instances);
       let mut ctx = RuntimeContext::new(runtime_id.as_str(), &mut scope, registry);
-      ctx.space = space.clone();
       let dispatch = RuntimeDispatcher::new(self.clone(), cid);
 
       if let Err(err) = runtime.handle(action.as_str(), payload, &mut ctx, &dispatch, &log) {
