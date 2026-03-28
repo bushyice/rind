@@ -10,6 +10,7 @@
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::ops::{Deref, DerefMut};
@@ -472,6 +473,8 @@ impl ServiceRuntime {
               .lookup_by_name(user)
               .map(|u| (u.uid, u.gid, u.home.clone()))
           }),
+        // TODO: this is dumb, i'll replace it with optional branch_key and/or other methods
+        // by connecting to UserLogin boot state
         ServiceSpace::User => {
           if let Some(user) = branch_key {
             rind_core::user::UserStore::load_system()
@@ -560,6 +563,17 @@ impl ServiceRuntime {
           inst.state = ServiceState::Active;
           self.run_triggers(service.metadata.on_start.as_ref(), dispatch);
         }
+
+        let _ = dispatch.dispatch(
+          "services",
+          "reconcile_stacks",
+          json!({
+            "service": service.metadata.name,
+            "id": service.id.0,
+            "action": ServiceEventKind::Started
+          })
+          .into(),
+        );
       }
       Err(e) => {
         let err = format!("Failed to start service \"{}\": {e}", service.metadata.name);
@@ -584,8 +598,14 @@ impl ServiceRuntime {
     mode: StopMode,
     log: &LogHandle,
     dispatch: &RuntimeDispatcher,
+    key: Option<String>,
   ) {
     for inst in service.instances.iter_mut() {
+      if let Some(ref key) = key {
+        if &inst.key != key {
+          continue;
+        }
+      };
       if let Some(child) = inst.child.as_ref() {
         let pgid = Pid::from_raw(-(child.id() as i32));
         let signal = if mode == StopMode::ForceKill {
@@ -607,11 +627,24 @@ impl ServiceRuntime {
 
     let mut fields = self.log_fields(service, "stop");
     fields.insert("mode".to_string(), format!("{mode:?}"));
+    if let Some(ref key) = key {
+      fields.insert("key".to_string(), format!("{key}"));
+    };
     log.log(
       LogLevel::Info,
       "service-runtime",
       "service stopping",
       fields,
+    );
+    let _ = dispatch.dispatch(
+      "services",
+      "reconcile_stacks",
+      json!({
+        "service": service.metadata.name,
+        "id": service.id.0,
+        "action": ServiceEventKind::Stopped
+      })
+      .into(),
     );
   }
 
@@ -673,6 +706,7 @@ impl ServiceRuntime {
       }
     }
   }
+
   fn run_triggers(&self, triggers: Option<&Vec<Trigger>>, dispatch: &RuntimeDispatcher) {
     if let Some(triggers) = triggers {
       for trigger in triggers {
@@ -972,6 +1006,7 @@ impl Runtime for ServiceRuntime {
       "drain_events" => {
         if let Some(rx) = &self.event_rx {
           while let Some(w) = rx.try_recv() {
+            println!("{w:?}");
             self.broadcast_stdio_event(&w);
             let mut trig = EmitTrigger::default();
             trig.state = Some(w.name);
@@ -1005,6 +1040,8 @@ impl Runtime for ServiceRuntime {
       }
       "evaluate_triggers" => {
         let emit_trig = payload.r#as::<EmitTrigger>().unwrap_or_default();
+
+        println!("{:?} {:?}", emit_trig.state, emit_trig.action);
 
         let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
         let Some(sm_lock) = &sm_shared else {
@@ -1042,43 +1079,74 @@ impl Runtime for ServiceRuntime {
           {
             for instance in instances.iter_mut() {
               if let Some(service) = instance.downcast_mut::<Service>() {
-                let should_stop = service
-                  .metadata
-                  .stop_on
-                  .as_ref()
-                  .map(|conds| {
-                    conds.iter().any(|cond| {
-                      crate::flow::condition_matches(&sm, cond, emit_event.as_ref(), None)
-                    })
-                  })
-                  .unwrap_or(false);
-
-                // TODO: Should it ignore stop_on?
-                let auto_stop_on_revert = if service.metadata.stop_on.is_none() {
-                  match (
-                    emit_trig.action,
-                    emit_event.as_ref(),
-                    service.metadata.start_on.as_ref(),
-                  ) {
-                    (FlowAction::Revert, Some(event), Some(start_conds)) => {
-                      start_conds.iter().any(|cond| {
-                        crate::triggers::check_condition(cond, event)
-                          && !crate::flow::condition_is_active(&sm, cond, Some(&event.payload))
-                      })
-                    }
-                    _ => false,
-                  }
-                } else {
-                  false
-                };
-
                 is_running = service
                   .instances
                   .iter()
                   .any(|i| i.state == ServiceState::Active || i.state == ServiceState::Starting);
 
-                if (should_stop || auto_stop_on_revert) && is_running {
-                  self.stop_service(service, StopMode::Graceful, log, dispatch);
+                if let Some(ref branching) = service.metadata.branching {
+                  match (emit_trig.action, emit_event.as_ref(), is_running) {
+                    (FlowAction::Revert, Some(event), true)
+                      if branching.key.is_some()
+                        && branching.enabled == true
+                        && event.name == branching.source_state =>
+                    {
+                      let key = event
+                        .payload
+                        .get_json_field(branching.key.as_ref().unwrap())
+                        .map(|x| x.to_string());
+
+                      let to_stop: Vec<String> = service
+                        .instances
+                        .iter()
+                        .filter_map(|inst| {
+                          if inst.state == ServiceState::Active && key.as_ref() == Some(&inst.key) {
+                            return Some(inst.key.clone());
+                          }
+                          None
+                        })
+                        .collect();
+
+                      for i in to_stop {
+                        self.stop_service(service, StopMode::Graceful, log, dispatch, Some(i));
+                      }
+                    }
+                    _ => {}
+                  }
+                } else {
+                  let should_stop = service
+                    .metadata
+                    .stop_on
+                    .as_ref()
+                    .map(|conds| {
+                      conds.iter().any(|cond| {
+                        crate::flow::condition_matches(&sm, cond, emit_event.as_ref(), None)
+                      })
+                    })
+                    .unwrap_or(false);
+
+                  // TODO: Should it ignore stop_on?
+                  let auto_stop_on_revert = if service.metadata.stop_on.is_none() {
+                    match (
+                      emit_trig.action,
+                      emit_event.as_ref(),
+                      service.metadata.start_on.as_ref(),
+                    ) {
+                      (FlowAction::Revert, Some(event), Some(start_conds)) => {
+                        start_conds.iter().any(|cond| {
+                          crate::triggers::check_condition(cond, event)
+                            && !crate::flow::condition_is_active(&sm, cond, Some(&event.payload))
+                        })
+                      }
+                      _ => false,
+                    }
+                  } else {
+                    false
+                  };
+
+                  if (should_stop || auto_stop_on_revert) && is_running {
+                    self.stop_service(service, StopMode::Graceful, log, dispatch, None);
+                  }
                 }
               }
             }
@@ -1123,19 +1191,6 @@ impl Runtime for ServiceRuntime {
                   };
                   if key.is_empty() {
                     continue;
-                  }
-
-                  if let ServiceSpace::User = ser.metadata.space {
-                    let owner_user = if unit.contains('/') {
-                      unit.split('/').next()
-                    } else {
-                      None
-                    };
-                    if let Some(owner) = owner_user {
-                      if key != owner {
-                        continue;
-                      }
-                    }
                   }
 
                   if ser.instances.iter().any(|i| i.key == key) {
@@ -1199,7 +1254,7 @@ impl Runtime for ServiceRuntime {
         let service = ctx
           .registry
           .instantiate_one::<Service>("units", &name, |x| Ok(Service::new(x)))?;
-        self.stop_service(service, mode, log, dispatch);
+        self.stop_service(service, mode, log, dispatch, None);
       }
       "start_all" => {
         let metadata = ctx
@@ -1268,6 +1323,72 @@ impl Runtime for ServiceRuntime {
           );
         }
       }
+      "reconcile_stacks" => {
+        let service = payload.get::<String>("service")?;
+        let action = payload.get::<ServiceEventKind>("action")?;
+
+        let metadata = ctx
+          .registry
+          .metadata
+          .metadata("units")
+          .ok_or_else(|| CoreError::MetadataNotFound("units".to_string()))?;
+        let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
+
+        let mut dependents: Vec<(String, Arc<ServiceMetadata>)> = Vec::new();
+        for group in metadata.groups() {
+          if let Some(svcs) = ctx.registry.metadata.group_items::<Service>("units", group) {
+            for svc in svcs {
+              if let Some(ref dependencies) = svc.after
+                && dependencies.contains(&service)
+              {
+                dependents.push((format!("{group}@{}", svc.name), svc));
+              }
+            }
+          }
+        }
+
+        // these minefields that i walk through
+        // oooh, what i'd risk to be close to you
+        // ooooooooh, these minefields, keeeping me from you
+        // woooaaah what i'd risk to be close to you
+        // close to youuuuuuuuu ooooh
+        match action {
+          ServiceEventKind::Failed
+          | ServiceEventKind::Stopped
+          | ServiceEventKind::Exited { code: _ } => {
+            for (dependent, _) in dependents {
+              if let Ok(service) = ctx.registry.as_one_mut::<Service>("units", &dependent) {
+                self.stop_service(service, StopMode::Graceful, log, dispatch, None);
+              }
+            }
+          }
+          ServiceEventKind::Started => {
+            for (dependent, svc) in dependents {
+              let should_start = svc.after.as_ref().unwrap().iter().any(|a| {
+                if let Ok(ref svc) = ctx.registry.as_one::<Service>("units", a) {
+                  !svc.instances.is_empty()
+                    && !svc.instances.iter().any(|x| {
+                      x.state == ServiceState::Inactive
+                        || x.state == ServiceState::Stopping
+                        || matches!(x.state, ServiceState::Exited(_))
+                        || matches!(x.state, ServiceState::Error(_))
+                    })
+                } else {
+                  false
+                }
+              });
+
+              if should_start {
+                let service =
+                  ctx
+                    .registry
+                    .instantiate_one::<Service>("units", &dependent, |x| Ok(Service::new(x)))?;
+                self.start_service(service, log, sm_shared.as_ref(), dispatch);
+              }
+            }
+          }
+        }
+      }
       "child_exited" => {
         let pid = payload.get::<i64>("pid")? as i32;
         let code = payload.get::<i64>("code")? as i32;
@@ -1292,7 +1413,18 @@ impl Runtime for ServiceRuntime {
                       let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
                       self.start_service(service, log, sm_shared.as_ref(), dispatch);
                     }
-                    ServiceExitAction::StopDependents => {}
+                    ServiceExitAction::StopDependents => {
+                      let _ = dispatch.dispatch(
+                        "services",
+                        "reconcile_stacks",
+                        json!({
+                          "service": service.metadata.name,
+                          "id": service.id.0,
+                          "action": ServiceEventKind::Exited { code }
+                        })
+                        .into(),
+                      );
+                    }
                   }
                 }
               }

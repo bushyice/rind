@@ -14,8 +14,9 @@ pub enum UnitType {
   Unknown,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
 pub enum MessageType {
+  #[default]
   List,
   Start,
   Enable,
@@ -29,10 +30,13 @@ pub enum MessageType {
   Unknown,
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct Message {
   pub r#type: MessageType,
   pub payload: Option<String>,
+  pub from_uid: Option<u32>,
+  pub from_gid: Option<u32>,
+  pub from_pid: Option<i32>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
@@ -65,6 +69,7 @@ impl Message {
     Self {
       r#type: t,
       payload: None,
+      ..Default::default()
     }
   }
 
@@ -116,6 +121,21 @@ impl Message {
       Err("Nothing".into())
     }
   }
+
+  pub fn from_uid(mut self, id: u32) -> Self {
+    self.from_uid = Some(id);
+    self
+  }
+
+  pub fn from_gid(mut self, id: u32) -> Self {
+    self.from_gid = Some(id);
+    self
+  }
+
+  pub fn from_pid(mut self, id: i32) -> Self {
+    self.from_pid = Some(id);
+    self
+  }
 }
 
 impl From<MessageType> for Message {
@@ -157,12 +177,14 @@ mod tests {
     let json_msg = Message {
       r#type: MessageType::List,
       payload: Some(json_payload),
+      ..Default::default()
     };
     assert!(json_msg.parse_payload::<MessagePayload>().ok().is_some());
 
     let invalid = Message {
       r#type: MessageType::List,
       payload: Some("not-json-not-toml".to_string()),
+      ..Default::default()
     };
     assert!(invalid.parse_payload::<MessagePayload>().ok().is_none());
   }

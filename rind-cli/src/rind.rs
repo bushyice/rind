@@ -183,75 +183,66 @@ fn main() {
         report_error("list units parse failed", "invalid units payload");
       }
     }
-  } else {
-    let uid = unsafe { libc::getuid() };
-    if uid != 0 {
-      report_error(
-        "permission denied",
-        "must be root to perform system actions",
-      );
-      return;
+  } else if cli.start {
+    if let Some(s) = &cli.service {
+      handle!(action!(Start, s.clone(), Service, None));
     }
+  } else if cli.stop {
+    if let Some(s) = &cli.service {
+      handle!(action!(Stop, s.clone(), Service, Some(cli.force)));
+    }
+  } else if cli.enable {
+    if let Some(s) = &cli.service {
+      handle!(action!(Enable, s.clone(), Service, None));
+    } else if let Some(s) = &cli.mount {
+      handle!(action!(Enable, s.clone(), Mount, None));
+    } else if let Some(s) = &cli.unit {
+      handle!(action!(Enable, s.clone(), Unit, None));
+    }
+  } else if cli.disable {
+    if let Some(s) = &cli.service {
+      handle!(action!(Disable, s.clone(), Service, Some(cli.force)));
+    } else if let Some(s) = &cli.mount {
+      handle!(action!(Disable, s.clone(), Mount, None));
+    } else if let Some(s) = &cli.unit {
+      handle!(action!(Disable, s.clone(), Unit, None));
+    }
+  } else if cli.login || cli.logout {
+    let username = cli
+      .user
+      .unwrap_or_else(|| std::env::var("USER").expect("unknown user"));
+    let tty = cli.tty.unwrap_or_else(|| "tty1".to_string());
 
-    if cli.start {
-      if let Some(s) = &cli.service {
-        handle!(action!(Start, s.clone(), Service, None));
-      }
-    } else if cli.stop {
-      if let Some(s) = &cli.service {
-        handle!(action!(Stop, s.clone(), Service, Some(cli.force)));
-      }
-    } else if cli.enable {
-      if let Some(s) = &cli.service {
-        handle!(action!(Enable, s.clone(), Service, None));
-      } else if let Some(s) = &cli.mount {
-        handle!(action!(Enable, s.clone(), Mount, None));
-      } else if let Some(s) = &cli.unit {
-        handle!(action!(Enable, s.clone(), Unit, None));
-      }
-    } else if cli.disable {
-      if let Some(s) = &cli.service {
-        handle!(action!(Disable, s.clone(), Service, Some(cli.force)));
-      } else if let Some(s) = &cli.mount {
-        handle!(action!(Disable, s.clone(), Mount, None));
-      } else if let Some(s) = &cli.unit {
-        handle!(action!(Disable, s.clone(), Unit, None));
-      }
-    } else if cli.login || cli.logout {
-      let username = cli.user.unwrap_or_else(|| "makano".to_string());
-      let tty = cli.tty.unwrap_or_else(|| "tty1".to_string());
-
-      if cli.login {
-        let payload = rind_ipc::LoginPayload {
-          username,
-          password: cli.password.clone(),
-          tty,
-        };
-        let output = match send_message(
-          Message::from_type(MessageType::Login).with(serde_json::to_string(&payload).unwrap()),
-        ) {
-          Ok(m) => m,
-          Err(e) => {
-            report_error("login request failed", e);
-            return;
-          }
-        };
-        handle_message(output);
-      } else {
-        let payload = rind_ipc::LogoutPayload { username, tty };
-        let output = match send_message(
-          Message::from_type(MessageType::Logout).with(serde_json::to_string(&payload).unwrap()),
-        ) {
-          Ok(m) => m,
-          Err(e) => {
-            report_error("logout request failed", e);
-            return;
-          }
-        };
-        handle_message(output);
-      }
+    if cli.login {
+      let payload = rind_ipc::LoginPayload {
+        username,
+        password: cli.password.clone(),
+        tty,
+      };
+      let output = match send_message(
+        Message::from_type(MessageType::Login).with(serde_json::to_string(&payload).unwrap()),
+      ) {
+        Ok(m) => m,
+        Err(e) => {
+          report_error("login request failed", e);
+          return;
+        }
+      };
+      handle_message(output);
     } else {
-      Cli::command().print_help().ok();
+      let payload = rind_ipc::LogoutPayload { username, tty };
+      let output = match send_message(
+        Message::from_type(MessageType::Logout).with(serde_json::to_string(&payload).unwrap()),
+      ) {
+        Ok(m) => m,
+        Err(e) => {
+          report_error("logout request failed", e);
+          return;
+        }
+      };
+      handle_message(output);
     }
+  } else {
+    Cli::command().print_help().ok();
   }
 }

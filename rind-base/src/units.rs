@@ -203,6 +203,7 @@ impl Orchestrator for UnitsOrchestrator {
 
   fn build_scope(&mut self, builder: &mut ScopeBuilder) -> Result<(), CoreError> {
     let user_store = Arc::new(UserStore::load_system().unwrap_or_default());
+    let permissions = PermissionStore::new(user_store.clone());
     let pam_handle = Arc::new(PamHandle::new(user_store.clone()));
 
     let sm = self.state_machine.clone();
@@ -237,8 +238,18 @@ impl Orchestrator for UnitsOrchestrator {
       scope
     });
 
+    // Why do all the monsters come out at night?
+    // Why do we sleep where we want to hide?
+    // Why do I run back to you like I don't mind if you fuck up my life?
+    // Why am I a sucker for all your lies?
+    // Strung out like laundry on every line.
+    // Why do I run back to you like I don't mind if you fuck up my life?
     let eb = self.event_bus.clone();
-    builder.globals(move |scope| scope.insert::<EventBus>(eb.clone()));
+    let permissions = permissions.clone();
+    builder.globals(move |scope| {
+      scope.insert::<EventBus>(eb.clone());
+      scope.insert::<PermissionStore>(permissions.clone());
+    });
 
     Ok(())
   }

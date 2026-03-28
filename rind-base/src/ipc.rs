@@ -1,5 +1,7 @@
+use libc::{SO_PEERCRED, SOL_SOCKET, getsockopt, ucred};
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 
@@ -93,7 +95,31 @@ impl Runtime for IpcRuntime {
   }
 }
 
+fn get_peer_cred(stream: &UnixStream) -> std::io::Result<ucred> {
+  let fd = stream.as_raw_fd();
+
+  let mut cred: ucred = unsafe { std::mem::zeroed() };
+  let mut len = std::mem::size_of::<ucred>() as libc::socklen_t;
+
+  let ret = unsafe {
+    getsockopt(
+      fd,
+      SOL_SOCKET,
+      SO_PEERCRED,
+      &mut cred as *mut _ as *mut _,
+      &mut len,
+    )
+  };
+
+  if ret == -1 {
+    return Err(std::io::Error::last_os_error());
+  }
+
+  Ok(cred)
+}
+
 fn handle_client_connection(mut stream: UnixStream, parent_tx: Sender<IpcRequest>) {
+  let cred = get_peer_cred(&stream).expect("failed to get cred");
   loop {
     let mut len_buf = [0u8; 4];
     if stream.read_exact(&mut len_buf).is_err() {
@@ -111,8 +137,8 @@ fn handle_client_connection(mut stream: UnixStream, parent_tx: Sender<IpcRequest
       Err(_) => continue,
     };
 
-    let msg: Message = match serde_json::from_str(&raw) {
-      Ok(m) => m,
+    let msg: Message = match serde_json::from_str::<Message>(&raw) {
+      Ok(m) => m.from_gid(cred.gid).from_uid(cred.uid).from_pid(cred.pid),
       Err(_) => continue,
     };
 
@@ -203,7 +229,9 @@ fn handle_ipc_message(
                   .get(&svc.name)
                   .map_or("Inactive".into(), |x| x.0.clone()),
                 name: svc.name().to_string(),
-                pid: ser_instances.get(&svc.name).map_or(None, |x| Some(x.1[0])),
+                pid: ser_instances
+                  .get(&svc.name)
+                  .map_or(None, |x| if x.1.is_empty() { None } else { Some(x.1[0]) }),
                 restart: svc.restart.as_ref().map_or(false, |_| true),
               })
               .collect(),
@@ -300,6 +328,11 @@ fn handle_ipc_message(
         return Message::nack("`start payload");
       };
 
+      // Temporary check
+      if msg.from_uid.is_none() || msg.from_uid.unwrap() != 0 {
+        return Message::nack("Permission Denied");
+      }
+
       let _ = dispatch.dispatch(
         "services",
         "start",
@@ -312,6 +345,11 @@ fn handle_ipc_message(
         return Message::nack("invalid stop payload");
       };
 
+      // Temporary check
+      if msg.from_uid.is_none() || msg.from_uid.unwrap() != 0 {
+        return Message::nack("Permission Denied");
+      }
+
       let force = payload.force.unwrap_or(false);
       let _ = dispatch.dispatch("services", "stop", serde_json::json!({ "name": payload.name, "mode": if force { "force" } else { "graceful" } }).into());
       Message::ack(format!("stopped {}", payload.name))
@@ -320,6 +358,11 @@ fn handle_ipc_message(
       let Some(payload) = msg.parse_payload::<LoginPayload>().ok() else {
         return Message::nack("invalid login payload");
       };
+
+      // Temporary check
+      if msg.from_uid.is_none() || msg.from_uid.unwrap() != 0 {
+        return Message::nack("Permission Denied");
+      }
 
       let pam = ctx
         .scope
@@ -357,14 +400,27 @@ fn handle_ipc_message(
       Message::ack(format!("logged in successfully as {}", payload.username))
     }
     MessageType::Logout => {
-      let Some(payload) = msg.parse_payload::<LogoutPayload>().ok() else {
+      let Some(mut payload) = msg.parse_payload::<LogoutPayload>().ok() else {
         return Message::nack("invalid logout payload");
       };
+
+      if !payload.tty.starts_with("/dev/") {
+        payload.tty = format!("/dev/{}", payload.tty);
+      }
 
       let pam = ctx
         .scope
         .get::<Arc<rind_core::user::PamHandle>>()
         .expect("PamHandle not in scope");
+
+      let Some(user) = pam.store().lookup_by_name(&payload.username) else {
+        return Message::nack("user not found");
+      };
+
+      if msg.from_uid.is_none() || msg.from_uid.unwrap() != user.uid {
+        return Message::nack("Permission Denied");
+      }
+
       let sessions = pam.sessions_for(&payload.username);
 
       let mut closed = false;
@@ -380,7 +436,7 @@ fn handle_ipc_message(
           "flow",
           "remove_state",
           serde_json::json!({
-            "name": "_user_session",
+            "name": "rind@_user_session",
             "payload": {
               "username": payload.username.clone(),
             }
