@@ -1,0 +1,15 @@
+[package]
+name = "rind-api"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+libloading.workspace = true
+once_cell.workspace = true
+rind-ipc = { path = "../rind-ipc" }
+rind-base = { path = "../rind-base" }
+serde_json.workspace = true
+libc.workspace = true

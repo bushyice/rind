@@ -1006,7 +1006,6 @@ impl Runtime for ServiceRuntime {
       "drain_events" => {
         if let Some(rx) = &self.event_rx {
           while let Some(w) = rx.try_recv() {
-            println!("{w:?}");
             self.broadcast_stdio_event(&w);
             let mut trig = EmitTrigger::default();
             trig.state = Some(w.name);

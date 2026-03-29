@@ -1,0 +1,6 @@
+[package]
+name = "rind-plugins"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

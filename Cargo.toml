@@ -6,7 +6,7 @@ members = [
   # "rind-common",
   "rind-base",
   "rind-init", "rind-macros",
-  "rind-ipc",
+  "rind-ipc", "rind-api", "rind-plugins",
 ]
 resolver = "3"
 
@@ -30,6 +30,7 @@ bincode-next = { version = "*", features = ["serde"] }
 crc32fast = "*"
 fxhash = "*"
 bitflags = "*"
+libloading = "*"
 
 [profile.release]
 lto = true
