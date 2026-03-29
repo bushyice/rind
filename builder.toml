@@ -11,7 +11,12 @@ binary_target = "target/x86_64-unknown-linux-musl/release"
 binaries = ["init", "rind", "example-active", "example-inactive", "user_login", "user_shell"]
 
 # Files to copy over
-files = ["examples/units:/etc/units", "examples/fallback.toml:/etc/fallback.toml", "target/x86_64-unknown-linux-musl/release/librind_api.so:/lib/librind_api.so"]
+files = ["examples/units:/etc/units", "examples/fallback.toml:/etc/fallback.toml"]
+
+# C header files and static libs
+libs = [
+  "rind-api:rind"
+]
 
 # Busybox Setup
 busybox_url = "https://busybox.net/downloads/binaries/1.19.0/busybox-x86_64"

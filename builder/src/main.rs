@@ -40,7 +40,8 @@ struct Profile {
   build_command: Option<String>,
   binary_target: Option<String>,
   binaries: Option<Vec<String>>,
-  files: Option<Vec<String>>,   // "src:dst"
+  files: Option<Vec<String>>, // "src:dst"
+  libs: Option<Vec<String>>,
   install: Option<Vec<String>>, // URLs of .zst packages
   disk_mode: Option<String>,    // "cpio" or "image"
   linux_image: Option<String>,  // e.g., "bzImage:https://..."
@@ -100,7 +101,7 @@ fn extract_zst(zst_path: &Path, target: &Path) {
   let reader = BufReader::new(file);
   let mut decoder = Decoder::new(reader).unwrap();
   let mut archive = Archive::new(&mut decoder);
-  archive.unpack(target).unwrap();
+  let _ = archive.unpack(target);
 }
 
 fn builder_b(profile: &Profile) {
@@ -123,6 +124,8 @@ fn prepare_rootfs(profile: &Profile, rootfs: &Path) {
   fs::create_dir_all(rootfs).unwrap();
   fs::create_dir_all(rootfs.join("bin")).unwrap();
   fs::create_dir_all(rootfs.join("etc")).unwrap();
+  fs::create_dir_all(rootfs.join("usr")).unwrap();
+  fs::create_dir_all(rootfs.join("var")).unwrap();
 
   if let Some(binaries) = &profile.binaries {
     for bin in binaries {
@@ -148,6 +151,45 @@ fn prepare_rootfs(profile: &Profile, rootfs: &Path) {
     }
   }
 
+  if let Some(libs) = &profile.libs {
+    let incl_dst = rootfs.join("usr/include");
+    let lib_dst = rootfs.join("usr/lib");
+    fs::create_dir_all(&incl_dst).unwrap();
+    fs::create_dir_all(&lib_dst).unwrap();
+
+    for lib in libs {
+      let parts: Vec<&str> = lib.splitn(2, ':').collect();
+      if parts.len() != 2 {
+        eprintln!("Invalid library mapping: {}", lib);
+        continue;
+      }
+      let libname = format!("lib{}.a", parts[0].replace("-", "_"));
+      let src = Path::new(
+        &profile
+          .binary_target
+          .clone()
+          .unwrap_or("target/x86_64-unknown-linux-musl/release".to_string()),
+      )
+      .join(libname.clone());
+      let dst = lib_dst.join(libname);
+
+      if !dst.exists()
+        || fs::metadata(&src).unwrap().modified().unwrap()
+          > fs::metadata(&dst).unwrap().modified().unwrap()
+      {
+        println!("[*] Updating library: {}", lib);
+
+        fs::copy(&src, &dst).unwrap();
+
+        cbindgen::Builder::new()
+          .with_crate(parts[0])
+          .generate()
+          .expect("Unable to generate bindings")
+          .write_to_file(incl_dst.join(format!("{}.h", parts[1])));
+      }
+    }
+  }
+
   if let Some(files) = &profile.files {
     for mapping in files {
       let parts: Vec<&str> = mapping.splitn(2, ':').collect();
@@ -156,6 +198,10 @@ fn prepare_rootfs(profile: &Profile, rootfs: &Path) {
         continue;
       }
       let src = Path::new(parts[0]);
+      if !src.exists() {
+        eprintln!("File does not exist: {}", mapping);
+        continue;
+      }
       let dst = rootfs.join(parts[1].trim_start_matches('/'));
 
       if !dst.exists()
