@@ -1,20 +1,20 @@
 [[service]]
 name = "uds_echo"
-run.exec = "/bin/example-uds"
+run.exec = "/usr/bin/example-uds"
 run.args = ["--mode", "uds"]
 restart = false
 transport = { id = "uds", options = ["detached=true"] }
 
 [[service]]
 name = "env_consumer"
-run.exec = "/bin/example-active"
+run.exec = "/usr/bin/example-active"
 run.args = ["env-demo"]
 restart = false
 transport = { id = "env", options = ["DEMO_STATE=state:tp_demo@transport_state"] }
 
 [[service]]
 name = "args_consumer"
-run.exec = "/bin/example-active"
+run.exec = "/usr/bin/example-active"
 run.args = ["args-demo"]
 restart = false
 transport = { id = "args", options = ["--from-state", "state:tp_demo@transport_state"] }

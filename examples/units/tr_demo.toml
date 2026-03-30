@@ -1,13 +1,13 @@
 [[service]]
 name = "user_session"
-run.exec = "/bin/example-active"
+run.exec = "/usr/bin/example-active"
 run.args = ["user-session"]
 restart = false
 start-on = [{ state = "tr_demo@user_active" }]
 
 [[service]]
 name = "user_login"
-run.exec = "/bin/user_login"
+run.exec = "/usr/bin/user_login"
 run.args = []
 restart = false
 start-on = [{ state = "tr_demo@login_required" }]
@@ -15,7 +15,7 @@ transport = { id = "env", options = ["RIND_LOGIN_TTY=state:tr_demo@login_require
 
 [[service]]
 name = "user_shell"
-run.exec = "/bin/user_shell"
+run.exec = "/usr/bin/user_shell"
 run.args = []
 restart = true
 start-on = [{ state = "rind@_user_session" }]
@@ -23,7 +23,7 @@ transport = { id = "env", options = ["RIND_USER_ACTIVE=state:rind@_user_session"
 
 [[service]]
 name = "niri"
-run.exec = "/bin/example-active"
+run.exec = "/usr/bin/example-active"
 run.args = ["niri"]
 restart = false
 start-on = [{ state = "tr_demo@niri_active" }]

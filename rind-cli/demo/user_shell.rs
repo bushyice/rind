@@ -3,23 +3,44 @@
  * - stuff
  */
 
+use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 
-fn get_user_info(username: &str) -> Option<(u32, u32, String)> {
+fn get_user_info(username: &str) -> Option<(u32, u32, String, String)> {
   let file = std::fs::read_to_string("/etc/passwd").ok()?;
   for line in file.lines() {
     let parts: Vec<&str> = line.split(':').collect();
-    if parts.len() >= 6 && parts[0] == username {
+    if parts.len() >= 7 && parts[0] == username {
       let uid = parts[2].parse().ok()?;
       let gid = parts[3].parse().ok()?;
       let home = parts[5].to_string();
-      return Some((uid, gid, home));
+      let shell = parts[6].to_string();
+      return Some((uid, gid, home, shell));
     }
   }
   None
+}
+
+fn read_env_file(path: &str) -> HashMap<String, String> {
+  let mut out = HashMap::new();
+  let Ok(content) = std::fs::read_to_string(path) else {
+    return out;
+  };
+
+  for raw in content.lines() {
+    let line = raw.trim();
+    if line.is_empty() || line.starts_with('#') {
+      continue;
+    }
+    if let Some((k, v)) = line.split_once('=') {
+      out.insert(k.trim().to_string(), v.trim().to_string());
+    }
+  }
+
+  out
 }
 
 fn resolve_params() -> (String, String) {
@@ -77,17 +98,44 @@ fn main() {
 
   let _ = unsafe { libc::ioctl(fd, libc::TIOCSCTTY, 0) };
 
-  let mut cmd = Command::new("/bin/sh");
-  if let Some((uid, gid, home)) = get_user_info(&user) {
-    cmd.uid(uid);
-    cmd.gid(gid);
-    cmd.env("HOME", home.clone());
-    cmd.current_dir(home);
+  let mut shell = "/bin/sh".to_string();
+  let mut uid = 0u32;
+  let mut gid = 0u32;
+  let mut home = "/root".to_string();
+
+  if let Some((user_uid, user_gid, user_home, user_shell)) = get_user_info(&user) {
+    uid = user_uid;
+    gid = user_gid;
+    home = user_home;
+    shell = user_shell;
   }
+
+  let mut extra_env = if uid == 0 && user == "root" {
+    read_env_file("/etc/env/root.env")
+  } else {
+    let mut user_env = read_env_file(&format!("/etc/env/users/{user}.env"));
+    user_env.extend(read_env_file("/etc/env/root.env"));
+    println!("{user_env:?}");
+    user_env
+  };
+
+  let mut cmd = Command::new(&shell);
+  cmd.uid(uid);
+  cmd.gid(gid);
+  cmd.current_dir(&home);
 
   let mut child = match cmd
     .arg("-i")
+    .env_clear()
+    .env("HOME", &home)
     .env("USER", user)
+    .env(
+      "PATH",
+      extra_env
+        .remove("PATH")
+        .unwrap_or_else(|| "/usr/bin:/bin".to_string()),
+    )
+    .envs(extra_env.drain())
     .stdin(stdin)
     .stdout(stdout)
     .stderr(stderr)
@@ -95,7 +143,7 @@ fn main() {
   {
     Ok(child) => child,
     Err(err) => {
-      eprintln!("failed to start /bin/sh: {err}");
+      eprintln!("failed to start shell '{}': {err}", shell);
       return;
     }
   };

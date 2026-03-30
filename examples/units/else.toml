@@ -2,7 +2,7 @@
 name = "three"
 start-on = ["my_state"]
 on-start = [{ signal = "my_signal", payload = "hi" }]
-run.exec = "/bin/example-active"
+run.exec = "/usr/bin/example-active"
 run.args = ["arg1", "arg2"]
 restart = false
 transport = ""
@@ -10,7 +10,7 @@ transport = ""
 [[service]]
 name = "four"
 start-on = ["my_signal"]
-run.exec = "/bin/example-inactive"
+run.exec = "/usr/bin/example-inactive"
 run.args = ["arg1", "arg2"]
 restart = true
 

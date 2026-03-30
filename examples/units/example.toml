@@ -1,13 +1,13 @@
 [[service]]
 name = "example-active"
 run = {
-  exec = "/bin/example-active",
+  exec = "/usr/bin/example-active",
   args = ["arg1", "arg2"]
 }
 restart = false
 
 [[service]]
 name = "example-inactive"
-run.exec = "/bin/example-inactive"
+run.exec = "/usr/bin/example-inactive"
 run.args = ["arg1", "arg2"]
 restart = { max_retries = 5 }

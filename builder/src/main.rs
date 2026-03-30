@@ -1,8 +1,9 @@
 /// mostly by: GPT-5 Mini
 use std::{
+  collections::BTreeSet,
   collections::HashMap,
-  fs::{self, File},
-  io::BufReader,
+  fs,
+  io::ErrorKind,
   path::{Path, PathBuf},
   process::{exit, Command},
 };
@@ -12,12 +13,9 @@ use std::os::unix::fs::PermissionsExt;
 
 use ext4_lwext4::{mkfs, Ext4Fs, FileBlockDevice, MkfsOptions, OpenFlags};
 use fs_extra::dir::CopyOptions;
+use nix::sys::stat::{makedev, mknod, Mode, SFlag};
 use reqwest::blocking::get;
 use serde::Deserialize;
-use tar::Archive;
-use zstd::stream::read::Decoder;
-
-use nix::sys::stat::{makedev, mknod, Mode, SFlag};
 
 #[derive(Debug, Deserialize)]
 struct RinbConfig {
@@ -33,16 +31,43 @@ struct UserConfig {
   home: String,
   shell: String,
   groups: Option<Vec<String>>,
+  env: Option<EnvConfig>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum EnvConfig {
+  Map(HashMap<String, String>),
+  List(Vec<String>),
+}
+
+impl EnvConfig {
+  fn to_map(&self) -> HashMap<String, String> {
+    match self {
+      EnvConfig::Map(map) => map.clone(),
+      EnvConfig::List(list) => {
+        let mut map = HashMap::new();
+        let mut iter = list.iter();
+        while let Some(k) = iter.next() {
+          if let Some(v) = iter.next() {
+            map.insert(k.to_string(), v.to_string());
+          }
+        }
+        map
+      }
+    }
+  }
 }
 
 #[derive(Debug, Deserialize)]
 struct Profile {
   build_command: Option<String>,
   binary_target: Option<String>,
+  bins_dir: Option<String>, // "/bin" or "/usr/bin"
   binaries: Option<Vec<String>>,
   files: Option<Vec<String>>, // "src:dst"
   libs: Option<Vec<String>>,
-  install: Option<Vec<String>>, // URLs of .zst packages
+  install: Option<Vec<String>>, // "url" or "alias:url"
   disk_mode: Option<String>,    // "cpio" or "image"
   linux_image: Option<String>,  // e.g., "bzImage:https://..."
   run_options: Option<Vec<String>>,
@@ -50,6 +75,10 @@ struct Profile {
   nodes: Option<Vec<NodeConfig>>,
   busybox_url: Option<String>,
   busybox_applets: Option<Vec<String>>,
+  symlinks: Option<Vec<String>>, // "target:link"
+  ldd_bins: Option<Vec<String>>, // absolute binary paths in rootfs
+  #[serde(alias = "root_envs")]
+  root_env: Option<EnvConfig>,
   user: Option<Vec<UserConfig>>,
 }
 
@@ -72,6 +101,21 @@ fn artifact_path() -> PathBuf {
   Path::new(".artifacts").to_path_buf()
 }
 
+fn configured_bins_dir(profile: &Profile) -> &str {
+  profile.bins_dir.as_deref().unwrap_or("/usr/bin")
+}
+
+fn render_env_lines(map: &HashMap<String, String>) -> String {
+  let mut keys: Vec<&String> = map.keys().collect();
+  keys.sort();
+  let mut out = String::new();
+  for k in keys {
+    let v = map.get(k).unwrap();
+    out.push_str(&format!("{k}={v}\n"));
+  }
+  out
+}
+
 fn cached_download(url: &str, name: Option<&str>) -> PathBuf {
   let filename = if let Some(name) = name {
     name
@@ -84,24 +128,263 @@ fn cached_download(url: &str, name: Option<&str>) -> PathBuf {
     return path;
   }
 
-  println!("[*] Downloading: {}", url);
+  println!("[*] Downloading: {} into {}", url, filename);
   fs::create_dir_all(artifact_path()).unwrap();
   let resp = get(url).unwrap().bytes().unwrap();
   fs::write(&path, &resp).unwrap();
   path
 }
 
-fn extract_zst(zst_path: &Path, target: &Path) {
-  println!(
-    "[*] Extracting {} into {}",
-    zst_path.display(),
-    target.display()
+fn parse_install_entry(entry: &str) -> (String, String) {
+  if entry.starts_with("http://") || entry.starts_with("https://") {
+    let alias = entry
+      .split('/')
+      .last()
+      .unwrap_or(entry)
+      .trim_end_matches(".tar.gz")
+      .trim_end_matches(".tgz")
+      .trim_end_matches(".tar.xz")
+      .trim_end_matches(".tar.zst")
+      .trim_end_matches(".pkg.tar.zst")
+      .trim_end_matches(".pkg.tar.xz")
+      .trim_end_matches(".pkg.tar.gz")
+      .trim_end_matches(".tar")
+      .to_string();
+    return (alias, entry.to_string());
+  }
+
+  let Some((alias, url)) = entry.split_once(':') else {
+    panic!("Invalid install entry. Use url or alias:url. Got: {entry}");
+  };
+  if !(url.starts_with("http://") || url.starts_with("https://")) {
+    panic!("Invalid install url in entry: {entry}");
+  }
+  (alias.to_string(), url.to_string())
+}
+
+fn remove_existing(path: &Path) -> std::io::Result<()> {
+  match fs::symlink_metadata(path) {
+    Ok(meta) => {
+      if meta.file_type().is_dir() {
+        fs::remove_dir_all(path)
+      } else {
+        fs::remove_file(path)
+      }
+    }
+    Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+    Err(e) => Err(e),
+  }
+}
+
+fn extract_from_archive(archive: &Path, member: &str, dst: &Path) {
+  let member = member.trim_start_matches('/');
+  let unpack_root = artifact_path().join("unpack");
+  let archive_key = archive
+    .file_name()
+    .unwrap()
+    .to_string_lossy()
+    .replace('/', "_");
+  let unpack_dir = unpack_root.join(&archive_key);
+  let stamp = unpack_dir.join(".unpacked_from");
+
+  let archive_id = format!(
+    "{}:{}",
+    archive.display(),
+    fs::metadata(archive)
+      .and_then(|m| m.modified())
+      .map(|m| format!("{m:?}"))
+      .unwrap_or_default()
   );
-  let file = File::open(zst_path).unwrap();
-  let reader = BufReader::new(file);
-  let mut decoder = Decoder::new(reader).unwrap();
-  let mut archive = Archive::new(&mut decoder);
-  let _ = archive.unpack(target);
+
+  let mut needs_unpack = true;
+  if unpack_dir.exists() {
+    if let Ok(prev) = fs::read_to_string(&stamp) {
+      if prev == archive_id {
+        needs_unpack = false;
+      }
+    }
+  }
+
+  if needs_unpack {
+    remove_existing(&unpack_dir).ok();
+    fs::create_dir_all(&unpack_dir).unwrap();
+
+    let status = Command::new("tar")
+      .arg("-xf")
+      .arg(archive)
+      .arg("-C")
+      .arg(&unpack_dir)
+      .status()
+      .unwrap();
+    if !status.success() {
+      panic!("Failed to unpack archive {}", archive.display());
+    }
+
+    fs::write(&stamp, archive_id).unwrap();
+  }
+
+  let extracted = unpack_dir.join(member);
+  if !extracted.exists() {
+    panic!(
+      "Archive member '{member}' not found in unpacked archive {}",
+      archive.display()
+    );
+  }
+
+  if let Some(parent) = dst.parent() {
+    fs::create_dir_all(parent).unwrap();
+  }
+  remove_existing(dst).ok();
+
+  // Preserve mode/timestamps/symlinks/hardlinks while avoiding ownership failures as non-root.
+  let status = Command::new("cp")
+    .arg("-a")
+    .arg("--no-preserve=ownership")
+    .arg("-T")
+    .arg(&extracted)
+    .arg(dst)
+    .status()
+    .unwrap();
+  if !status.success() {
+    panic!(
+      "Failed to copy extracted member '{}' to {}",
+      member,
+      dst.display()
+    );
+  }
+}
+
+fn apply_symlinks(profile: &Profile, rootfs: &Path) {
+  let Some(symlinks) = &profile.symlinks else {
+    return;
+  };
+
+  for mapping in symlinks {
+    let parts: Vec<&str> = mapping.splitn(2, ':').collect();
+    if parts.len() != 2 {
+      eprintln!("Invalid symlink mapping: {}", mapping);
+      continue;
+    }
+
+    let target = parts[0]; //rootfs.join(parts[0].trim_start_matches('/'));
+    let link = rootfs.join(parts[1].trim_start_matches('/'));
+    if let Some(parent) = link.parent() {
+      fs::create_dir_all(parent).unwrap();
+    }
+
+    if let Err(e) = remove_existing(&link) {
+      eprintln!("Failed to reset existing path {}: {e}", link.display());
+      continue;
+    }
+
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    println!("[*] Symlink: {} -> {}", link.display(), target);
+  }
+}
+
+fn parse_ldd_output(line: &str) -> Option<String> {
+  let trimmed = line.trim();
+  if trimmed.is_empty()
+    || trimmed.starts_with("linux-vdso.so")
+    || trimmed.contains("statically linked")
+    || trimmed.contains("not a dynamic executable")
+    || trimmed.contains("=> not found")
+  {
+    return None;
+  }
+
+  if let Some((_left, right)) = trimmed.split_once("=>") {
+    let rhs = right.trim();
+    if let Some(path) = rhs.split_whitespace().next() {
+      if path.starts_with('/') {
+        return Some(path.to_string());
+      }
+    }
+    return None;
+  }
+
+  if let Some(path) = trimmed.split_whitespace().next() {
+    if path.starts_with('/') {
+      return Some(path.to_string());
+    }
+  }
+
+  None
+}
+
+fn copy_host_path_into_rootfs(src: &Path, rootfs: &Path) {
+  if !src.is_absolute() {
+    return;
+  }
+  let meta = match fs::symlink_metadata(src) {
+    Ok(meta) => meta,
+    Err(_) => return,
+  };
+  let dst = rootfs.join(src.strip_prefix("/").unwrap());
+  if let Some(parent) = dst.parent() {
+    fs::create_dir_all(parent).unwrap();
+  }
+
+  if meta.file_type().is_symlink() {
+    let target = fs::read_link(src).unwrap();
+    remove_existing(&dst).ok();
+    std::os::unix::fs::symlink(&target, &dst).unwrap();
+    let resolved = if target.is_absolute() {
+      target
+    } else {
+      src.parent().unwrap().join(target)
+    };
+    copy_host_path_into_rootfs(&resolved, rootfs);
+    return;
+  }
+
+  let should_copy = !dst.exists()
+    || fs::metadata(src).unwrap().modified().unwrap()
+      > fs::metadata(&dst).unwrap().modified().unwrap();
+  if should_copy {
+    fs::copy(src, &dst).unwrap();
+    let mut perms = fs::metadata(src).unwrap().permissions();
+    perms.set_mode(fs::metadata(src).unwrap().permissions().mode());
+    fs::set_permissions(&dst, perms).unwrap();
+    println!("[*] Copied ldd dep: {} -> {}", src.display(), dst.display());
+  }
+}
+
+fn copy_ldd_dependencies(profile: &Profile, rootfs: &Path) {
+  let Some(bins) = &profile.ldd_bins else {
+    return;
+  };
+
+  let mut deps = BTreeSet::new();
+  for bin in bins {
+    let bin_path = rootfs.join(bin.trim_start_matches('/'));
+    if !bin_path.exists() {
+      eprintln!("[!] ldd target missing in rootfs: {}", bin_path.display());
+      continue;
+    }
+
+    let output = Command::new("ldd").arg(&bin_path).output();
+    let output = match output {
+      Ok(output) => output,
+      Err(e) => {
+        eprintln!("[!] Failed to run ldd on {}: {e}", bin_path.display());
+        continue;
+      }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+    for line in combined.lines() {
+      if let Some(path) = parse_ldd_output(line) {
+        deps.insert(path);
+      }
+    }
+  }
+
+  for dep in deps {
+    copy_host_path_into_rootfs(Path::new(&dep), rootfs);
+  }
 }
 
 fn builder_b(profile: &Profile) {
@@ -122,30 +405,53 @@ fn builder_b(profile: &Profile) {
 /// mostly by me
 fn prepare_rootfs(profile: &Profile, rootfs: &Path) {
   fs::create_dir_all(rootfs).unwrap();
-  fs::create_dir_all(rootfs.join("bin")).unwrap();
   fs::create_dir_all(rootfs.join("etc")).unwrap();
   fs::create_dir_all(rootfs.join("usr")).unwrap();
+  fs::create_dir_all(rootfs.join(configured_bins_dir(profile).trim_start_matches('/'))).unwrap();
   fs::create_dir_all(rootfs.join("var")).unwrap();
 
   if let Some(binaries) = &profile.binaries {
     for bin in binaries {
+      let (bin_name, bin_dst_override): (&str, Option<String>) =
+        if let Some((left, right)) = bin.split_once(':') {
+          let left_trim = left.trim_start_matches('/');
+          if left_trim == "bin" || left_trim == "usr/bin" {
+            (right, Some(format!("/{left_trim}/{right}")))
+          } else {
+            (left, Some(right.to_string()))
+          }
+        } else {
+          (bin.as_str(), None)
+        };
       let src = Path::new(
         &profile
           .binary_target
           .clone()
           .unwrap_or("target/x86_64-unknown-linux-musl/release".to_string()),
       )
-      .join(bin);
-      let dst = if bin == "initd" {
-        rootfs.join(bin)
+      .join(bin_name);
+      let dst = if let Some(abs_path) = bin_dst_override {
+        let abs_path = if abs_path.starts_with('/') {
+          abs_path
+        } else {
+          format!("/{abs_path}")
+        };
+        rootfs.join(abs_path.trim_start_matches('/'))
+      } else if bin_name == "initd" {
+        rootfs.join(bin_name)
       } else {
-        rootfs.join("bin").join(bin)
+        rootfs
+          .join(configured_bins_dir(profile).trim_start_matches('/'))
+          .join(bin_name)
       };
       if !dst.exists()
         || fs::metadata(&src).unwrap().modified().unwrap()
           > fs::metadata(&dst).unwrap().modified().unwrap()
       {
-        println!("[*] Updating binary: {}", bin);
+        println!("[*] Updating binary: {} -> {}", bin_name, dst.display());
+        if let Some(parent) = dst.parent() {
+          fs::create_dir_all(parent).unwrap();
+        }
         fs::copy(&src, &dst).unwrap();
       }
     }
@@ -192,6 +498,10 @@ fn prepare_rootfs(profile: &Profile, rootfs: &Path) {
 
   if let Some(files) = &profile.files {
     for mapping in files {
+      if mapping.starts_with('@') {
+        continue;
+      }
+
       let parts: Vec<&str> = mapping.splitn(2, ':').collect();
       if parts.len() != 2 {
         eprintln!("Invalid file mapping: {}", mapping);
@@ -226,6 +536,9 @@ fn prepare_rootfs(profile: &Profile, rootfs: &Path) {
       }
     }
   }
+
+  apply_symlinks(profile, rootfs);
+  copy_ldd_dependencies(profile, rootfs);
 }
 
 fn builder_n(profile: &Profile, rootfs: &Path) {
@@ -254,10 +567,50 @@ fn builder_n(profile: &Profile, rootfs: &Path) {
 }
 
 fn builder_i(profile: &Profile, rootfs: &Path) {
+  let mut archive_cache: HashMap<String, PathBuf> = HashMap::new();
+
   if let Some(installs) = &profile.install {
-    for url in installs {
-      let archive = cached_download(url, None);
-      extract_zst(&archive, rootfs);
+    for entry in installs {
+      let (alias, url) = parse_install_entry(entry);
+      let source_name = url.split('/').last().unwrap_or(&alias);
+      let cache_name = format!("{alias}__{source_name}");
+      let archive = cached_download(&url, Some(&cache_name));
+      archive_cache.insert(alias, archive);
+    }
+  }
+
+  if let Some(files) = &profile.files {
+    for mapping in files {
+      if !mapping.starts_with('@') {
+        continue;
+      }
+
+      let parts: Vec<&str> = mapping.splitn(3, ':').collect();
+      if parts.len() != 3 {
+        eprintln!(
+          "Invalid archive file mapping: {} (expected @alias:member:/dst)",
+          mapping
+        );
+        continue;
+      }
+
+      let alias = parts[0].trim_start_matches('@');
+      let member = parts[1];
+      let dst = rootfs.join(parts[2].trim_start_matches('/'));
+      let Some(archive) = archive_cache.get(alias) else {
+        eprintln!(
+          "Archive alias not found for mapping '{}': {}",
+          alias, mapping
+        );
+        continue;
+      };
+      println!(
+        "[*] Extracting {} from {} -> {}",
+        member,
+        archive.display(),
+        dst.display()
+      );
+      extract_from_archive(archive, member, &dst);
     }
   }
 
@@ -271,7 +624,7 @@ fn builder_i(profile: &Profile, rootfs: &Path) {
   if let Some(url) = &profile.busybox_url {
     let bb_path = cached_download(url, None);
 
-    let bin_dir = rootfs.join("bin");
+    let bin_dir = rootfs.join(configured_bins_dir(profile).trim_start_matches('/'));
     fs::create_dir_all(&bin_dir).unwrap();
 
     let busybox_dst = bin_dir.join("busybox");
@@ -309,6 +662,9 @@ fn builder_i(profile: &Profile, rootfs: &Path) {
 fn builder_u(profile: &Profile, rootfs: &Path) {
   let etc_dir = rootfs.join("etc");
   fs::create_dir_all(&etc_dir).unwrap();
+  let rind_env_dir = etc_dir.join("env");
+  let users_env_dir = rind_env_dir.join("users");
+  fs::create_dir_all(&users_env_dir).unwrap();
 
   let mut passwd = String::new();
   let mut shadow = String::new();
@@ -318,6 +674,15 @@ fn builder_u(profile: &Profile, rootfs: &Path) {
   shadow.push_str("root:*:19000:0:99999:7:::\n");
   group_map.insert("root".into(), (0, vec!["root".into()]));
   group_map.insert("wheel".into(), (10, vec!["root".into()]));
+
+  if let Some(root_env) = &profile.root_env {
+    let root_env_map = root_env.to_map();
+    fs::write(
+      rind_env_dir.join("root.env"),
+      render_env_lines(&root_env_map),
+    )
+    .unwrap();
+  }
 
   if let Some(users) = &profile.user {
     println!("[*] Generating user databases...");
@@ -366,6 +731,15 @@ fn builder_u(profile: &Profile, rootfs: &Path) {
             .1
             .push(user.username.clone());
         }
+      }
+
+      if let Some(env) = &user.env {
+        let env_map = env.to_map();
+        fs::write(
+          users_env_dir.join(format!("{}.env", user.username)),
+          render_env_lines(&env_map),
+        )
+        .unwrap();
       }
     }
   }
@@ -445,21 +819,37 @@ fn builder_d(profile: &Profile, rootfs: &Path) {
 }
 
 fn copy_into_ext4(fs: &mut Ext4Fs, rootfs: &Path, current: &Path) -> std::io::Result<()> {
-  for entry in fs::read_dir(current)? {
+  let entries = match fs::read_dir(current) {
+    Ok(e) => e,
+    Err(e) => {
+      eprintln!("Failed to read {current:?}: {e}");
+      return Err(e);
+    }
+  };
+  for entry in entries {
     let entry = entry?;
     let path = entry.path();
 
     let rel_path = path.strip_prefix(rootfs).unwrap();
     let target_path = format!("/{}", rel_path.display());
 
-    println!("Copying: {:?}", path);
-
-    let meta = std::fs::metadata(&path)?;
+    let Ok(meta) = std::fs::symlink_metadata(&path) else {
+      println!("Skipping: {:?}", path);
+      continue;
+    };
+    let file_type = meta.file_type();
     let mode = meta.mode() & 0o7777;
     let uid = meta.uid();
     let gid = meta.gid();
 
-    if path.is_dir() {
+    if file_type.is_symlink() {
+      let link_target = std::fs::read_link(&path)?;
+      let link_target = link_target.to_string_lossy().to_string();
+      fs.symlink(&link_target, &target_path)
+        .expect("Failed to create symlink");
+      fs.set_owner(&target_path, uid, gid)
+        .expect("Failed to set symlink owner");
+    } else if file_type.is_dir() {
       fs.mkdir(&target_path, mode)
         .expect("Failed to create directory");
       fs.set_owner(&target_path, uid, gid)
@@ -469,7 +859,36 @@ fn copy_into_ext4(fs: &mut Ext4Fs, rootfs: &Path, current: &Path) -> std::io::Re
 
       copy_into_ext4(fs, rootfs, &path)?;
     } else {
-      let bytes = fs::read(&path)?;
+      let bytes = match fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == ErrorKind::PermissionDenied => {
+          // Some extracted binaries are not readable by the current user.
+          // Temporarily add owner-read to pack them, then restore mode.
+          let original_mode = mode;
+          let tmp_mode = original_mode | 0o400;
+
+          let mut perms = std::fs::metadata(&path)?.permissions();
+          perms.set_mode(tmp_mode);
+          std::fs::set_permissions(&path, perms)?;
+
+          let read_res = fs::read(&path);
+
+          let mut restore = std::fs::metadata(&path)?.permissions();
+          restore.set_mode(original_mode);
+          if let Err(err) = std::fs::set_permissions(&path, restore) {
+            eprintln!(
+              "[!] Warning: failed to restore mode on {}: {err}",
+              path.display()
+            );
+          }
+
+          read_res?
+        }
+        Err(e) => {
+          eprintln!("Failed to read {path:?}: {e}");
+          return Err(e);
+        }
+      };
 
       let mut file = fs
         .open(&target_path, OpenFlags::CREATE | OpenFlags::WRITE)
