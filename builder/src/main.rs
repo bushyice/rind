@@ -758,7 +758,7 @@ fn builder_u(profile: &Profile, rootfs: &Path) {
   fs::set_permissions(etc_dir.join("shadow"), perms).unwrap();
 }
 
-fn builder_d(profile: &Profile, rootfs: &Path) {
+fn builder_d(profile: &Profile, rootfs: &Path, no_overwrite: bool) {
   match profile.disk_mode.as_deref().unwrap_or("cpio") {
     "cpio" => {
       let output = artifact_path().join("rootfs.cpio.gz");
@@ -785,30 +785,84 @@ fn builder_d(profile: &Profile, rootfs: &Path) {
       let output = artifact_path().join("rootfs.img");
       if output.exists() {
         println!("[*] Updating existing disk image");
-        fs::remove_file(&output).unwrap();
+        if !no_overwrite {
+          fs::remove_file(&output).unwrap();
+        }
       }
 
-      let size_bytes = 1024 * 1024 * 1024;
-      println!("[*] Creating ext4 disk image of size {} bytes", size_bytes);
+      if !no_overwrite {
+        let size_bytes = 1024 * 1024 * 1024;
+        println!("[*] Creating ext4 disk image of size {} bytes", size_bytes);
 
-      let device =
-        FileBlockDevice::create(&output, size_bytes).expect("Failed to create block device");
+        let _ =
+          FileBlockDevice::create(&output, size_bytes).expect("Failed to create block device");
 
-      Command::new("mkfs.ext4")
-        .args(&[
-          "-F",
-          "-O",
-          "^64bit,^metadata_csum,^flex_bg,^huge_file,^dir_index,^extent",
-          "-E",
-          "lazy_itable_init=0,lazy_journal_init=0",
-          "-m",
-          "0",
-          output.to_str().unwrap(),
-        ])
-        .status()
-        .unwrap();
-      let device = FileBlockDevice::open(&output).expect("Failed to open image");
-      let mut fs = Ext4Fs::mount(device, false).expect("Failed to mount device");
+        Command::new("mkfs.ext4")
+          .args(&[
+            "-F",
+            "-O",
+            "^64bit,^metadata_csum,^flex_bg,^huge_file,^dir_index,^extent",
+            "-E",
+            "lazy_itable_init=0,lazy_journal_init=0",
+            "-m",
+            "0",
+            output.to_str().unwrap(),
+          ])
+          .status()
+          .unwrap();
+      }
+
+      let mut fs = {
+        // Auto check (because there's no graceful exit)
+        let _ = Command::new("e2fsck")
+          .arg("-p")
+          .arg("-f")
+          .arg(&output)
+          .status();
+
+        let device = FileBlockDevice::open(&output).expect("Failed to open image");
+        let fs = Ext4Fs::mount(device, false).expect("Failed to mount device");
+
+        if fs.is_read_only() {
+          eprintln!(
+            "[!] ext4 image mounted read-only. Trying repair with e2fsck: {}",
+            output.display()
+          );
+          let _ = fs.umount();
+
+          let status = Command::new("e2fsck")
+            .arg("-p")
+            .arg("-f")
+            .arg(&output)
+            .status();
+
+          match status {
+            Ok(s) if s.success() => {
+              let device = FileBlockDevice::open(&output).expect("Failed to reopen image");
+              let remounted = Ext4Fs::mount(device, false).expect("Failed to remount device");
+              if remounted.is_read_only() {
+                panic!(
+                  "image still mounted read-only after fsck: {}. recreate the image with `builder d` (without x).",
+                  output.display()
+                );
+              }
+              remounted
+            }
+            Ok(s) => {
+              panic!("e2fsck failed with status {} for {}", s, output.display());
+            }
+            Err(e) => {
+              panic!(
+                "failed to run e2fsck for {}: {} (install e2fsprogs)",
+                output.display(),
+                e
+              );
+            }
+          }
+        } else {
+          fs
+        }
+      };
 
       copy_into_ext4(&mut fs, rootfs, rootfs).expect("Failed to copy rootfs recursively");
 
@@ -850,20 +904,34 @@ fn copy_into_ext4(fs: &mut Ext4Fs, rootfs: &Path, current: &Path) -> std::io::Re
       fs.set_owner(&target_path, uid, gid)
         .expect("Failed to set symlink owner");
     } else if file_type.is_dir() {
-      fs.mkdir(&target_path, mode)
-        .expect("Failed to create directory");
-      fs.set_owner(&target_path, uid, gid)
-        .expect("Failed to set directory owner");
-      fs.set_permissions(&target_path, mode)
-        .expect("Failed to set directory mode");
+      if !fs.exists(&target_path) {
+        fs.mkdir(&target_path, mode)
+          .expect("Failed to create directory");
+        fs.set_owner(&target_path, uid, gid)
+          .expect("Failed to set directory owner");
+        fs.set_permissions(&target_path, mode)
+          .expect("Failed to set directory mode");
+      }
 
       copy_into_ext4(fs, rootfs, &path)?;
     } else {
+      if fs.exists(&target_path) {
+        let t = fs::metadata(&path)
+          .unwrap()
+          .modified()
+          .unwrap()
+          .duration_since(std::time::UNIX_EPOCH)
+          .unwrap()
+          .as_secs();
+        if t <= fs.metadata(&target_path).unwrap().mtime {
+          continue;
+        }
+        println!("Updating file: {:?}", target_path);
+      }
+
       let bytes = match fs::read(&path) {
         Ok(b) => b,
         Err(e) if e.kind() == ErrorKind::PermissionDenied => {
-          // Some extracted binaries are not readable by the current user.
-          // Temporarily add owner-read to pack them, then restore mode.
           let original_mode = mode;
           let tmp_mode = original_mode | 0o400;
 
@@ -891,7 +959,10 @@ fn copy_into_ext4(fs: &mut Ext4Fs, rootfs: &Path, current: &Path) -> std::io::Re
       };
 
       let mut file = fs
-        .open(&target_path, OpenFlags::CREATE | OpenFlags::WRITE)
+        .open(
+          &target_path,
+          OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+        )
         .expect("Failed to open file");
 
       file.write_all(&bytes).expect("Failed to write file");
@@ -964,12 +1035,12 @@ fn run(profile: &Profile) {
   }
 }
 
-fn handle_command(c: &str, profile: &Profile, rootfs: &Path) {
+fn handle_command(c: &str, profile: &Profile, rootfs: &Path, no_overwrite: bool) {
   match c {
     "b" => builder_b(profile),
     "n" => builder_n(profile, &rootfs),
     "i" => builder_i(profile, &rootfs),
-    "d" => builder_d(profile, &rootfs),
+    "d" => builder_d(profile, &rootfs, no_overwrite),
     "p" => prepare_rootfs(profile, &rootfs),
     "u" => builder_u(profile, &rootfs),
     "a" => {
@@ -978,7 +1049,7 @@ fn handle_command(c: &str, profile: &Profile, rootfs: &Path) {
       prepare_rootfs(profile, &rootfs);
       builder_n(profile, &rootfs);
       builder_u(profile, &rootfs);
-      builder_d(profile, &rootfs);
+      builder_d(profile, &rootfs, no_overwrite);
     }
     "r" => {
       run(profile);
@@ -1016,8 +1087,16 @@ fn main() {
   let profile = config.profile.get("main").unwrap();
   let rootfs = artifact_path().join("rootfs");
   fs::create_dir_all(&rootfs).unwrap();
+  let mut no_overwrite = false;
+
+  if args[1].contains("x") {
+    no_overwrite = true;
+  }
 
   for c in args[1].chars() {
-    handle_command(&c.to_string(), profile, &rootfs)
+    if c == 'x' {
+      continue;
+    }
+    handle_command(&c.to_string(), profile, &rootfs, no_overwrite)
   }
 }

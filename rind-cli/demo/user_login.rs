@@ -3,7 +3,7 @@
  * - stuff
  */
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::thread;
 use std::time::Duration;
@@ -24,12 +24,15 @@ fn tty_path() -> String {
   path
 }
 
-fn prompt_login(tty: &str) -> Option<(String, Option<String>)> {
-  let file = OpenOptions::new().read(true).write(true).open(tty).ok()?;
-  let mut writer = file.try_clone().ok()?;
-  let mut reader = BufReader::new(file);
+fn prompt_login(
+  writer: &mut File,
+  reader: &mut BufReader<File>,
+) -> Option<(String, Option<String>)> {
   let mut user_line = String::new();
   let mut pass_line = String::new();
+
+  let _ = write!(writer, "\x1b[2J\x1b[H");
+  let _ = writer.flush();
 
   if write!(writer, "rind login: ").is_err() || writer.flush().is_err() {
     return None;
@@ -55,7 +58,7 @@ fn prompt_login(tty: &str) -> Option<(String, Option<String>)> {
   }
 }
 
-fn send_login_state(user: &str, pass: Option<String>, tty: &str) {
+fn send_login_state(user: &str, pass: Option<String>, tty: &str, writer: &mut File) -> bool {
   let payload = LoginPayload {
     username: user.to_string(),
     password: pass,
@@ -65,18 +68,41 @@ fn send_login_state(user: &str, pass: Option<String>, tty: &str) {
   let msg = Message::from_type(MessageType::Login).with(serde_json::to_string(&payload).unwrap());
 
   match send_message(msg) {
-    Err(e) => eprintln!("{e}"),
-    Ok(e) => println!("{e:?}"),
+    Err(e) => {
+      let _ = write!(writer, "{e}");
+      let _ = writer.flush();
+      false
+    }
+    Ok(_) => {
+      let _ = write!(writer, "\x1b[2J\x1b[H");
+      let _ = writer.flush();
+      true
+    }
+  }
+}
+
+pub fn prompt_and_login(writer: &mut File, reader: &mut BufReader<File>, tty: String) {
+  let Some((user, pass)) = prompt_login(writer, reader) else {
+    return prompt_and_login(writer, reader, tty.clone());
+  };
+
+  if !send_login_state(user.as_str(), pass, tty.as_str(), writer) {
+    prompt_and_login(writer, reader, tty.clone());
   }
 }
 
 fn main() {
   let tty = tty_path();
 
-  let Some((user, pass)) = prompt_login(tty.as_str()) else {
-    return;
-  };
-  send_login_state(user.as_str(), pass, tty.as_str());
+  let file = OpenOptions::new()
+    .read(true)
+    .write(true)
+    .open(tty.clone())
+    .expect("Failed to open tty");
+  let mut writer = file.try_clone().ok().expect("Failed to open writer");
+  let mut reader = BufReader::new(file);
+
+  prompt_and_login(&mut writer, &mut reader, tty.clone());
 
   loop {
     thread::sleep(Duration::from_secs(5));

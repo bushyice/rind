@@ -19,7 +19,7 @@ binaries = ["init", "rind", "example-active", "example-inactive", "user_login", 
 # - legacy: "bin:name" / "/bin:name" / "usr/bin:name" / "/usr/bin:name"
 
 # Symbolic Links
-symlinks = ["/usr/bin:bin", "/usr/lib:/lib", "/usr/bin/sh:/bin/sh"]
+symlinks = ["/usr/bin:bin", "/usr/lib:/lib"]
 
 # ldd_bins = ["/usr/bin/bash", "/usr/bin/ls"]
 
