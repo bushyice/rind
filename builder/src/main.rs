@@ -489,6 +489,10 @@ fn prepare_rootfs(profile: &Profile, rootfs: &Path) {
 
         cbindgen::Builder::new()
           .with_crate(parts[0])
+          .with_language(cbindgen::Language::C)
+          .with_pragma_once(true)
+          .with_cpp_compat(false)
+          .with_include_guard("RIND_API_H")
           .generate()
           .expect("Unable to generate bindings")
           .write_to_file(incl_dst.join(format!("{}.h", parts[1])));

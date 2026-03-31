@@ -96,7 +96,7 @@ impl Runtime for IpcRuntime {
   }
 }
 
-fn get_peer_cred(stream: &UnixStream) -> std::io::Result<ucred> {
+pub fn get_peer_cred(stream: &UnixStream) -> std::io::Result<ucred> {
   let fd = stream.as_raw_fd();
 
   let mut cred: ucred = unsafe { std::mem::zeroed() };
@@ -412,6 +412,19 @@ fn handle_ipc_message(
         .into(),
       );
 
+      let _ = dispatch.dispatch(
+        "flow",
+        "set_state",
+        serde_json::json!({
+          "name": "rind@user_auto_login",
+          "payload": {
+            "username": payload.username.clone(),
+            "tty": payload.tty.clone()
+          }
+        })
+        .into(),
+      );
+
       Message::ack(format!("logged in successfully as {}", payload.username))
     }
     MessageType::Logout => {
@@ -461,7 +474,19 @@ fn handle_ipc_message(
           serde_json::json!({
             "name": "rind@_user_session",
             "payload": {
-              "username": payload.username.clone(),
+              "session_id": session_id,
+            }
+          })
+          .into(),
+        );
+
+        let _ = dispatch.dispatch(
+          "flow",
+          "remove_state",
+          serde_json::json!({
+            "name": "rind@user_auto_login",
+            "payload": {
+              "tty": payload.tty.clone(),
             }
           })
           .into(),

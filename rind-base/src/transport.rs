@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex};
 
@@ -7,6 +8,7 @@ use rind_core::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::flow::{FlowMatchOperation, FlowPayload};
+use crate::ipc::get_peer_cred;
 
 #[derive(Serialize, Deserialize, Copy, Clone)]
 pub enum TransportMessageType {
@@ -43,15 +45,35 @@ pub enum TransportMethod {
   Options {
     id: TransportProtocolId,
     options: Vec<String>,
+    permissions: Option<Vec<u16>>,
   },
   Object {
     id: TransportProtocolId,
     options: serde_json::Value,
+    permissions: Option<Vec<u16>>,
   },
 }
 
+impl TransportMethod {
+  pub fn get_permissions(&self) -> Option<Vec<u16>> {
+    match self.clone() {
+      TransportMethod::Options {
+        id: _,
+        options: _,
+        permissions,
+      } => permissions,
+      TransportMethod::Object {
+        id: _,
+        options: _,
+        permissions,
+      } => permissions,
+      _ => None,
+    }
+  }
+}
+
 pub trait TransportProtocol: Send + Sync {
-  fn setup(&mut self, endpoint: &str);
+  fn setup(&mut self, endpoint: &str, permissions: Option<Vec<u16>>, pm: Option<PermissionStore>);
   fn send_message(&self, endpoint: &str, msg: &TransportMessage);
 }
 
@@ -81,7 +103,12 @@ impl Default for UdsTransport {
 }
 
 impl UdsTransport {
-  fn start_listener(&self, endpoint: String) {
+  fn start_listener(
+    &self,
+    endpoint: String,
+    permissions: Option<Vec<u16>>,
+    pm: Option<PermissionStore>,
+  ) {
     let path = socket_path(&endpoint);
     if let Some(parent) = path.parent() {
       let _ = std::fs::create_dir_all(parent);
@@ -95,6 +122,11 @@ impl UdsTransport {
       }
     };
 
+    if permissions.is_some() {
+      std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666))
+        .expect("failed to allow permissions");
+    }
+
     let clients = self.clients.clone();
     let tx = self.incoming_tx.clone();
     let ep = endpoint.clone();
@@ -102,6 +134,21 @@ impl UdsTransport {
     std::thread::spawn(move || {
       for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
+
+        if let Some(ref permissions) = permissions
+          && let Some(ref pm) = pm
+        {
+          let Ok(cred) = get_peer_cred(&stream) else {
+            continue;
+          };
+
+          if permissions
+            .iter()
+            .any(|x| !pm.user_has(cred.uid, PermissionId(*x)))
+          {
+            continue;
+          }
+        }
 
         if let Ok(writer) = stream.try_clone() {
           if let Ok(mut locked) = clients.lock() {
@@ -137,11 +184,11 @@ impl UdsTransport {
 }
 
 impl TransportProtocol for UdsTransport {
-  fn setup(&mut self, endpoint: &str) {
+  fn setup(&mut self, endpoint: &str, permissions: Option<Vec<u16>>, pm: Option<PermissionStore>) {
     if self.started.contains(endpoint) {
       return;
     }
-    self.start_listener(endpoint.to_string());
+    self.start_listener(endpoint.to_string(), permissions, pm);
     self.started.insert(endpoint.to_string());
   }
 
@@ -198,14 +245,22 @@ impl Runtime for TransportRuntime {
     &mut self,
     action: &str,
     payload: RuntimePayload,
-    _ctx: &mut RuntimeContext<'_>,
+    ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     _log: &LogHandle,
   ) -> Result<(), CoreError> {
     match action {
       "setup_uds" => {
         let endpoint = payload.get::<String>("endpoint")?;
-        self.uds.setup(&endpoint);
+        let permissions = payload.get::<Vec<u16>>("permissions").ok();
+
+        let pm = ctx
+          .scope
+          .get::<PermissionStore>()
+          .cloned()
+          .unwrap_or_default();
+
+        self.uds.setup(&endpoint, permissions, Some(pm));
       }
       "register_stdio" => {
         let endpoint = payload.get::<String>("endpoint")?;
@@ -255,6 +310,7 @@ impl Runtime for TransportRuntime {
           },
           branch,
         };
+        // TODO: Add an option for more transport protocols
         if self.stdio_endpoints.contains(&endpoint) {
           let _ = dispatch.dispatch(
             "services",

@@ -1,13 +1,35 @@
 use std::{
   collections::{HashMap, HashSet},
   path::Path,
-  sync::{Arc, RwLock},
+  sync::{Arc, Mutex, RwLock},
 };
+
+use once_cell::sync::Lazy;
 
 use crate::{error::CoreError, user::UserStoreShared};
 
+static PERM_REGISTRY: Lazy<Mutex<HashMap<u16, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PermissionId(pub u16);
+
+impl PermissionId {
+  pub fn new(name: impl Into<String>, id: u16) -> Result<Self, CoreError> {
+    let name = name.into();
+    let mut reg = PERM_REGISTRY.lock().map_err(CoreError::custom)?;
+
+    if let Some(name) = reg.get(&id) {
+      return Err(CoreError::DuplicatePermissions {
+        id,
+        name: name.clone(),
+      });
+    }
+
+    reg.insert(id, name);
+
+    Ok(Self(id))
+  }
+}
 
 impl From<u16> for PermissionId {
   fn from(value: u16) -> Self {
@@ -39,7 +61,7 @@ impl PermissionStore {
 
   pub fn user_has(&self, uid: u32, perm: PermissionId) -> bool {
     // should this be?
-    if uid == 0 {
+    if uid == 0 || perm.0 == 0 {
       return true;
     }
 
@@ -165,5 +187,25 @@ impl PermissionStore {
       &inner.overlay_gid_grants,
       &inner.overlay_gid_revokes,
     )
+  }
+
+  pub fn new_perm(&self, name: impl Into<String>, id: u16) -> Result<PermissionId, CoreError> {
+    PermissionId::new(name, id)
+  }
+
+  pub fn reg_perm(&self, perm: PermissionId, name: impl Into<String>) -> Result<&Self, CoreError> {
+    let id = perm.0;
+    let mut reg = PERM_REGISTRY.lock().map_err(CoreError::custom)?;
+
+    if let Some(name) = reg.get(&id) {
+      return Err(CoreError::DuplicatePermissions {
+        id,
+        name: name.clone(),
+      });
+    }
+
+    reg.insert(id, name.into());
+
+    Ok(self)
   }
 }

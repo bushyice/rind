@@ -169,6 +169,7 @@ impl RuntimeHandle {
       else {
         break;
       };
+      // println!("Gotten {action} for {runtime_id}");
 
       let (mut runtime, mut scope, mut instances, log) = {
         let mut inner = self.inner.borrow_mut();

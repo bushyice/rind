@@ -106,7 +106,8 @@ fn init_tp_internal(transport: TransportProtocol) -> TransportProtocol {
           .unwrap()
           .insert(transport.id, stream);
       }
-      Err(_) => {
+      Err(e) => {
+        eprintln!("{e}");
         return transport;
       }
     }
@@ -152,7 +153,7 @@ pub extern "C" fn init_tp(
 #[unsafe(no_mangle)]
 pub extern "C" fn listen_tp(
   tp: *mut TransportProtocol,
-  func: *const unsafe extern "C" fn(MessageContainer) -> *const MessageContainer,
+  func: unsafe extern "C" fn(MessageContainer) -> *const MessageContainer,
 ) {
   if tp.is_null() {
     return;
@@ -161,7 +162,7 @@ pub extern "C" fn listen_tp(
   let tp = unsafe { &*tp };
   let id = tp.id;
 
-  let func: unsafe extern "C" fn(MessageContainer) -> *const MessageContainer = unsafe { *func };
+  // let func: unsafe extern "C" fn(MessageContainer) -> *const MessageContainer = unsafe { *func };
 
   thread::spawn(move || {
     let mut stream = {

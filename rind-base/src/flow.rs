@@ -136,6 +136,13 @@ impl FlowPayload {
     }
   }
 
+  pub fn get_json_field_as<T: serde::de::DeserializeOwned>(&self, field: &str) -> Option<T> {
+    match self {
+      FlowPayload::Json(s) => serde_json::from_value(s.into_json().get(field).cloned()?).ok(),
+      _ => None,
+    }
+  }
+
   pub fn contains(&self, needle: &str) -> bool {
     match self {
       FlowPayload::String(s) => s.contains(needle),
@@ -203,7 +210,7 @@ pub struct AutoPayloadConfig {
 #[model(
   meta_name = name,
   meta_fields(
-    name, payload, activate_on_none, after, branch, auto_payload, subscribers, broadcast
+    name, payload, activate_on_none, after, branch, auto_payload, subscribers, broadcast, permissions
   ),
   derive_metadata(Debug, Clone)
 )]
@@ -218,11 +225,12 @@ pub struct State {
   pub auto_payload: Option<AutoPayloadConfig>,
   pub subscribers: Option<Vec<TransportMethod>>,
   pub broadcast: Option<Vec<String>>,
+  pub permissions: Option<Vec<u16>>,
 }
 
 #[model(
   meta_name = name,
-  meta_fields(name, payload, after, branch, subscribers, broadcast),
+  meta_fields(name, payload, after, branch, subscribers, broadcast, permissions),
   derive_metadata(Debug, Clone)
 )]
 pub struct Signal {
@@ -232,6 +240,7 @@ pub struct Signal {
   pub branch: Option<Vec<String>>,
   pub subscribers: Option<Vec<TransportMethod>>,
   pub broadcast: Option<Vec<String>>,
+  pub permissions: Option<Vec<u16>>,
 }
 
 #[derive(Default)]
@@ -263,7 +272,7 @@ impl StateMachine {
       .iter()
       .filter_map(|(name, states)| {
         // State impermanence
-        if name.starts_with("_") {
+        if name.contains("@_") {
           return None;
         }
         Some((
@@ -293,10 +302,12 @@ impl FlowRuntime {
     subscriber: &TransportMethod,
   ) {
     if Self::transport_id(subscriber) == "uds" {
+      println!("{:?} {:?}", subscriber, subscriber.get_permissions());
       let _ = dispatch.dispatch(
         "transport",
         "setup_uds",
-        serde_json::json!({ "endpoint": endpoint }).into(),
+        serde_json::json!({ "endpoint": endpoint, "permissions": subscriber.get_permissions() })
+          .into(),
       );
     }
   }

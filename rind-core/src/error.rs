@@ -1,5 +1,7 @@
 use std::fmt::{Display, Formatter};
 
+use crate::user::PamError;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreError {
   ParseToml(String),
@@ -13,16 +15,25 @@ pub enum CoreError {
   InvalidState(String),
   EventBusError(String),
   PersistenceError(String),
+  DuplicatePermissions { id: u16, name: String },
+  PamError(PamError),
   Custom(String),
 }
 
 impl Display for CoreError {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     match self {
+      CoreError::PamError(x) => x.fmt(f),
       CoreError::ParseToml(x) => write!(f, "parse error: {x}"),
       CoreError::MissingField { path } => write!(f, "missing field `{path}`"),
       CoreError::TypeMismatch { path, expected } => {
         write!(f, "type mismatch for `{path}`, expected {expected}")
+      }
+      CoreError::DuplicatePermissions { id, name } => {
+        write!(
+          f,
+          "duplicate permissions for `{id}`. already registered as {name}"
+        )
       }
       CoreError::MissingSchema { name } => write!(f, "missing metadata schema `{name}`"),
       CoreError::DependencyCycle { cycle } => write!(f, "dependency cycle: {}", cycle.join(" -> ")),
@@ -46,6 +57,18 @@ impl CoreError {
 impl From<anyhow::Error> for CoreError {
   fn from(value: anyhow::Error) -> Self {
     Self::Custom(value.to_string())
+  }
+}
+
+impl From<std::io::Error> for CoreError {
+  fn from(value: std::io::Error) -> Self {
+    Self::Custom(value.to_string())
+  }
+}
+
+impl From<PamError> for CoreError {
+  fn from(value: PamError) -> Self {
+    CoreError::PamError(value)
   }
 }
 

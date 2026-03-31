@@ -15,6 +15,7 @@ use rind_base::reaper::ReaperRuntime;
 use rind_base::services::ServiceRuntime;
 use rind_base::transport::TransportRuntime;
 use rind_base::units::UnitsOrchestrator;
+use rind_base::user::UserRuntime;
 use rind_core::prelude::*;
 use serde_json::json;
 
@@ -49,6 +50,8 @@ impl Orchestrator for BootOrchestrator {
 
     ctx.dispatch("services", "evaluate_triggers", json!({}))?;
 
+    ctx.dispatch("user", "create_sessions", json!({}))?;
+
     Ok(())
   }
 }
@@ -79,6 +82,7 @@ impl Orchestrator for RuntimeProviderOrchestrator {
       Box::new(TransportRuntime::default()),
       Box::new(ReaperRuntime::default()),
       Box::new(IpcRuntime::default()),
+      Box::new(UserRuntime::default()),
     ]
   }
 

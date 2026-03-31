@@ -191,7 +191,8 @@ pub struct BranchingConfig {
   pub max_instances: Option<usize>,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ServiceSpace {
   #[default]
   System,
@@ -199,76 +200,6 @@ pub enum ServiceSpace {
   UserSelective {
     user: String,
   },
-}
-
-impl serde::Serialize for ServiceSpace {
-  fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-  where
-    S: serde::Serializer,
-  {
-    match self {
-      ServiceSpace::System => serializer.serialize_str("system"),
-      ServiceSpace::User => serializer.serialize_str("user"),
-      ServiceSpace::UserSelective { user } => {
-        use serde::ser::SerializeMap;
-        let mut map = serializer.serialize_map(Some(1))?;
-        map.serialize_entry("user", user)?;
-        map.end()
-      }
-    }
-  }
-}
-
-impl<'de> serde::Deserialize<'de> for ServiceSpace {
-  fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-  where
-    D: serde::Deserializer<'de>,
-  {
-    use serde::de::{self, MapAccess, Visitor};
-    use std::fmt;
-
-    struct SpaceVisitor;
-
-    impl<'de> Visitor<'de> for SpaceVisitor {
-      type Value = ServiceSpace;
-
-      fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-        formatter.write_str("string 'system' or 'user', or a map with a 'user' key")
-      }
-
-      fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-      where
-        E: de::Error,
-      {
-        match value {
-          "system" => Ok(ServiceSpace::System),
-          "user" => Ok(ServiceSpace::User),
-          _ => Err(de::Error::unknown_variant(value, &["system", "user"])),
-        }
-      }
-
-      fn visit_map<M>(self, mut access: M) -> Result<Self::Value, M::Error>
-      where
-        M: MapAccess<'de>,
-      {
-        let mut user: Option<String> = None;
-        while let Some(key) = access.next_key::<String>()? {
-          if key == "user" {
-            user = Some(access.next_value()?);
-          } else {
-            let _: serde::de::IgnoredAny = access.next_value()?;
-          }
-        }
-        if let Some(user) = user {
-          Ok(ServiceSpace::UserSelective { user })
-        } else {
-          Err(de::Error::missing_field("user"))
-        }
-      }
-    }
-
-    deserializer.deserialize_any(SpaceVisitor)
-  }
 }
 
 #[model(
@@ -422,7 +353,11 @@ impl ServiceRuntime {
           };
 
           match transport {
-            crate::transport::TransportMethod::Options { id, options } if id.0 == "env" => {
+            crate::transport::TransportMethod::Options {
+              id,
+              options,
+              permissions: _,
+            } if id.0 == "env" => {
               for option in options {
                 let Some((key, value)) = option.split_once('=') else {
                   continue;
@@ -436,7 +371,11 @@ impl ServiceRuntime {
                 }
               }
             }
-            crate::transport::TransportMethod::Options { id, options } if id.0 == "args" => {
+            crate::transport::TransportMethod::Options {
+              id,
+              options,
+              permissions: _,
+            } if id.0 == "args" => {
               for option in options {
                 if let Some(state_name) = option.strip_prefix("state:") {
                   let payload = resolve_state(state_name).unwrap_or_default();

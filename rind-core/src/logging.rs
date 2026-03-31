@@ -76,6 +76,30 @@ pub fn start_logger(config: LogConfig) -> LogHandle {
   LogHandle { tx }
 }
 
+fn timestamp_fmt(timestamp: u64) -> String {
+  let s = unsafe {
+    #[allow(deprecated)]
+    let t = timestamp as libc::time_t;
+    let mut tm: libc::tm = std::mem::zeroed();
+
+    libc::localtime_r(&t, &mut tm);
+
+    let mut buf = [0u8; 64];
+    let fmt = std::ffi::CString::new("%d/%m/%y %H:%M:%S").unwrap();
+
+    libc::strftime(
+      buf.as_mut_ptr() as *mut libc::c_char,
+      buf.len(),
+      fmt.as_ptr(),
+      &tm,
+    );
+
+    std::ffi::CStr::from_ptr(buf.as_ptr() as *const libc::c_char).to_string_lossy()
+  };
+
+  s.to_string()
+}
+
 fn logger_loop(config: LogConfig, rx: Receiver<LogEntry>) {
   let _ = create_dir_all(config.dir.as_path());
 
@@ -89,7 +113,14 @@ fn logger_loop(config: LogConfig, rx: Receiver<LogEntry>) {
       continue;
     };
 
-    println!("{entry:?}");
+    println!(
+      "[{:?} {}] {{{}}}: {} ({:?}",
+      entry.level,
+      timestamp_fmt(entry.timestamp),
+      entry.target,
+      entry.message,
+      entry.fields
+    );
 
     if let Ok(bytes) = encode_record(&entry) {
       if writer.write_all(&bytes).is_ok() {

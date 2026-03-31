@@ -7,3 +7,4 @@ pub mod services;
 pub mod transport;
 pub mod triggers;
 pub mod units;
+pub mod user;

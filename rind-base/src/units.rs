@@ -6,6 +6,7 @@ use rind_core::user::{PamHandle, UserStore};
 
 use crate::flow::{Signal, State, StateMachine, StateMachineShared};
 use crate::mount::Mount;
+use crate::permissions::{PERM_LOGIN, PERM_SYSTEM_SERVICES, Permission};
 use crate::services::Service;
 
 pub const UNITS_META: &str = "units";
@@ -33,12 +34,22 @@ impl UnitsOrchestrator {
     }
   }
 
+  fn load_permissions(&self) -> Result<(), CoreError> {
+    self
+      .permissions
+      .reg_perm(PERM_LOGIN, "Login")?
+      .reg_perm(PERM_SYSTEM_SERVICES, "SystemServices")?;
+
+    Ok(())
+  }
+
   fn load_all_units(&self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
     let mut metadata = Metadata::new(UNITS_META)
       .of::<Service>("service")
       .of::<Mount>("mount")
       .of::<State>("state")
-      .of::<Signal>("signal");
+      .of::<Signal>("signal")
+      .of::<Permission>("permission");
 
     let dir = std::fs::read_dir(&self.units_dir).map_err(|e| {
       CoreError::Custom(format!(
@@ -118,6 +129,16 @@ impl UnitsOrchestrator {
         .map_err(|e| {
           CoreError::Custom(format!("failed to parse unit file {}: {e}", path.display()))
         })?;
+
+      if content.contains("permission") {
+        if let Some(group) = metadata.get_in_group::<Permission>(&group) {
+          for perm in group {
+            self
+              .permissions
+              .reg_perm(PermissionId(perm.id), perm.name.clone())?;
+          }
+        }
+      }
     }
 
     Self::add_builtin_defs(&mut metadata);
@@ -140,12 +161,12 @@ payload = "string"
 [[state]]
 name = "_user_session"
 payload = "json"
-branch = ["username"]
+branch = ["session_id"]
 
 [[state]]
 name = "user_auto_login"
 payload = "json"
-branch = ["username"]
+branch = ["tty"]
 
 [[signal]]
 name = "activate"
@@ -191,6 +212,7 @@ impl Orchestrator for UnitsOrchestrator {
   fn preload(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
     if ctx.metadata.metadata(UNITS_META).is_none() {
       self.load_all_units(ctx)?;
+      self.load_permissions()?;
     }
     let loaded = self
       .state_persistence
@@ -226,6 +248,13 @@ impl Orchestrator for UnitsOrchestrator {
 
     let pam = pam_handle.clone();
     builder.insert_scope("ipc", move || {
+      let mut scope = RuntimeScope::default();
+      scope.insert::<Arc<PamHandle>>(pam.clone());
+      scope
+    });
+
+    let pam = pam_handle.clone();
+    builder.insert_scope("user", move || {
       let mut scope = RuntimeScope::default();
       scope.insert::<Arc<PamHandle>>(pam.clone());
       scope

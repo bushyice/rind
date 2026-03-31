@@ -34,6 +34,8 @@ fn prompt_login(
   let _ = write!(writer, "\x1b[2J\x1b[H");
   let _ = writer.flush();
 
+  thread::sleep(Duration::from_secs(1));
+
   if write!(writer, "rind login: ").is_err() || writer.flush().is_err() {
     return None;
   }
