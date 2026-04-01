@@ -159,9 +159,9 @@ name = "active"
 payload = "string"
 
 [[state]]
-name = "_user_session"
+name = "user_session"
 payload = "json"
-branch = ["session_id"]
+branch = ["tty"]
 
 [[state]]
 name = "user_auto_login"

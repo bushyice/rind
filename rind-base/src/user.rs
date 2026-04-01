@@ -15,14 +15,47 @@ impl Runtime for UserRuntime {
   fn handle(
     &mut self,
     action: &str,
-    _payload: RuntimePayload,
+    payload: RuntimePayload,
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     _log: &LogHandle,
   ) -> Result<(), CoreError> {
     match action {
+      "login" => {
+        let session_id = payload.get::<u64>("session_id")?;
+        let tty = payload.get::<String>("tty")?;
+        let username = payload.get::<String>("username")?;
+
+        let _ = dispatch.dispatch(
+          "flow",
+          "set_state",
+          serde_json::json!({
+            "name": "rind@user_session",
+            "payload": {
+              "session_id": session_id,
+              "username": username,
+              "tty": tty
+            }
+          })
+          .into(),
+        );
+      }
+      "logout" => {
+        let session_id = payload.get::<u64>("session_id")?;
+
+        let _ = dispatch.dispatch(
+          "flow",
+          "remove_state",
+          serde_json::json!({
+            "name": "rind@user_session",
+            "payload": {
+              "session_id": session_id,
+            }
+          })
+          .into(),
+        );
+      }
       "create_sessions" => {
-        println!("Running Session");
         let sm_shared = ctx
           .scope
           .get::<StateMachineShared>()
@@ -35,20 +68,17 @@ impl Runtime for UserRuntime {
           .expect("PamHandle not in scope");
 
         let sm = sm_shared.write().map_err(CoreError::custom)?;
-        if let Some(users) = sm.states.get("rind@user_auto_login") {
+        if let Some(users) = sm.states.get("rind@user_session") {
           for user in users {
-            println!("User {user:?}");
             let username = user.payload.get_json_field_as::<String>("username").ok_or(
               CoreError::MissingField {
                 path: "username".into(),
               },
             )?;
-            println!("Username {username}");
             let tty = user
               .payload
               .get_json_field_as::<String>("tty")
               .ok_or(CoreError::MissingField { path: "tty".into() })?;
-            println!("TTY {tty}");
 
             let session = pam.pam_open_session(&username, &tty)?;
 
@@ -56,7 +86,7 @@ impl Runtime for UserRuntime {
               "flow",
               "set_state",
               serde_json::json!({
-                "name": "rind@_user_session",
+                "name": "rind@user_session",
                 "payload": {
                   "username": username,
                   "tty": tty,
@@ -65,7 +95,6 @@ impl Runtime for UserRuntime {
               })
               .into(),
             );
-            println!("Dispatched");
           }
         }
         drop(sm);

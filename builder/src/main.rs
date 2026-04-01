@@ -2,6 +2,7 @@
 use std::{
   collections::BTreeSet,
   collections::HashMap,
+  ffi::CString,
   fs,
   io::ErrorKind,
   path::{Path, PathBuf},
@@ -16,6 +17,34 @@ use fs_extra::dir::CopyOptions;
 use nix::sys::stat::{makedev, mknod, Mode, SFlag};
 use reqwest::blocking::get;
 use serde::Deserialize;
+
+fn set_ext4_mtime(target_path: &str, mtime: u64) {
+  let mtime = if mtime > u32::MAX as u64 {
+    u32::MAX
+  } else {
+    mtime as u32
+  };
+
+  // ext4-lwext4 keeps an internal mountpoint table (/mp0/, /mp1/, ...).
+  // We don't have access to the selected mountpoint from the safe wrapper,
+  // so probe a small range and stop on first success.
+  for mp_idx in 0..16 {
+    let full_path = format!("/mp{}{}", mp_idx, target_path);
+    let Ok(c_path) = CString::new(full_path) else {
+      continue;
+    };
+
+    let rc = unsafe { ext4_lwext4_sys::ext4_mtime_set(c_path.as_ptr(), mtime) };
+    if rc == 0 {
+      return;
+    }
+  }
+
+  eprintln!(
+    "[!] Warning: failed to set ext4 mtime for {} (ts={})",
+    target_path, mtime
+  );
+}
 
 #[derive(Debug, Deserialize)]
 struct RinbConfig {
@@ -870,6 +899,7 @@ fn builder_d(profile: &Profile, rootfs: &Path, no_overwrite: bool) {
 
       copy_into_ext4(&mut fs, rootfs, rootfs).expect("Failed to copy rootfs recursively");
 
+      let _ = fs.umount();
       println!("[*] Disk image created at {}", output.display());
     }
     other => panic!("Unknown disk_mode: {}", other),
@@ -919,15 +949,16 @@ fn copy_into_ext4(fs: &mut Ext4Fs, rootfs: &Path, current: &Path) -> std::io::Re
 
       copy_into_ext4(fs, rootfs, &path)?;
     } else {
+      let src_mtime = fs::metadata(&path)
+        .unwrap()
+        .modified()
+        .unwrap()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
       if fs.exists(&target_path) {
-        let t = fs::metadata(&path)
-          .unwrap()
-          .modified()
-          .unwrap()
-          .duration_since(std::time::UNIX_EPOCH)
-          .unwrap()
-          .as_secs();
-        if t <= fs.metadata(&target_path).unwrap().mtime {
+        if src_mtime <= fs.metadata(&target_path).unwrap().mtime {
           continue;
         }
         println!("Updating file: {:?}", target_path);
@@ -970,6 +1001,7 @@ fn copy_into_ext4(fs: &mut Ext4Fs, rootfs: &Path, current: &Path) -> std::io::Re
         .expect("Failed to open file");
 
       file.write_all(&bytes).expect("Failed to write file");
+      set_ext4_mtime(&target_path, src_mtime);
       fs.set_owner(&target_path, uid, gid)
         .expect("Failed to set file owner");
       fs.set_permissions(&target_path, mode)

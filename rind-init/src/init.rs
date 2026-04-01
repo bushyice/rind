@@ -40,6 +40,8 @@ impl Orchestrator for BootOrchestrator {
   fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
     ctx.dispatch("mounts", "mount_all", json!({}))?;
 
+    ctx.dispatch("user", "create_sessions", json!({}))?;
+
     ctx.dispatch("services", "watch_events", json!({}))?;
 
     // ctx.dispatch("services", "start_all", json!({}))?;
@@ -49,8 +51,6 @@ impl Orchestrator for BootOrchestrator {
     ctx.dispatch("flow", "bootstrap", json!({}))?;
 
     ctx.dispatch("services", "evaluate_triggers", json!({}))?;
-
-    ctx.dispatch("user", "create_sessions", json!({}))?;
 
     Ok(())
   }

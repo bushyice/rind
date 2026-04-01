@@ -98,6 +98,7 @@ dependencies = [
  "anyhow",
  "cbindgen",
  "ext4-lwext4",
+ "ext4-lwext4-sys",
  "fs_extra",
  "libc",
  "nix",
@@ -284,9 +285,9 @@ dependencies = [
 
 [[package]]
 name = "ext4-lwext4"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9179b7121ddd37184afecbc523b7c094c9d3af5406c55e9d949d3d05cb2f07ff"
+checksum = "432129ba6f4d16b002d54ebd74271c33c6ccb91cd2c83b76b5d3b357b40d366c"
 dependencies = [
  "bitflags 2.11.0",
  "ext4-lwext4-sys",
@@ -296,9 +297,9 @@ dependencies = [
 
 [[package]]
 name = "ext4-lwext4-sys"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a42be90894027151aca46dc08dfa2ca5fba02e604eaa22524ef2b472f0eba40f"
+checksum = "4b9f45594e0da3d8129c732f4ab14188c5832090f9c4ec2458e541ca22024bfd"
 dependencies = [
  "cc",
 ]

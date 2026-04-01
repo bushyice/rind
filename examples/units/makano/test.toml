@@ -3,4 +3,4 @@ name = "test"
 run.exec = "/bin/example-active"
 run.args = ["makano-test"]
 space = "user"
-start-on = [{ state = "rind@_user_session" }]
+start-on = [{ state = "rind@user_session" }]

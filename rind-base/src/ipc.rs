@@ -399,28 +399,12 @@ fn handle_ipc_message(
       });
 
       let _ = dispatch.dispatch(
-        "flow",
-        "set_state",
+        "user",
+        "login",
         serde_json::json!({
-          "name": "rind@_user_session",
-          "payload": {
-            "username": payload.username.clone(),
-            "tty": payload.tty.clone(),
-            "session_id": session.id,
-          }
-        })
-        .into(),
-      );
-
-      let _ = dispatch.dispatch(
-        "flow",
-        "set_state",
-        serde_json::json!({
-          "name": "rind@user_auto_login",
-          "payload": {
-            "username": payload.username.clone(),
-            "tty": payload.tty.clone()
-          }
+          "username": payload.username.clone(),
+          "tty": payload.tty.clone(),
+          "session_id": session.id,
         })
         .into(),
       );
@@ -469,28 +453,14 @@ fn handle_ipc_message(
         });
 
         let _ = dispatch.dispatch(
-          "flow",
-          "remove_state",
+          "user",
+          "logout",
           serde_json::json!({
-            "name": "rind@_user_session",
-            "payload": {
-              "session_id": session_id,
-            }
+            "session_id": session_id,
           })
           .into(),
         );
 
-        let _ = dispatch.dispatch(
-          "flow",
-          "remove_state",
-          serde_json::json!({
-            "name": "rind@user_auto_login",
-            "payload": {
-              "tty": payload.tty.clone(),
-            }
-          })
-          .into(),
-        );
         Message::ack(format!("logged out {}", payload.username))
       } else {
         Message::nack(format!(

@@ -18,8 +18,8 @@ name = "user_shell"
 run.exec = "/usr/bin/user_shell"
 run.args = []
 restart = true
-start-on = [{ state = "rind@_user_session" }]
-transport = { id = "env", options = ["RIND_USER_ACTIVE=state:rind@_user_session"] }
+start-on = [{ state = "rind@user_session" }]
+transport = { id = "env", options = ["RIND_USER_ACTIVE=state:rind@user_session"] }
 
 [[service]]
 name = "niri"
@@ -32,7 +32,7 @@ branching = { enabled = true, source-state = "tr_demo@niri_active", key = "tty",
 [[state]]
 name = "login_required"
 payload = "string"
-activate-on-none = ["rind@_user_session"]
+activate-on-none = ["rind@user_session"]
 auto-payload = {
   # there will be others such as system.field (defined by rind) or { eval = "/bin/sh -c 'ls /dev | grep tty'" }
   # where for .eval, each line is parsed separately or can be inserted directly as {eval = "...", insert = ["key"] or insert = "root" }
@@ -50,4 +50,4 @@ auto-payload = {
 name = "niri_active"
 payload = "json"
 branch = ["tty:seat"]
-after = ["rind@_user_session"]
+after = ["rind@user_session"]
