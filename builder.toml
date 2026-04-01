@@ -2,10 +2,10 @@
 # Only one "main" profile is available for now
 [profile.main]
 # Build command
-build_command = "cargo build --release --target x86_64-unknown-linux-musl"
+build_command = "cargo build --release --target x86_64-unknown-linux-gnu"
 
 # Which path the binaries are copied from
-binary_target = "target/x86_64-unknown-linux-musl/release"
+binary_target = "target/x86_64-unknown-linux-gnu/release"
 
 # Default destination for binaries copied from `binaries` and busybox applets.
 # Can be "/bin" or "/usr/bin".
@@ -19,9 +19,14 @@ binaries = ["init", "rind", "example-active", "example-inactive", "user_login", 
 # - legacy: "bin:name" / "/bin:name" / "usr/bin:name" / "/usr/bin:name"
 
 # Symbolic Links
-symlinks = ["/usr/bin:bin", "/usr/lib:/lib"]
+symlinks = [
+  # libs and bins
+  "/usr/bin:bin",
+  "/usr/lib:/lib",
+  "/usr/lib:/lib64"
+]
 
-# ldd_bins = ["/usr/bin/bash", "/usr/bin/ls"]
+# ldd_bins = ["/usr/bin/init"]
 
 # Files:
 # - local copy: "local_path:/dst/path"
@@ -29,12 +34,31 @@ symlinks = ["/usr/bin:bin", "/usr/lib:/lib"]
 files = [
   "examples/units:/etc/units",
   "examples/fallback.toml:/etc/fallback.toml",
-  "@musl:x86_64-linux-musl-native/bin:/usr/bin",
-  "@musl:x86_64-linux-musl-native/include:/usr/include",
-  "@musl:x86_64-linux-musl-native/lib:/usr/lib",
-  "@musl:x86_64-linux-musl-native/libexec:/usr/libexec",
-  "@musl:x86_64-linux-musl-native/share:/usr/share",
-  "@musl:x86_64-linux-musl-native/x86_64-linux-musl:/usr/x86_64-linux-musl"
+  "@glibc:x86-64--glibc--stable-2025.08-1/bin:/usr/bin",
+  "@glibc:x86-64--glibc--stable-2025.08-1/include:/usr/include",
+  "@glibc:x86-64--glibc--stable-2025.08-1/lib:/usr/lib",
+  "@glibc:x86-64--glibc--stable-2025.08-1/libexec:/usr/libexec",
+  "@glibc:x86-64--glibc--stable-2025.08-1/share:/usr/share",
+  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu:/usr/x86_64-buildroot-linux-gnu",
+  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/usr/bin:/usr/bin",
+  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/usr/include:/usr/include",
+  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/usr/lib:/usr/lib",
+  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/usr/libexec:/usr/libexec",
+  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/usr/sbin:/usr/sbin",
+  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/usr/share:/usr/share",
+  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/lib:/usr/lib",
+  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/sbin:/sbin",
+  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/bin:/usr/bin",
+  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/include:/usr/include",
+  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/lib:/usr/lib",
+  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/lib64:/usr/lib",
+]
+
+# Installer cache sources:
+# - "https://..."
+# - "alias:https://..."
+install = [
+  "glibc:https://toolchains.bootlin.com/downloads/releases/toolchains/x86-64/tarballs/x86-64--glibc--stable-2025.08-1.tar.xz"
 ]
 
 # C header files and static libs
@@ -394,13 +418,6 @@ busybox_applets = [
   "yes",
   "zcat",
   "zcip"
-]
-
-# Installer cache sources:
-# - "https://..."
-# - "alias:https://..."
-install = [
-  "musl:https://musl.cc/x86_64-linux-musl-native.tgz"
 ]
 
 # Use images for now, cpio is depricated

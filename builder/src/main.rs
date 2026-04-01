@@ -262,18 +262,21 @@ fn extract_from_archive(archive: &Path, member: &str, dst: &Path) {
 
   if let Some(parent) = dst.parent() {
     fs::create_dir_all(parent).unwrap();
-  }
-  remove_existing(dst).ok();
+  };
+
+  // remove_existing(dst).ok();
 
   // Preserve mode/timestamps/symlinks/hardlinks while avoiding ownership failures as non-root.
   let status = Command::new("cp")
     .arg("-a")
+    .arg("-r")
     .arg("--no-preserve=ownership")
     .arg("-T")
     .arg(&extracted)
     .arg(dst)
     .status()
     .unwrap();
+
   if !status.success() {
     panic!(
       "Failed to copy extracted member '{}' to {}",
