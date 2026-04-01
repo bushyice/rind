@@ -35,6 +35,7 @@ pub struct MessageContainer {
   r#type: MessageType,
   action: MessageAction,
   payload: *mut PayloadContainer,
+  name: *const c_char,
 }
 
 impl Into<TransportMessage> for &MessageContainer {
@@ -51,7 +52,16 @@ impl Into<TransportMessage> for &MessageContainer {
         MessageType::State => rind_base::transport::TransportMessageType::State,
       },
       branch: None,
-      name: None,
+      name: if self.name.is_null() {
+        None
+      } else {
+        Some(
+          unsafe { CStr::from_ptr(self.name) }
+            .to_str()
+            .unwrap()
+            .to_string(),
+        )
+      },
       payload: if self.payload.is_null() {
         None
       } else {
@@ -192,6 +202,13 @@ pub extern "C" fn listen_tp(
 
       let msg: MessageContainer = match serde_json::from_str::<TransportMessage>(&raw) {
         Ok(m) => MessageContainer {
+          name: match m.name {
+            Some(s) => {
+              let str = CString::new(s).unwrap();
+              str.as_ptr()
+            }
+            None => null_mut(),
+          },
           r#type: match m.r#type {
             rind_base::transport::TransportMessageType::Enquiry => MessageType::Enquiry,
             rind_base::transport::TransportMessageType::Response => MessageType::Response,
@@ -269,6 +286,7 @@ pub extern "C" fn create_message(r#type: MessageType, action: MessageAction) -> 
     r#type,
     action,
     payload: null_mut(),
+    name: null_mut(),
   }
 }
 
@@ -287,4 +305,46 @@ pub extern "C" fn create_message_payload(
 pub extern "C" fn set_message_payload(message: *mut MessageContainer, payload: PayloadContainer) {
   let msg = unsafe { &mut *message };
   msg.payload = Box::into_raw(Box::new(payload));
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_message_name(message: *mut MessageContainer, name: *const c_char) {
+  let msg = unsafe { &mut *message };
+  msg.name = name;
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn send_message(tp: *const TransportProtocol, message: MessageContainer) {
+  if tp.is_null() {
+    return;
+  }
+
+  let tp = unsafe { &*tp };
+
+  let msg: TransportMessage = { &message }.into();
+
+  match tp.protocol {
+    TransportProtocolMethod::STDIO => {
+      println!("{}", serde_json::to_string(&msg).unwrap());
+    }
+    TransportProtocolMethod::UDS => {
+      let mut stream = {
+        let conns = UDS_CONNECTIONS.read().unwrap();
+
+        let conn = conns.get(&tp.id).unwrap().try_clone().unwrap();
+        drop(conns);
+        conn
+      };
+
+      let resp_str = serde_json::to_string(&msg).unwrap_or_default().into_bytes();
+      let resp_len = (resp_str.len() as u32).to_be_bytes();
+
+      if stream.write_all(&resp_len).is_err() {
+        return;
+      }
+      if stream.write_all(&resp_str).is_err() {
+        return;
+      }
+    }
+  }
 }

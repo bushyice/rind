@@ -23,7 +23,8 @@ symlinks = [
   # libs and bins
   "/usr/bin:bin",
   "/usr/lib:/lib",
-  "/usr/lib:/lib64"
+  "/usr/lib:/lib64",
+  "/usr/lib:/usr/lib64"
 ]
 
 # ldd_bins = ["/usr/bin/init"]
@@ -34,36 +35,86 @@ symlinks = [
 files = [
   "examples/units:/etc/units",
   "examples/fallback.toml:/etc/fallback.toml",
-  "@glibc:x86-64--glibc--stable-2025.08-1/bin:/usr/bin",
-  "@glibc:x86-64--glibc--stable-2025.08-1/include:/usr/include",
-  "@glibc:x86-64--glibc--stable-2025.08-1/lib:/usr/lib",
-  "@glibc:x86-64--glibc--stable-2025.08-1/libexec:/usr/libexec",
-  "@glibc:x86-64--glibc--stable-2025.08-1/share:/usr/share",
-  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu:/usr/x86_64-buildroot-linux-gnu",
-  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/usr/bin:/usr/bin",
-  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/usr/include:/usr/include",
-  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/usr/lib:/usr/lib",
-  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/usr/libexec:/usr/libexec",
-  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/usr/sbin:/usr/sbin",
-  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/usr/share:/usr/share",
-  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/lib:/usr/lib",
-  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/sysroot/sbin:/sbin",
-  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/bin:/usr/bin",
-  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/include:/usr/include",
-  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/lib:/usr/lib",
-  "@glibc:x86-64--glibc--stable-2025.08-1/x86_64-buildroot-linux-gnu/lib64:/usr/lib",
+  "@glibc:usr/bin:/usr/bin",
+  "@glibc:var/db:/var/db",
+  "@glibc:etc:/etc",
+  "@glibc:usr/include:/usr/include",
+  "@glibc:usr/lib:/usr/lib",
+  "@glibc:usr/share:/usr/share",
+  # libs
+  "@libasan:usr:/usr",
+  "@libatomic:usr:/usr",
+  "@libgcc:usr:/usr",
+  "@libgfortran:usr:/usr",
+  "@libgomp:usr:/usr",
+  "@liblsan:usr:/usr",
+  "@libobjc:usr:/usr",
+  "@libquadmath:usr:/usr",
+  "@libstdcpp:usr:/usr",
+  "@libtsan:usr:/usr",
+  "@libubsan:usr:/usr",
+
+  # gcc
+  "@gcc:usr:/usr",
+  "@libmpc:usr:/usr",
+  "@libisl:usr:/usr",
+  "@gmp:usr:/usr",
+  "@mpfr:usr:/usr",
+
+  # deps
+  "@binutils:usr:/usr",
+  "@jansson:usr:/usr",
+  "@libelf:usr:/usr",
+  "@bzip2:usr:/usr",
+  "@curl:usr:/usr",
+  "@json-c:usr:/usr",
+  "@xz:usr:/usr",
+  "@zlib:usr:/usr",
+  "@zstd:usr:/usr",
 ]
 
 # Installer cache sources:
 # - "https://..."
 # - "alias:https://..."
 install = [
-  "glibc:https://toolchains.bootlin.com/downloads/releases/toolchains/x86-64/tarballs/x86-64--glibc--stable-2025.08-1.tar.xz"
+  "glibc:https://mirror.moson.org/arch/core/os/x86_64/glibc-2.43+r5+g856c426a7534-1-x86_64.pkg.tar.zst",
+
+  # libs
+  "libasan:https://archlinux.org/packages/core/x86_64/libasan/download",
+  "libatomic:https://archlinux.org/packages/core/x86_64/libatomic/download",
+  "libgcc:https://archlinux.org/packages/core/x86_64/libgcc/download",
+  "libgfortran:https://archlinux.org/packages/core/x86_64/libgfortran/download",
+  "libgomp:https://archlinux.org/packages/core/x86_64/libgomp/download",
+  "liblsan:https://archlinux.org/packages/core/x86_64/liblsan/download",
+  "libobjc:https://archlinux.org/packages/core/x86_64/libobjc/download",
+  "libquadmath:https://archlinux.org/packages/core/x86_64/libquadmath/download",
+  "libstdcpp:https://archlinux.org/packages/core/x86_64/libstdc++/download",
+  "libtsan:https://archlinux.org/packages/core/x86_64/libtsan/download",
+  "libubsan:https://archlinux.org/packages/core/x86_64/libubsan/download",
+  "libubsan:https://archlinux.org/packages/core/x86_64/libubsan/download",
+
+  # gcc
+  "gcc:https://archlinux.org/packages/core/x86_64/gcc/download",
+  "libmpc:https://archlinux.org/packages/core/x86_64/libmpc/download",
+  "libisl:https://archlinux.org/packages/core/x86_64/libisl/download",
+  "gmp:https://archlinux.org/packages/core/x86_64/gmp/download",
+  "mpfr:https://archlinux.org/packages/core/x86_64/mpfr/download",
+
+  # deps
+  "binutils:https://archlinux.org/packages/core/x86_64/binutils/download",
+  "jansson:https://archlinux.org/packages/core/x86_64/jansson/download",
+  "libelf:https://archlinux.org/packages/core/x86_64/libelf/download",
+  "bzip2:https://archlinux.org/packages/core/x86_64/bzip2/download",
+  "curl:https://archlinux.org/packages/core/x86_64/curl/download",
+  "json-c:https://archlinux.org/packages/core/x86_64/json-c/download",
+  "xz:https://archlinux.org/packages/core/x86_64/xz/download",
+  "zlib:https://archlinux.org/packages/core/x86_64/zlib/download",
+  "zstd:https://archlinux.org/packages/core/x86_64/zstd/download",
 ]
 
 # C header files and static libs
 libs = [
-  "rind-api:rind"
+  "Crind-api:rind"
 ]
 
 # Busybox Setup

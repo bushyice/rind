@@ -496,12 +496,17 @@ fn prepare_rootfs(profile: &Profile, rootfs: &Path) {
     fs::create_dir_all(&lib_dst).unwrap();
 
     for lib in libs {
-      let parts: Vec<&str> = lib.splitn(2, ':').collect();
+      let is_so = lib.starts_with("C");
+      let parts: Vec<&str> = lib.trim_start_matches("C").splitn(2, ':').collect();
       if parts.len() != 2 {
         eprintln!("Invalid library mapping: {}", lib);
         continue;
       }
-      let libname = format!("lib{}.a", parts[0].replace("-", "_"));
+      let libname = format!(
+        "lib{}.{}",
+        parts[0].replace("-", "_"),
+        if is_so { "so" } else { "a" }
+      );
       let src = Path::new(
         &profile
           .binary_target
