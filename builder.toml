@@ -35,6 +35,7 @@ symlinks = [
 files = [
   "examples/units:/etc/units",
   "examples/fallback.toml:/etc/fallback.toml",
+  "rind-api/examples/api.c:/home/makano/api.c",
   "@glibc:usr/bin:/usr/bin",
   "@glibc:var/db:/var/db",
   "@glibc:etc:/etc",

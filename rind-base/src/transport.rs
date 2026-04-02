@@ -1,3 +1,7 @@
+// State perms are impl'd partially for UDS connections and states, BUT.
+// - have not been impl'd for stdio
+// - probs more things i didn't think about
+
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -7,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use rind_core::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::flow::{FlowMatchOperation, FlowPayload};
+use crate::flow::{FlowMatchOperation, FlowPayload, Signal, State};
 use crate::ipc::get_peer_cred;
 
 #[derive(Serialize, Deserialize, Copy, Clone)]
@@ -86,8 +90,8 @@ fn socket_path(endpoint: &str) -> std::path::PathBuf {
 pub struct UdsTransport {
   clients: ClientMap,
   started: std::collections::HashSet<String>,
-  incoming_tx: std::sync::mpsc::Sender<(String, TransportMessage)>,
-  incoming_rx: Arc<Mutex<std::sync::mpsc::Receiver<(String, TransportMessage)>>>,
+  incoming_tx: std::sync::mpsc::Sender<(String, TransportMessage, u32)>,
+  incoming_rx: Arc<Mutex<std::sync::mpsc::Receiver<(String, TransportMessage, u32)>>>,
 }
 
 impl Default for UdsTransport {
@@ -134,6 +138,7 @@ impl UdsTransport {
     std::thread::spawn(move || {
       for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
+        let mut uid = 0;
 
         if let Some(ref permissions) = permissions
           && let Some(ref pm) = pm
@@ -141,6 +146,7 @@ impl UdsTransport {
           let Ok(cred) = get_peer_cred(&stream) else {
             continue;
           };
+          uid = cred.uid;
 
           if permissions
             .iter()
@@ -174,7 +180,7 @@ impl UdsTransport {
               continue;
             }
             if let Ok(msg) = serde_json::from_str::<TransportMessage>(trimmed) {
-              let _ = tx.send((ep_for_msg.clone(), msg));
+              let _ = tx.send((ep_for_msg.clone(), msg, uid));
             }
           }
         });
@@ -249,16 +255,16 @@ impl Runtime for TransportRuntime {
     dispatch: &RuntimeDispatcher,
     _log: &LogHandle,
   ) -> Result<(), CoreError> {
+    let pm = ctx
+      .scope
+      .get::<PermissionStore>()
+      .cloned()
+      .unwrap_or_default();
+
     match action {
       "setup_uds" => {
         let endpoint = payload.get::<String>("endpoint")?;
         let permissions = payload.get::<Vec<u16>>("permissions").ok();
-
-        let pm = ctx
-          .scope
-          .get::<PermissionStore>()
-          .cloned()
-          .unwrap_or_default();
 
         self.uds.setup(&endpoint, permissions, Some(pm));
       }
@@ -327,10 +333,28 @@ impl Runtime for TransportRuntime {
       }
       "drain_incoming" => {
         if let Ok(rx) = self.uds.incoming_rx.lock() {
-          while let Ok((_endpoint, msg)) = rx.try_recv() {
+          while let Ok((_endpoint, msg, uid)) = rx.try_recv() {
             match msg.r#type {
               TransportMessageType::State => {
                 if let Some(name) = &msg.name {
+                  if uid != 0 {
+                    // one-shot user-specific state defs
+                    if let Some((username, _)) = name.split_once("/")
+                      && let Some(user) = pm.users.lookup_by_uid(uid)
+                      && username != user.username
+                    {
+                      continue;
+                    }
+
+                    // one-shot perms (is this good?)
+                    if let Some(state) = ctx.registry.metadata.find::<State>("units", name)
+                      && let Some(perms) = &state.permissions
+                      && perms.iter().any(|x| !pm.user_has(uid, PermissionId(*x)))
+                    {
+                      continue;
+                    }
+                  }
+
                   if msg.action == TransportMessageAction::Remove {
                     let mut payload = serde_json::json!({ "name": name });
                     if let Some(p) = &msg.payload {
@@ -348,6 +372,14 @@ impl Runtime for TransportRuntime {
               }
               TransportMessageType::Signal => {
                 if let Some(name) = &msg.name {
+                  // same with state perms, one-shot
+                  if let Some(state) = ctx.registry.metadata.find::<Signal>("units", name)
+                    && let Some(perms) = &state.permissions
+                    && perms.iter().any(|x| !pm.user_has(uid, PermissionId(*x)))
+                  {
+                    continue;
+                  }
+
                   let mut payload = serde_json::json!({ "name": name });
                   if let Some(p) = &msg.payload {
                     payload["payload"] = p.to_json();

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::os::raw::c_char;
 use std::os::unix::net::UnixStream;
 use std::ptr::null_mut;
@@ -163,7 +163,7 @@ pub extern "C" fn init_tp(
 #[unsafe(no_mangle)]
 pub extern "C" fn listen_tp(
   tp: *mut TransportProtocol,
-  func: unsafe extern "C" fn(MessageContainer) -> *const MessageContainer,
+  func: unsafe extern "C" fn(MessageContainer),
 ) {
   if tp.is_null() {
     return;
@@ -175,7 +175,7 @@ pub extern "C" fn listen_tp(
   // let func: unsafe extern "C" fn(MessageContainer) -> *const MessageContainer = unsafe { *func };
 
   thread::spawn(move || {
-    let mut stream = {
+    let stream = {
       let conns = UDS_CONNECTIONS.read().unwrap();
 
       let conn = conns.get(&id).unwrap().try_clone().unwrap();
@@ -183,29 +183,25 @@ pub extern "C" fn listen_tp(
       conn
     };
 
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+
     loop {
-      let mut len_buf = [0u8; 4];
-      if stream.read_exact(&mut len_buf).is_err() {
+      line.clear();
+      let Ok(read) = reader.read_line(&mut line) else {
         break;
-      }
-      let len = u32::from_be_bytes(len_buf) as usize;
-
-      let mut buf = vec![0u8; len];
-      if stream.read_exact(&mut buf).is_err() {
-        break;
-      }
-
-      let raw = match String::from_utf8(buf) {
-        Ok(s) => s,
-        Err(_) => continue,
       };
+      if read == 0 {
+        break;
+      }
+      let trimmed = line.trim();
 
-      let msg: MessageContainer = match serde_json::from_str::<TransportMessage>(&raw) {
+      let msg: MessageContainer = match serde_json::from_str::<TransportMessage>(&trimmed) {
         Ok(m) => MessageContainer {
           name: match m.name {
             Some(s) => {
               let str = CString::new(s).unwrap();
-              str.as_ptr()
+              str.into_raw()
             }
             None => null_mut(),
           },
@@ -234,21 +230,21 @@ pub extern "C" fn listen_tp(
         Err(_) => continue,
       };
 
-      let response = unsafe { func(msg) };
+      let _ = unsafe { func(msg) };
 
-      if !response.is_null() {
-        let response = unsafe { &*response };
-        let msg: TransportMessage = response.into();
-        let resp_str = serde_json::to_string(&msg).unwrap_or_default().into_bytes();
-        let resp_len = (resp_str.len() as u32).to_be_bytes();
+      // if !response.is_null() {
+      //   let response = unsafe { &*response };
+      //   let msg: TransportMessage = response.into();
+      //   let resp_str = serde_json::to_string(&msg).unwrap_or_default().into_bytes();
+      //   let resp_len = (resp_str.len() as u32).to_be_bytes();
 
-        if stream.write_all(&resp_len).is_err() {
-          break;
-        }
-        if stream.write_all(&resp_str).is_err() {
-          break;
-        }
-      }
+      //   if stream.write_all(&resp_len).is_err() {
+      //     break;
+      //   }
+      //   if stream.write_all(&resp_str).is_err() {
+      //     break;
+      //   }
+      // }
     }
   });
 }
@@ -336,13 +332,15 @@ pub extern "C" fn send_message(tp: *const TransportProtocol, message: MessageCon
         conn
       };
 
-      let resp_str = serde_json::to_string(&msg).unwrap_or_default().into_bytes();
-      let resp_len = (resp_str.len() as u32).to_be_bytes();
-
-      if stream.write_all(&resp_len).is_err() {
-        return;
-      }
-      if stream.write_all(&resp_str).is_err() {
+      if stream
+        .write_all(
+          &serde_json::to_string(&msg)
+            .map(|s| format!("{s}\n"))
+            .unwrap_or_default()
+            .into_bytes(),
+        )
+        .is_err()
+      {
         return;
       }
     }

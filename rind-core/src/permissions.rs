@@ -48,7 +48,7 @@ pub struct PermissionStoreInner {
 #[derive(Default, Clone)]
 pub struct PermissionStore {
   inner: Arc<RwLock<PermissionStoreInner>>,
-  users: UserStoreShared,
+  pub users: UserStoreShared,
 }
 
 impl PermissionStore {

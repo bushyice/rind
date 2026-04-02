@@ -1,3 +1,7 @@
+// Users "exist" but-
+// - PAM sucsk
+// - Need to expose more APIs
+
 use std::sync::Arc;
 
 use rind_core::prelude::*;
