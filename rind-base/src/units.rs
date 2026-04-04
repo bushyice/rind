@@ -6,7 +6,7 @@ use rind_core::user::{PamHandle, UserStore};
 
 use crate::flow::{Signal, State, StateMachine, StateMachineShared};
 use crate::mount::Mount;
-use crate::permissions::{PERM_LOGIN, PERM_SYSTEM_SERVICES, Permission};
+use crate::permissions::{PERM_LOGIN, PERM_RUN0, PERM_SYSTEM_SERVICES, Permission};
 use crate::services::Service;
 
 pub const UNITS_META: &str = "units";
@@ -38,7 +38,8 @@ impl UnitsOrchestrator {
     self
       .permissions
       .reg_perm(PERM_LOGIN, "Login")?
-      .reg_perm(PERM_SYSTEM_SERVICES, "SystemServices")?;
+      .reg_perm(PERM_SYSTEM_SERVICES, "SystemServices")?
+      .reg_perm(PERM_RUN0, "Run0")?;
 
     Ok(())
   }

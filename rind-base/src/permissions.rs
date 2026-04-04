@@ -5,6 +5,7 @@ use rind_core::prelude::{Model, NamedItem, PermissionId, model};
 
 pub static PERM_SYSTEM_SERVICES: PermissionId = PermissionId(1000);
 pub static PERM_LOGIN: PermissionId = PermissionId(1001);
+pub static PERM_RUN0: PermissionId = PermissionId(1002);
 
 #[model(
   meta_name = name,

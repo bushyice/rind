@@ -28,6 +28,9 @@ pub enum MessageType {
   Login,
   Logout,
   Unknown,
+  Run0,
+  Valid,
+  RequestPassword,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
@@ -44,6 +47,11 @@ pub struct MessagePayload {
   pub name: String,
   pub unit_type: UnitType,
   pub force: Option<bool>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct Run0AuthPayload {
+  pub password: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]

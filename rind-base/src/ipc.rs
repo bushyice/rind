@@ -1,4 +1,5 @@
 use libc::{SO_PEERCRED, SOL_SOCKET, getsockopt, ucred};
+use rind_ipc::Run0AuthPayload;
 use rind_ipc::ser::StateSerialized;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -12,7 +13,7 @@ use std::thread;
 
 use crate::flow::{State, StateMachineShared};
 use crate::mount::{Mount, is_mounted};
-use crate::permissions::{PERM_LOGIN, PERM_SYSTEM_SERVICES};
+use crate::permissions::{PERM_LOGIN, PERM_RUN0, PERM_SYSTEM_SERVICES};
 use crate::services::Service;
 use rind_core::prelude::*;
 use rind_ipc::{
@@ -24,10 +25,18 @@ pub const IPC_RUNTIME_ID: &str = "ipc";
 
 type IpcRequest = (Message, Sender<Message>);
 
+#[derive(Debug, Default)]
+enum Run0State {
+  #[default]
+  Inactive,
+  RequireAuth,
+}
+
 pub struct IpcRuntime {
   incoming_tx: Sender<IpcRequest>,
   incoming_rx: Arc<Mutex<Receiver<IpcRequest>>>,
   listener_thread: Option<thread::JoinHandle<()>>,
+  run0_queue: Arc<Mutex<HashMap<i32, Run0State>>>,
 }
 
 impl Default for IpcRuntime {
@@ -37,6 +46,7 @@ impl Default for IpcRuntime {
       incoming_tx: tx,
       incoming_rx: Arc::new(Mutex::new(rx)),
       listener_thread: None,
+      run0_queue: Arc::new(Mutex::new(HashMap::new())),
     }
   }
 }
@@ -85,9 +95,10 @@ impl Runtime for IpcRuntime {
         }
       }
       "drain_requests" => {
+        let queue = self.run0_queue.clone();
         if let Ok(rx) = self.incoming_rx.lock() {
           while let Ok((msg, reply_tx)) = rx.try_recv() {
-            let response = handle_ipc_message(msg, ctx, dispatch, log);
+            let response = handle_ipc_message(queue.clone(), msg, ctx, dispatch, log);
             let _ = reply_tx.send(response);
           }
         }
@@ -141,7 +152,13 @@ fn handle_client_connection(mut stream: UnixStream, parent_tx: Sender<IpcRequest
     };
 
     let msg: Message = match serde_json::from_str::<Message>(&raw) {
-      Ok(m) => m.from_gid(cred.gid).from_uid(cred.uid).from_pid(cred.pid),
+      Ok(m) => {
+        if cred.uid == 0 && m.from_uid.is_some() {
+          m
+        } else {
+          m.from_gid(cred.gid).from_uid(cred.uid).from_pid(cred.pid)
+        }
+      }
       Err(_) => continue,
     };
 
@@ -168,6 +185,7 @@ fn handle_client_connection(mut stream: UnixStream, parent_tx: Sender<IpcRequest
 }
 
 fn handle_ipc_message(
+  queue: Arc<Mutex<HashMap<i32, Run0State>>>,
   msg: Message,
   ctx: &mut RuntimeContext<'_>,
   dispatch: &RuntimeDispatcher,
@@ -405,6 +423,106 @@ fn handle_ipc_message(
       let force = payload.force.unwrap_or(false);
       let _ = dispatch.dispatch("services", "stop", serde_json::json!({ "name": payload.name, "mode": if force { "force" } else { "graceful" } }).into());
       Message::ack(format!("stopped {}", payload.name))
+    }
+    MessageType::Run0 => {
+      let Some(pid) = msg.from_pid else {
+        return Message::nack("Permission Denied");
+      };
+      let Some(uid) = msg.from_uid else {
+        return Message::nack("Permission Denied");
+      };
+
+      if !pm.user_has(msg.from_uid.unwrap(), PERM_RUN0)
+        && !pm.users.user_in_group(
+          pm.users.lookup_by_uid(msg.from_uid.unwrap()).unwrap(),
+          "wheel",
+        )
+      {
+        return Message::nack("Permission Denied");
+      }
+
+      let mut run0_queue = queue.lock().unwrap();
+
+      let state = run0_queue.entry(pid).or_insert(Run0State::default());
+
+      if matches!(state, Run0State::Inactive) {
+        *state = Run0State::RequireAuth;
+        return Message::from_type(MessageType::RequestPassword);
+      }
+
+      let Some(payload) = msg.parse_payload::<Run0AuthPayload>().ok() else {
+        return Message::nack("invalid stop payload");
+      };
+
+      let pam = ctx
+        .scope
+        .get::<Arc<rind_core::user::PamHandle>>()
+        .expect("PamHandle not in scope");
+
+      let Some(user) = pam.store().lookup_by_uid(uid) else {
+        return Message::nack("user not found");
+      };
+
+      let password = payload.password;
+      if let Err(e) = pam.pam_authenticate(&user.username, &password) {
+        run0_queue.remove(&pid);
+        return Message::nack(format!("authentication failed: {e:?}"));
+      }
+
+      if matches!(state, Run0State::RequireAuth) {
+        // let env = std::fs::read(format!("/proc/{}/environ", pid))
+        //   .map(|bytes| {
+        //     bytes
+        //       .split(|b| *b == 0) // split on '\0'
+        //       .filter_map(|entry| {
+        //         let s = std::str::from_utf8(entry).ok()?;
+        //         s.split_once('=')
+        //           .map(|(k, v)| (k.to_string(), v.to_string()))
+        //       })
+        //       .collect::<HashMap<String, String>>()
+        //   })
+        //   .unwrap_or_default();
+
+        // let cwd = std::fs::read_link(format!("/proc/{}/cwd", pid)).unwrap_or(PathBuf::from("/"));
+
+        // use std::fs::File;
+
+        // let Ok(stdin) = File::open(format!("/proc/{}/fd/0", pid)) else {
+        //   return Message::nack(format!("failed to read stdin for parent process"));
+        // };
+        // let Ok(stdout) = File::open(format!("/proc/{}/fd/1", pid)) else {
+        //   return Message::nack(format!("failed to read stdout for parent process"));
+        // };
+        // let Ok(stderr) = File::open(format!("/proc/{}/fd/2", pid)) else {
+        //   return Message::nack(format!("failed to read stderr for parent process"));
+        // };
+
+        // let args = args.clone();
+        run0_queue.remove(&pid);
+
+        // std::thread::spawn(move || {
+        //   let mut args = args.into_iter();
+        //   let program = args.next().unwrap();
+
+        //   let mut command = Command::new(program);
+
+        //   command
+        //     .args(args)
+        //     .gid(0)
+        //     .uid(0)
+        //     .envs(env)
+        //     .current_dir(cwd)
+        //     .stdin(stdin)
+        //     .stdout(stdout)
+        //     .stderr(stderr);
+
+        //   let _ = command.spawn();
+        // });
+
+        Message::from_type(MessageType::Valid)
+      } else {
+        Message::from_type(MessageType::Unknown)
+      }
     }
     MessageType::Login => {
       let Some(payload) = msg.parse_payload::<LoginPayload>().ok() else {

@@ -3,6 +3,11 @@
  * - permissions.
  */
 
+use std::{
+  os::unix::process::CommandExt,
+  process::{Command, Stdio},
+};
+
 use clap::{CommandFactory, Parser};
 use owo_colors::OwoColorize;
 use rind_ipc::{
@@ -69,6 +74,9 @@ struct Cli {
 
   #[arg(long)]
   tty: Option<String>,
+
+  #[arg(short = 'E', long, trailing_var_arg = true, num_args(1..), allow_hyphen_values = true)]
+  run0: Option<Vec<String>>,
 }
 
 pub fn report_error(msg: &str, err: impl std::fmt::Display) {
@@ -84,6 +92,53 @@ pub fn handle_parse<T>(result: Result<T, String>, payload: String) -> Option<T> 
       None
     }
     Ok(e) => Some(e),
+  }
+}
+
+pub fn handle_run0_message(args: Vec<String>, message: Message) {
+  match &message.r#type {
+    MessageType::RequestPassword => {
+      print!("root password: ");
+      use std::io::Write;
+      std::io::stdout().flush().unwrap();
+      let password = rpassword::read_password().unwrap();
+      print!("\r\x1b[2K");
+      std::io::stdout().flush().unwrap();
+      let payload = rind_ipc::Run0AuthPayload {
+        password: password.trim().to_string(),
+      };
+      handle_run0_message(
+        args,
+        match send_message(
+          Message::from_type(MessageType::Run0).with(serde_json::to_string(&payload).unwrap()),
+        ) {
+          Ok(m) => m,
+          Err(e) => {
+            report_error("run0 request failed", e);
+            return;
+          }
+        },
+      );
+    }
+    MessageType::Valid => {
+      let mut args = args.into_iter();
+      let program = args.next().unwrap();
+
+      let mut command = Command::new(program);
+
+      command
+        .args(args)
+        .gid(0)
+        .uid(0)
+        .envs(std::env::vars())
+        .current_dir(std::env::current_dir().unwrap())
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+
+      let _ = command.status();
+    }
+    _ => handle_message(message),
   }
 }
 
@@ -207,6 +262,16 @@ fn main() {
     } else if let Some(s) = &cli.unit {
       handle!(action!(Disable, s.clone(), Unit, None));
     }
+  } else if let Some(args) = cli.run0 {
+    let output = match send_message(Message::from_type(MessageType::Run0)) {
+      Ok(m) => m,
+      Err(e) => {
+        report_error("run0 request failed", e);
+        return;
+      }
+    };
+
+    handle_run0_message(args, output);
   } else if cli.login || cli.logout {
     let username = cli
       .user

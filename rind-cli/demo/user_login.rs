@@ -29,7 +29,6 @@ fn prompt_login(
   reader: &mut BufReader<File>,
 ) -> Option<(String, Option<String>)> {
   let mut user_line = String::new();
-  let mut pass_line = String::new();
 
   let _ = write!(writer, "\x1b[2J\x1b[H");
   let _ = writer.flush();
@@ -46,12 +45,11 @@ fn prompt_login(
   if write!(writer, "password: ").is_err() || writer.flush().is_err() {
     return None;
   }
-  if reader.read_line(&mut pass_line).ok()? == 0 {
-    return None;
-  }
+
+  let password = rpassword::read_password().unwrap();
 
   let user = user_line.trim().to_string();
-  let pass = pass_line.trim().to_string();
+  let pass = password.trim().to_string();
 
   if user.is_empty() {
     None

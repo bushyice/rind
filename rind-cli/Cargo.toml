@@ -37,3 +37,4 @@ serde_json.workspace = true
 serde.workspace = true
 
 owo-colors = "4.3.0"
+rpassword = "*"

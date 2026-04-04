@@ -488,6 +488,11 @@ nodes = [
   # { path = "/dev/console", node_type = "c", major = 5, minor = 1, mode = 0o666 }
 ]
 
+# format: /file:uid:gid:mode
+disk_permissions = [
+  "/usr/bin/rind:0:0:4755"
+]
+
 # Supported root env forms (written to /etc/rind/root.env):
 # root_env = { RIND = "v0" }
 # root_env = ["RIND", "v0"]

@@ -109,6 +109,7 @@ struct Profile {
   #[serde(alias = "root_envs")]
   root_env: Option<EnvConfig>,
   user: Option<Vec<UserConfig>>,
+  disk_permissions: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -799,7 +800,32 @@ fn builder_u(profile: &Profile, rootfs: &Path) {
   fs::set_permissions(etc_dir.join("shadow"), perms).unwrap();
 }
 
+fn parse_disk_perms(perms: &Vec<String>) -> HashMap<String, (u32, u32, u32)> {
+  let mut map = HashMap::new();
+  for perm in perms {
+    let parts: Vec<&str> = perm.split(":").collect();
+
+    if parts.len() < 3 {
+      continue;
+    }
+
+    map.insert(
+      parts[0].to_string(),
+      (
+        parts[1].parse().unwrap(),
+        parts[2].parse().unwrap(),
+        parts
+          .get(3)
+          .map(|x| u32::from_str_radix(x, 8).unwrap())
+          .unwrap_or(0),
+      ),
+    );
+  }
+  map
+}
+
 fn builder_d(profile: &Profile, rootfs: &Path, no_overwrite: bool) {
+  let disk_perms = parse_disk_perms(profile.disk_permissions.as_ref().unwrap_or(&Vec::new()));
   match profile.disk_mode.as_deref().unwrap_or("cpio") {
     "cpio" => {
       let output = artifact_path().join("rootfs.cpio.gz");
@@ -905,7 +931,8 @@ fn builder_d(profile: &Profile, rootfs: &Path, no_overwrite: bool) {
         }
       };
 
-      copy_into_ext4(&mut fs, rootfs, rootfs).expect("Failed to copy rootfs recursively");
+      copy_into_ext4(&mut fs, rootfs, rootfs, &disk_perms)
+        .expect("Failed to copy rootfs recursively");
 
       let _ = fs.umount();
       println!("[*] Disk image created at {}", output.display());
@@ -914,7 +941,12 @@ fn builder_d(profile: &Profile, rootfs: &Path, no_overwrite: bool) {
   };
 }
 
-fn copy_into_ext4(fs: &mut Ext4Fs, rootfs: &Path, current: &Path) -> std::io::Result<()> {
+fn copy_into_ext4(
+  fs: &mut Ext4Fs,
+  rootfs: &Path,
+  current: &Path,
+  disk_perms: &HashMap<String, (u32, u32, u32)>,
+) -> std::io::Result<()> {
   let entries = match fs::read_dir(current) {
     Ok(e) => e,
     Err(e) => {
@@ -934,7 +966,7 @@ fn copy_into_ext4(fs: &mut Ext4Fs, rootfs: &Path, current: &Path) -> std::io::Re
       continue;
     };
     let file_type = meta.file_type();
-    let mode = meta.mode() & 0o7777;
+    let mode = meta.mode();
     let uid = meta.uid();
     let gid = meta.gid();
 
@@ -955,7 +987,7 @@ fn copy_into_ext4(fs: &mut Ext4Fs, rootfs: &Path, current: &Path) -> std::io::Re
           .expect("Failed to set directory mode");
       }
 
-      copy_into_ext4(fs, rootfs, &path)?;
+      copy_into_ext4(fs, rootfs, &path, &disk_perms)?;
     } else {
       let src_mtime = fs::metadata(&path)
         .unwrap()
@@ -970,6 +1002,8 @@ fn copy_into_ext4(fs: &mut Ext4Fs, rootfs: &Path, current: &Path) -> std::io::Re
           continue;
         }
         println!("Updating file: {:?}", target_path);
+      } else {
+        println!("Copying new file: {path:?} -> {target_path:?}");
       }
 
       let bytes = match fs::read(&path) {
@@ -1010,6 +1044,15 @@ fn copy_into_ext4(fs: &mut Ext4Fs, rootfs: &Path, current: &Path) -> std::io::Re
 
       file.write_all(&bytes).expect("Failed to write file");
       set_ext4_mtime(&target_path, src_mtime);
+
+      let (uid, gid, mode) = match disk_perms.get(&target_path) {
+        Some((uid, gid, mode)) => {
+          println!("  Found perm override: {uid}, {gid}, {mode}");
+          (*uid, *gid, *mode)
+        }
+        None => (uid, gid, mode),
+      };
+
       fs.set_owner(&target_path, uid, gid)
         .expect("Failed to set file owner");
       fs.set_permissions(&target_path, mode)
