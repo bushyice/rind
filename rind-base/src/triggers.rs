@@ -106,8 +106,22 @@ pub fn json_branch_key(value: &serde_json::Value, keys: &[String]) -> Option<Vec
 
 pub fn merge_json(a: &mut serde_json::Value, b: &serde_json::Value) {
   if let (Some(a_obj), Some(b_obj)) = (a.as_object_mut(), b.as_object()) {
+    let mut forced = "";
+
     for (k, v) in b_obj {
-      a_obj.insert(k.clone(), v.clone());
+      if forced == k {
+        continue;
+      }
+
+      let k = k
+        .strip_prefix("&")
+        .map(|x| {
+          forced = x;
+          x
+        })
+        .unwrap_or(k);
+
+      a_obj.insert(k.to_owned(), v.clone());
     }
   }
 }

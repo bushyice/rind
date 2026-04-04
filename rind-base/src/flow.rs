@@ -115,6 +115,17 @@ impl FlowPayload {
     }
   }
 
+  pub fn set_json(&mut self, key: String, value: serde_json::Value) {
+    match self {
+      FlowPayload::Json(v) => {
+        let mut json = v.into_json();
+        merge_json(&mut json, &serde_json::json!({ key: value }));
+        v.0 = json.to_string();
+      }
+      _ => {}
+    }
+  }
+
   pub fn from_json(v: Option<serde_json::Value>) -> Self {
     match v {
       Some(serde_json::Value::Object(v)) => {
@@ -302,7 +313,7 @@ impl FlowRuntime {
     subscriber: &TransportMethod,
   ) {
     if Self::transport_id(subscriber) == "uds" {
-      println!("{:?} {:?}", subscriber, subscriber.get_permissions());
+      // println!("{:?} {:?}", subscriber, subscriber.get_permissions());
       let _ = dispatch.dispatch(
         "transport",
         "setup_uds",
@@ -807,7 +818,7 @@ impl Runtime for FlowRuntime {
     payload: RuntimePayload,
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
-    _log: &LogHandle,
+    log: &LogHandle,
   ) -> Result<(), CoreError> {
     let sm_shared = ctx
       .scope
@@ -831,8 +842,8 @@ impl Runtime for FlowRuntime {
         let mut guard = HashSet::new();
         Self::set_state(
           &mut sm,
-          name,
-          Some(flow_payload),
+          name.clone(),
+          Some(flow_payload.clone()),
           &state_defs,
           &signal_defs,
           &mut guard,
@@ -840,6 +851,11 @@ impl Runtime for FlowRuntime {
           dispatch,
         )?;
         Self::save_state_machine(&sm, persistence.as_ref())?;
+
+        let mut fields = HashMap::new();
+        fields.insert("name".to_string(), name);
+        fields.insert("payload".into(), flow_payload.to_string_payload());
+        log.log(LogLevel::Trace, "flow-runtime", "setting state", fields);
       }
       "remove_state" => {
         let name = payload.get::<String>("name")?;
@@ -853,7 +869,7 @@ impl Runtime for FlowRuntime {
         Self::remove_state(
           &mut sm,
           &name,
-          filter,
+          filter.clone(),
           &state_defs,
           &signal_defs,
           &mut guard,
@@ -861,6 +877,11 @@ impl Runtime for FlowRuntime {
           dispatch,
         );
         Self::save_state_machine(&sm, persistence.as_ref())?;
+
+        let mut fields = HashMap::new();
+        fields.insert("name".to_string(), name);
+        fields.insert("payload".into(), format!("{filter:?}"));
+        log.log(LogLevel::Trace, "flow-runtime", "removing state", fields);
       }
       "emit_signal" => {
         let name = payload.get::<String>("name")?;

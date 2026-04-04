@@ -56,7 +56,8 @@ impl ServiceSerialized {
 #[derive(Serialize, Deserialize)]
 pub struct StateSerialized {
   pub name: String,
-  pub instances: usize,
+  pub instances: Vec<serde_json::Value>,
+  pub keys: Vec<String>,
 }
 
 impl StateSerialized {

@@ -1,4 +1,5 @@
 use libc::{SO_PEERCRED, SOL_SOCKET, getsockopt, ucred};
+use rind_ipc::ser::StateSerialized;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
@@ -9,6 +10,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use crate::flow::{State, StateMachineShared};
 use crate::mount::{Mount, is_mounted};
 use crate::permissions::{PERM_LOGIN, PERM_SYSTEM_SERVICES};
 use crate::services::Service;
@@ -177,7 +179,12 @@ fn handle_ipc_message(
     .cloned()
     .unwrap_or_default();
 
-  let event_bus = ctx.scope.get::<EventBus>().cloned().unwrap_or_default();
+  let sm_shared = ctx
+    .scope
+    .get::<StateMachineShared>()
+    .cloned()
+    .unwrap_or_default();
+
   match msg.r#type {
     MessageType::List => {
       let Some(payload) = msg.parse_payload::<MessagePayload>().ok() else {
@@ -247,11 +254,6 @@ fn handle_ipc_message(
           .stringify(),
         )
       } else if payload.unit_type == UnitType::Service {
-        let Some(payload) = msg.parse_payload::<MessagePayload>().ok() else {
-          return Message::from_type(MessageType::Error)
-            .with(format!("Incorrect Payload: {:?}", msg.payload));
-        };
-
         let Some(service_meta) = ctx
           .registry
           .metadata
@@ -277,6 +279,50 @@ fn handle_ipc_message(
             run: service.metadata.run.to_string(),
           }
           .stringify(),
+        )
+      } else if payload.unit_type == UnitType::State && !payload.name.is_empty() {
+        let states = &sm_shared.read().unwrap();
+        let Some(instances) = states.states.get(&payload.name) else {
+          return Message::from_type(MessageType::Error)
+            .with(format!("State not found: {:?}", payload.name));
+        };
+        let Some(def) = ctx.registry.metadata.find::<State>("units", &payload.name) else {
+          return Message::from_type(MessageType::Error)
+            .with(format!("State not found: {:?}", payload.name));
+        };
+        let branches = def.branch.as_ref();
+
+        Message::from_type(MessageType::List).with(
+          StateSerialized {
+            name: payload.name,
+            instances: instances.iter().map(|x| x.payload.to_json()).collect(),
+            keys: if let Some(branches) = branches {
+              branches.clone()
+            } else {
+              Default::default()
+            },
+          }
+          .stringify(),
+        )
+      } else if payload.unit_type == UnitType::State {
+        let states = &sm_shared.read().unwrap().states;
+
+        Message::from_type(MessageType::List).with(
+          serde_json::to_string(
+            &states
+              .iter()
+              .filter_map(|(name, inst)| {
+                let def = ctx.registry.metadata.find::<State>("units", name)?;
+                let branches = def.branch.as_ref()?;
+                Some(StateSerialized {
+                  name: name.clone(),
+                  instances: inst.iter().map(|x| x.payload.to_json()).collect(),
+                  keys: branches.clone(),
+                })
+              })
+              .collect::<Vec<StateSerialized>>(),
+          )
+          .unwrap_or_default(),
         )
       } else {
         let mut units_map: HashMap<String, UnitSerialized> = HashMap::new();
@@ -374,7 +420,7 @@ fn handle_ipc_message(
         .get::<Arc<rind_core::user::PamHandle>>()
         .expect("PamHandle not in scope");
 
-      let Some(user) = pam.store().lookup_by_name(&payload.username) else {
+      let Some(_) = pam.store().lookup_by_name(&payload.username) else {
         return Message::nack("user not found");
       };
 
@@ -391,12 +437,6 @@ fn handle_ipc_message(
         Ok(s) => s,
         Err(e) => return Message::nack(format!("session error: {e:?}")),
       };
-
-      event_bus.emit(LoginEvent {
-        action: LoginAction::Login,
-        session_id: session.id,
-        uid: user.uid,
-      });
 
       let _ = dispatch.dispatch(
         "user",
@@ -446,17 +486,12 @@ fn handle_ipc_message(
       }
 
       if closed {
-        event_bus.emit(LoginEvent {
-          action: LoginAction::Logout,
-          session_id: session_id,
-          uid: user.uid,
-        });
-
         let _ = dispatch.dispatch(
           "user",
           "logout",
           serde_json::json!({
             "session_id": session_id,
+            "username": payload.username,
           })
           .into(),
         );

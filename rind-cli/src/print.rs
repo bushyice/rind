@@ -62,9 +62,76 @@ pub fn print_unit(unit_name: &String, unit: &UnitItemsSerialized) {
   }
 }
 
+use std::collections::BTreeMap;
+
 pub fn print_state(st: &StateSerialized) {
-  println!("{}: {}", st.name, st.instances)
+  let Some(pk) = st.keys.get(0) else {
+    println!("{}", st.name.bold());
+
+    for inst in &st.instances {
+      println!("{} {inst}", "●".cyan().bold());
+    }
+
+    return;
+  };
+
+  println!("{}", st.name.bold().white());
+
+  let mut groups: BTreeMap<String, Vec<&serde_json::Map<String, serde_json::Value>>> =
+    BTreeMap::new();
+
+  for inst in &st.instances {
+    let Some(obj) = inst.as_object() else {
+      continue;
+    };
+
+    let key = obj
+      .get(pk)
+      .map(|v| v.to_string())
+      .unwrap_or_else(|| "<none>".to_string());
+
+    groups.entry(key).or_default().push(obj);
+  }
+
+  for (group_key, items) in groups {
+    println!(
+      " {} {} {}",
+      "●".cyan().bold(),
+      pk.bold(),
+      group_key.bold().yellow()
+    );
+
+    for obj in items {
+      for (k, v) in obj {
+        if k == pk {
+          continue;
+        }
+
+        println!("   {}: {}", k.bold().white(), value_color(v));
+      }
+
+      println!();
+    }
+  }
 }
+
+fn value_color(v: &serde_json::Value) -> String {
+  match v {
+    serde_json::Value::String(s) => s.green().to_string(),
+    serde_json::Value::Number(n) => n.to_string().cyan().to_string(),
+    serde_json::Value::Bool(b) => {
+      if *b {
+        "true".yellow().to_string()
+      } else {
+        "false".dimmed().to_string()
+      }
+    }
+    serde_json::Value::Null => "null".dimmed().to_string(),
+    _ => v.to_string().blue().to_string(), // arrays/objects
+  }
+}
+
+// pub fn print_states(_st: Vec<StateSerialized>) {}
 
 pub fn print_service(service: &ServiceSerialized) {
   let (dot, state) = match service.last_state.as_str() {

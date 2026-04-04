@@ -161,7 +161,7 @@ payload = "string"
 [[state]]
 name = "user_session"
 payload = "json"
-branch = ["tty"]
+branch = ["session_id"]
 
 [[state]]
 name = "user_auto_login"

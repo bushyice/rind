@@ -43,7 +43,7 @@ fn read_env_file(path: &str) -> HashMap<String, String> {
   out
 }
 
-fn resolve_params() -> (String, String) {
+fn resolve_params() -> (String, String, u64) {
   let raw = std::env::var("RIND_USER_ACTIVE").unwrap_or_default();
   if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
     println!("{v:?}");
@@ -68,17 +68,23 @@ fn resolve_params() -> (String, String) {
       } else {
         "unknown".into()
       },
+      if let Some(id) = v.get("session_id").and_then(|x| x.as_u64()) {
+        id
+      } else {
+        1u64
+      },
     );
   }
 
   (
     std::env::var("RIND_LOGIN_TTY").unwrap_or_else(|_| "/dev/tty1".to_string()),
     std::env::var("USER").unwrap_or_else(|_| "unknown".to_string()),
+    1u64,
   )
 }
 
 fn main() {
-  let (tty, user) = resolve_params();
+  let (tty, user, session_id) = resolve_params();
   let Ok(file) = OpenOptions::new().read(true).write(true).open(tty.as_str()) else {
     eprintln!("TTY file {} not found", tty);
     return;
@@ -129,6 +135,7 @@ fn main() {
     .env_clear()
     .env("HOME", &home)
     .env("USER", user)
+    .env("SESSION_ID", session_id.to_string())
     .env(
       "PATH",
       extra_env

@@ -460,7 +460,7 @@ impl Default for PamConfig {
 }
 
 pub struct PamHandle {
-  store: UserStoreShared,
+  pub store: UserStoreShared,
   config: PamConfig,
   sessions: Arc<RwLock<HashMap<u64, PamSession>>>,
   lockouts: Arc<RwLock<HashMap<String, LockoutState>>>,

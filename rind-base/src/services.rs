@@ -979,7 +979,7 @@ impl Runtime for ServiceRuntime {
       "evaluate_triggers" => {
         let emit_trig = payload.r#as::<EmitTrigger>().unwrap_or_default();
 
-        println!("{:?} {:?}", emit_trig.state, emit_trig.action);
+        // println!("{:?} {:?}", emit_trig.state, emit_trig.action);
 
         let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
         let Some(sm_lock) = &sm_shared else {
