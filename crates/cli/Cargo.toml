@@ -33,8 +33,8 @@ path = "demo/tcp.rs"
 
 [dependencies]
 clap.workspace = true
-rind-ipc = { path = "../rind-ipc", default-features = false, features = [] }
-rind-core = { path = "../rind-core" }
+rind-ipc = { path = "../ipc", default-features = false, features = [] }
+rind-core = { path = "../core" }
 libc.workspace = true
 
 serde_json.workspace = true

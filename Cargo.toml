@@ -1,12 +1,12 @@
 [workspace]
 members = [
-  "rind-cli",
-  # "rind-daemon",
-  "rind-core",
-  # "rind-common",
-  "rind-base",
-  "rind-init", "rind-macros",
-  "rind-ipc", "rind-api", "rind-plugins",
+  "crates/cli",
+  # "crates/daemon",
+  "crates/core",
+  # "crates/common",
+  "crates/base",
+  "crates/init", "crates/macros",
+  "crates/ipc", "crates/api", "crates/plugins",
 ]
 resolver = "3"
 

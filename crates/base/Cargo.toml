@@ -7,8 +7,8 @@ edition.workspace = true
 path = "src/base.rs"
 
 [dependencies]
-rind-core = { path = "../rind-core" }
-rind-ipc = { path = "../rind-ipc", features = ["server"] }
+rind-core = { path = "../core" }
+rind-ipc = { path = "../ipc", features = ["server"] }
 serde.workspace = true
 strumbra.workspace = true
 serde_json.workspace = true

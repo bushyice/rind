@@ -12,7 +12,7 @@ serde.workspace = true
 nix.workspace = true
 toml.workspace = true
 anyhow.workspace = true
-rind-core = { path = "../rind-core" }
+rind-core = { path = "../core" }
 serde_json.workspace = true
 
 [features]
