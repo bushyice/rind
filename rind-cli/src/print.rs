@@ -1,5 +1,8 @@
 use owo_colors::OwoColorize;
-use rind_ipc::ser::{ServiceSerialized, StateSerialized, UnitItemsSerialized, UnitSerialized};
+use rind_ipc::ser::{
+  NetworkStatusSerialized, PortStateSerialized, ServiceSerialized, StateSerialized,
+  UnitItemsSerialized, UnitSerialized,
+};
 
 pub fn print_units(units: &[UnitSerialized]) {
   println!(
@@ -20,6 +23,51 @@ pub fn print_units(units: &[UnitSerialized]) {
       u.mounts.to_string().yellow(),
       u.mounted.to_string().yellow()
     );
+  }
+}
+
+pub fn print_ports(ports: &[PortStateSerialized]) {
+  println!(
+    "{:<10} {:<20} {:<10} {:<10} {:<10} {:<15}",
+    "Protocol".bold().on_blue().white(),
+    "Local IP".bold().on_green().white(),
+    "Port".bold().on_yellow().white(),
+    "State".bold().on_white().black(),
+    "PID".bold().on_magenta().white(),
+    "Process".bold().on_cyan().white()
+  );
+
+  for port in ports {
+    let proto = port.protocol.blue();
+    let pid = port
+      .pid
+      .map(|p| p.to_string())
+      .unwrap_or_else(|| "-".to_string());
+    let proc_n = port.process.clone().unwrap_or_else(|| "-".to_string());
+    println!(
+      "{:<10} {:<20} {:<10} {:<10} {:<10} {:<15}",
+      proto,
+      port.local_address,
+      port.local_port,
+      port.state.green(),
+      pid,
+      proc_n.yellow()
+    );
+  }
+}
+
+pub fn print_network(status: &NetworkStatusSerialized) {
+  println!(
+    "{}: {} (Method: {})",
+    status.interface.blue().bold(),
+    status.state.green(),
+    status.method
+  );
+  if let Some(ip) = &status.address {
+    println!("   IP: {}", ip.yellow());
+  }
+  if let Some(gw) = &status.gateway {
+    println!("   Gateway: {}", gw.black().on_white());
   }
 }
 

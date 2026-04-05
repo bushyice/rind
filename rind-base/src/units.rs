@@ -3,9 +3,9 @@ use std::sync::{Arc, RwLock};
 
 use rind_core::prelude::*;
 use rind_core::user::{PamHandle, UserStore};
-
 use crate::flow::{Signal, State, StateMachine, StateMachineShared};
 use crate::mount::Mount;
+use crate::networking::NetworkConfig;
 use crate::permissions::{PERM_LOGIN, PERM_RUN0, PERM_SYSTEM_SERVICES, Permission};
 use crate::services::Service;
 
@@ -48,6 +48,7 @@ impl UnitsOrchestrator {
     let mut metadata = Metadata::new(UNITS_META)
       .of::<Service>("service")
       .of::<Mount>("mount")
+      .of::<NetworkConfig>("network")
       .of::<State>("state")
       .of::<Signal>("signal")
       .of::<Permission>("permission");
@@ -184,6 +185,28 @@ payload = "json"
 [[signal]]
 name = "request_logout"
 payload = "json"
+
+[[state]]
+name = "net-interface"
+payload = "json"
+branch = ["name"]
+
+[[state]]
+name = "online"
+payload = "none"
+
+[[state]]
+name = "net-configured"
+payload = "json"
+branch = ["name"]
+
+[[state]]
+name = "net-dns_ready"
+payload = "none"
+
+[[state]]
+name = "firewall"
+payload = "none"
 "#;
 
     let _ = metadata.from_toml(builtin_toml, BUILTIN_UNIT);

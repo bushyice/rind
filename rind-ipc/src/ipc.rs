@@ -31,6 +31,7 @@ pub enum MessageType {
   Run0,
   Valid,
   RequestPassword,
+  Network,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
@@ -71,6 +72,24 @@ pub struct LogoutPayload {
 struct ArrayPayload<T> {
   items: Vec<T>,
 }
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub enum NetworkOp {
+  Status,
+  Ports,
+  Set {
+    iface: String,
+    method: String,
+    address: Option<String>,
+    gateway: Option<String>,
+  },
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct NetworkPayload {
+  pub op: NetworkOp,
+}
+
 
 impl Message {
   pub fn from_type(t: MessageType) -> Self {

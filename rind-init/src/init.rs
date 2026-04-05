@@ -11,6 +11,7 @@ use std::path::PathBuf;
 use rind_base::flow::FlowRuntime;
 use rind_base::ipc::IpcRuntime;
 use rind_base::mount::MountRuntime;
+use rind_base::networking::NetworkingRuntime;
 use rind_base::reaper::ReaperRuntime;
 use rind_base::services::ServiceRuntime;
 use rind_base::transport::TransportRuntime;
@@ -48,7 +49,12 @@ impl Orchestrator for BootOrchestrator {
 
     ctx.dispatch("ipc", "start_server", json!({}))?;
 
+    ctx.dispatch("firewall", "apply", json!({}))?;
+
     ctx.dispatch("flow", "bootstrap", json!({}))?;
+    ctx.dispatch("networking", "bootstrap", json!({}))?;
+    ctx.dispatch("networking", "scan", json!({}))?;
+    ctx.dispatch("networking", "configure", json!({}))?;
 
     ctx.dispatch("services", "evaluate_triggers", json!({}))?;
 
@@ -80,6 +86,7 @@ impl Orchestrator for RuntimeProviderOrchestrator {
       Box::new(MountRuntime::default()),
       Box::new(FlowRuntime::default()),
       Box::new(TransportRuntime::default()),
+      Box::new(NetworkingRuntime::default()),
       Box::new(ReaperRuntime::default()),
       Box::new(IpcRuntime::default()),
       Box::new(UserRuntime::default()),
@@ -112,6 +119,8 @@ impl Orchestrator for PumpOrchestrator {
   fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
     ctx.dispatch("reaper", "reap_once", json!({}))?;
     ctx.dispatch("reaper", "timeout_sweep", json!({}))?;
+    ctx.dispatch("networking", "scan", json!({}))?;
+    ctx.dispatch("networking", "reconcile", json!({}))?;
     ctx.dispatch("services", "drain_events", json!({}))?;
     ctx.dispatch("transport", "drain_incoming", json!({}))?;
     ctx.dispatch("ipc", "drain_requests", json!({}))?;

@@ -86,6 +86,37 @@ impl UnitItemsSerialized {
   }
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PortStateSerialized {
+  pub protocol: String,
+  pub local_address: String,
+  pub local_port: u16,
+  pub state: String,
+  pub pid: Option<u32>,
+  pub process: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct NetworkStatusSerialized {
+  pub interface: String,
+  pub method: String,
+  pub address: Option<String>,
+  pub gateway: Option<String>,
+  pub state: String,
+}
+
+impl NetworkStatusSerialized {
+  pub fn stringify(&self) -> String {
+    serde_json::to_string(self).unwrap_or_default()
+  }
+}
+
+impl PortStateSerialized {
+  pub fn stringify(&self) -> String {
+    serde_json::to_string(self).unwrap_or_default()
+  }
+}
+
 #[cfg(test)]
 mod tests {
   use super::{ServiceSerialized, UnitItemsSerialized, UnitSerialized, serialize_many};

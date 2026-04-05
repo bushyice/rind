@@ -13,12 +13,16 @@ use std::thread;
 
 use crate::flow::{State, StateMachineShared};
 use crate::mount::{Mount, is_mounted};
-use crate::permissions::{PERM_LOGIN, PERM_RUN0, PERM_SYSTEM_SERVICES};
+use crate::permissions::{PERM_LOGIN, PERM_NETWORK, PERM_RUN0, PERM_SYSTEM_SERVICES};
 use crate::services::Service;
 use rind_core::prelude::*;
 use rind_ipc::{
-  LoginPayload, LogoutPayload, Message, MessagePayload, MessageType, UnitType,
-  ser::{MountSerialized, ServiceSerialized, UnitItemsSerialized, UnitSerialized, serialize_many},
+  LoginPayload, LogoutPayload, Message, MessagePayload, MessageType, NetworkOp, NetworkPayload,
+  UnitType,
+  ser::{
+    MountSerialized, NetworkStatusSerialized, PortStateSerialized, ServiceSerialized,
+    UnitItemsSerialized, UnitSerialized, serialize_many,
+  },
 };
 
 pub const IPC_RUNTIME_ID: &str = "ipc";
@@ -620,6 +624,242 @@ fn handle_ipc_message(
           "no active session for {} on tty {}",
           payload.username, payload.tty
         ))
+      }
+    }
+    MessageType::Network => {
+      let Some(payload) = msg.parse_payload::<NetworkPayload>().ok() else {
+        return Message::nack("invalid network payload");
+      };
+
+      match payload.op {
+        NetworkOp::Status => {
+          let mut statuses = Vec::new();
+          let sm = sm_shared.read().unwrap();
+          if let Some(groups) = ctx.registry.metadata.groups("units") {
+            for group in groups {
+              if let Some(cfgs) = ctx
+                .registry
+                .metadata
+                .group_items::<crate::networking::NetworkConfig>("units", &group)
+              {
+                for cfg in cfgs {
+                  let config = {
+                    if let Some(instances) = sm.states.get("rind@net-configured") {
+                      instances.iter().find(|i| {
+                        if let Some(obj) = i.payload.to_json().as_object() {
+                          obj.get("name").and_then(|v| v.as_str()) == Some(&cfg.name)
+                        } else {
+                          false
+                        }
+                      })
+                    } else {
+                      None
+                    }
+                  };
+                  let state = if config.is_some() {
+                    "Configured"
+                  } else {
+                    "Down"
+                  }
+                  .to_string();
+                  statuses.push(NetworkStatusSerialized {
+                    interface: cfg.name.clone(),
+                    method: match cfg.method {
+                      crate::networking::NetworkMethod::Dhcp => "dhcp".to_string(),
+                      crate::networking::NetworkMethod::Static => "static".to_string(),
+                    },
+                    address: config
+                      .map(|x| x.payload.get_json_field_as::<String>("ip"))
+                      .unwrap_or_default(),
+                    gateway: config
+                      .map(|x| x.payload.get_json_field_as::<String>("gateway"))
+                      .unwrap_or_default(),
+                    state,
+                  });
+                }
+              }
+            }
+          }
+          Message::from_type(MessageType::List).with_vec(statuses)
+        }
+        NetworkOp::Ports => {
+          #[allow(unused)]
+          #[derive(Clone, Copy)]
+          enum TcpState {
+            Established = 1,
+            SynSent,
+            SynRecv,
+            FinWait1,
+            FinWait2,
+            TimeWait,
+            Close,
+            CloseWait,
+            LastAck,
+            Listen,
+            Closing,
+            NewSynRecv,
+          }
+
+          impl TcpState {
+            fn as_str(&self) -> &'static str {
+              match self {
+                Self::Established => "ESTABLISHED",
+                Self::SynSent => "SYN_SENT",
+                Self::SynRecv => "SYN_RECV",
+                Self::FinWait1 => "FIN_WAIT1",
+                Self::FinWait2 => "FIN_WAIT2",
+                Self::TimeWait => "TIME_WAIT",
+                Self::Close => "CLOSE",
+                Self::CloseWait => "CLOSE_WAIT",
+                Self::LastAck => "LAST_ACK",
+                Self::Listen => "LISTEN",
+                Self::Closing => "CLOSING",
+                Self::NewSynRecv => "NEW_SYN_RECV",
+              }
+            }
+          }
+
+          let mut ports = Vec::new();
+
+          let parse_ip_port = |s: &str| -> Option<(String, u16)> {
+            let mut parts = s.split(':');
+            let ip_hex = parts.next()?;
+            let port_hex = parts.next()?;
+
+            let ip_int = u32::from_str_radix(ip_hex, 16).ok()?;
+            let port = u16::from_str_radix(port_hex, 16).ok()?;
+
+            let ip = std::net::Ipv4Addr::from(u32::from_be(ip_int));
+            Some((ip.to_string(), port))
+          };
+
+          let mut inode_to_pid: HashMap<u64, (u32, String)> = HashMap::new();
+          if let Ok(entries) = std::fs::read_dir("/proc") {
+            for entry in entries.flatten() {
+              let name = entry.file_name();
+              let name_str = name.to_string_lossy();
+              if let Ok(pid) = name_str.parse::<u32>() {
+                if let Ok(fds) = std::fs::read_dir(format!("/proc/{}/fd", pid)) {
+                  let proc_name = std::fs::read_to_string(format!("/proc/{}/comm", pid))
+                    .unwrap_or_else(|_| "unknown".to_string())
+                    .trim()
+                    .to_string();
+                  for fd_entry in fds.flatten() {
+                    if let Ok(target) = std::fs::read_link(fd_entry.path()) {
+                      let t_str = target.to_string_lossy();
+                      if t_str.starts_with("socket:[") && t_str.ends_with("]") {
+                        if let Ok(inode) = t_str[8..t_str.len() - 1].parse::<u64>() {
+                          inode_to_pid.insert(inode, (pid, proc_name.clone()));
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          if let Ok(content) = std::fs::read_to_string("/proc/net/tcp") {
+            for line in content.lines().skip(1) {
+              let parts: Vec<&str> = line.split_whitespace().collect();
+              if parts.len() < 4 {
+                continue;
+              }
+
+              if let Some((ip, port)) = parse_ip_port(parts[1]) {
+                let state_hex = parts[3];
+                let state_int = u8::from_str_radix(state_hex, 16).unwrap_or(0);
+
+                let state_str = match state_int {
+                  1 => TcpState::Established.as_str(),
+                  10 => TcpState::Listen.as_str(),
+                  _ => "UNKNOWN",
+                };
+
+                let inode = parts.get(9).and_then(|s| s.parse::<u64>().ok());
+                let (pid, process) = inode
+                  .and_then(|i| inode_to_pid.get(&i))
+                  .map(|(p, n)| (Some(*p), Some(n.clone())))
+                  .unwrap_or((None, None));
+
+                ports.push(PortStateSerialized {
+                  protocol: "tcp".to_string(),
+                  local_address: ip,
+                  local_port: port,
+                  state: state_str.to_string(),
+                  pid,
+                  process,
+                });
+              }
+            }
+          }
+
+          if let Ok(content) = std::fs::read_to_string("/proc/net/udp") {
+            for line in content.lines().skip(1) {
+              let parts: Vec<&str> = line.split_whitespace().collect();
+              if parts.len() < 10 {
+                continue;
+              }
+
+              if let Some((ip, port)) = parse_ip_port(parts[1]) {
+                let inode = parts.get(9).and_then(|s| s.parse::<u64>().ok());
+                let (pid, process) = inode
+                  .and_then(|i| inode_to_pid.get(&i))
+                  .map(|(p, n)| (Some(*p), Some(n.clone())))
+                  .unwrap_or((None, None));
+
+                ports.push(PortStateSerialized {
+                  protocol: "udp".to_string(),
+                  local_address: ip,
+                  local_port: port,
+                  state: "UNCONN".to_string(),
+                  pid,
+                  process,
+                });
+              }
+            }
+          }
+
+          Message::from_type(MessageType::List).with_vec(ports)
+        }
+        NetworkOp::Set {
+          iface,
+          method,
+          address: _,
+          gateway: _,
+        } => {
+          if msg.from_uid.is_none() || !pm.user_has(msg.from_uid.unwrap(), PERM_NETWORK) {
+            return Message::nack("Permission Denied for network modifications");
+          }
+
+          if method == "up" || method == "down" {
+            unsafe {
+              let sock = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
+              if sock >= 0 {
+                let mut req: libc::ifreq = std::mem::zeroed();
+                let bytes = iface.as_bytes();
+                let len = std::cmp::min(bytes.len(), 15);
+                std::ptr::copy_nonoverlapping(
+                  bytes.as_ptr(),
+                  req.ifr_name.as_mut_ptr() as *mut u8,
+                  len,
+                );
+                if libc::ioctl(sock, libc::SIOCGIFFLAGS, &mut req) == 0 {
+                  if method == "up" {
+                    req.ifr_ifru.ifru_flags |= libc::IFF_UP as i16 | libc::IFF_RUNNING as i16;
+                  } else if method == "down" {
+                    req.ifr_ifru.ifru_flags &= !(libc::IFF_UP as i16);
+                  }
+                  libc::ioctl(sock, libc::SIOCSIFFLAGS, &req);
+                }
+                libc::close(sock);
+              }
+            }
+            Message::ack(format!("Interface {} set {}", iface, method))
+          } else {
+            Message::ack("network configuration applied (mock output)")
+          }
+        }
       }
     }
     _ => Message::from_type(MessageType::Unknown),

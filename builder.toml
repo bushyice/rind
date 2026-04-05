@@ -12,7 +12,7 @@ binary_target = "target/x86_64-unknown-linux-gnu/release"
 bins_dir = "/usr/bin"
 
 # Binaries to copy
-binaries = ["init", "rind", "example-active", "example-inactive", "user_login", "user_shell"]
+binaries = ["init", "rind", "example-active", "example-inactive", "user_login", "user_shell", "tcp"]
 # Supported forms:
 # - "name" -> copied to bins_dir (or /usr/bin by default)
 # - "name:/absolute/path"
@@ -509,7 +509,7 @@ uid = 1000
 gid = 1000
 home = "/home/makano"
 shell = "/usr/bin/sh"
-groups = ["wheel"]
+groups = ["wheel", "network"]
 # Supported env forms:
 # env = { PATH = "/usr/bin:/bin", TERM = "linux" }
 # env = ["PATH", "/usr/bin:/bin", "TERM", "linux"]

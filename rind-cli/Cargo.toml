@@ -27,6 +27,10 @@ path = "demo/user_login.rs"
 name = "user_shell"
 path = "demo/user_shell.rs"
 
+[[bin]]
+name = "tcp"
+path = "demo/tcp.rs"
+
 [dependencies]
 clap.workspace = true
 rind-ipc = { path = "../rind-ipc", default-features = false, features = [] }

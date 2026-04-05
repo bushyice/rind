@@ -1,6 +1,7 @@
 pub mod flow;
 pub mod ipc;
 pub mod mount;
+pub mod networking;
 pub mod permissions;
 pub mod reaper;
 pub mod services;

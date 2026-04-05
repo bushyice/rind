@@ -15,6 +15,8 @@ use rind_ipc::{
   send::send_message,
   ser::{ServiceSerialized, StateSerialized, UnitItemsSerialized, UnitSerialized},
 };
+
+use crate::print::{print_network, print_ports};
 mod macros;
 mod print;
 
@@ -77,6 +79,18 @@ struct Cli {
 
   #[arg(short = 'E', long, trailing_var_arg = true, num_args(1..), allow_hyphen_values = true)]
   run0: Option<Vec<String>>,
+
+  #[arg(short = 'n', long, num_args(0..=1), default_missing_value = "")]
+  network: Option<String>,
+
+  #[arg(long = "na")]
+  network_address: bool,
+
+  #[arg(long = "np")]
+  network_ports: bool,
+
+  #[arg(long)]
+  net_ping: Option<String>,
 }
 
 pub fn report_error(msg: &str, err: impl std::fmt::Display) {
@@ -177,6 +191,58 @@ fn main() {
   let cli = Cli::parse();
 
   if cli.list {
+    if cli.network.is_some() || cli.network_address {
+      let output = match send_message(
+        Message::from_type(MessageType::Network).with(
+          serde_json::to_string(&rind_ipc::NetworkPayload {
+            op: rind_ipc::NetworkOp::Status,
+          })
+          .unwrap(),
+        ),
+      ) {
+        Ok(m) => m,
+        Err(e) => {
+          report_error("network-status request failed", e);
+          return;
+        }
+      };
+      if let Some(statuses) = handle_parse(
+        output
+          .parse_vec_payload::<rind_ipc::ser::NetworkStatusSerialized>()
+          .ok_or("Invalid Payload".to_string()),
+        "".to_string(),
+      ) {
+        for status in statuses {
+          print_network(&status);
+        }
+      }
+      return;
+    } else if cli.network_ports {
+      let output = match send_message(
+        Message::from_type(MessageType::Network).with(
+          serde_json::to_string(&rind_ipc::NetworkPayload {
+            op: rind_ipc::NetworkOp::Ports,
+          })
+          .unwrap(),
+        ),
+      ) {
+        Ok(m) => m,
+        Err(e) => {
+          report_error("network-ports request failed", e);
+          return;
+        }
+      };
+      if let Some(ports) = handle_parse(
+        output
+          .parse_vec_payload::<rind_ipc::ser::PortStateSerialized>()
+          .ok_or("Invalid Payload".to_string()),
+        "".to_string(),
+      ) {
+        print_ports(&ports);
+      }
+      return;
+    }
+
     let output: Message = match send_message(Message::from_type(MessageType::List).with_payload(
       if let Some(unit) = &cli.unit {
         MessagePayload {
@@ -239,11 +305,41 @@ fn main() {
       }
     }
   } else if cli.start {
-    if let Some(s) = &cli.service {
+    if let Some(n) = &cli.network {
+      let output = send_message(
+        Message::from_type(MessageType::Network).with(
+          serde_json::to_string(&rind_ipc::NetworkPayload {
+            op: rind_ipc::NetworkOp::Set {
+              iface: n.clone(),
+              method: "up".to_string(),
+              address: None,
+              gateway: None,
+            },
+          })
+          .unwrap(),
+        ),
+      );
+      handle_message(output.unwrap_or_else(|e| Message::nack(format!("Failed: {}", e))));
+    } else if let Some(s) = &cli.service {
       handle!(action!(Start, s.clone(), Service, None));
     }
   } else if cli.stop {
-    if let Some(s) = &cli.service {
+    if let Some(n) = &cli.network {
+      let output = send_message(
+        Message::from_type(MessageType::Network).with(
+          serde_json::to_string(&rind_ipc::NetworkPayload {
+            op: rind_ipc::NetworkOp::Set {
+              iface: n.clone(),
+              method: "down".to_string(),
+              address: None,
+              gateway: None,
+            },
+          })
+          .unwrap(),
+        ),
+      );
+      handle_message(output.unwrap_or_else(|e| Message::nack(format!("Failed: {}", e))));
+    } else if let Some(s) = &cli.service {
       handle!(action!(Stop, s.clone(), Service, Some(cli.force)));
     }
   } else if cli.enable {
@@ -307,6 +403,13 @@ fn main() {
       };
       handle_message(output);
     }
+  } else if let Some(target) = &cli.net_ping {
+    let _ = std::process::Command::new("ping")
+      .arg("-c")
+      .arg("4")
+      .arg(target)
+      .spawn()
+      .and_then(|mut c| c.wait());
   } else {
     Cli::command().print_help().ok();
   }

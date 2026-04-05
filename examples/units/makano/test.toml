@@ -1,6 +1,6 @@
 [[service]]
 name = "test"
-run.exec = "/bin/example-active"
+run.exec = "/bin/tcp"
 run.args = ["makano-test"]
 space = "user"
 start-on = [{ state = "rind@user_session" }]
