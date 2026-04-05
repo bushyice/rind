@@ -498,8 +498,8 @@ fn prepare_rootfs(profile: &Profile, rootfs: &Path) {
 
     for lib in libs {
       let is_so = lib.starts_with("C");
-      let parts: Vec<&str> = lib.trim_start_matches("C").splitn(2, ':').collect();
-      if parts.len() != 2 {
+      let parts: Vec<&str> = lib.trim_start_matches("C").splitn(3, ':').collect();
+      if parts.len() != 3 {
         eprintln!("Invalid library mapping: {}", lib);
         continue;
       }
@@ -526,11 +526,10 @@ fn prepare_rootfs(profile: &Profile, rootfs: &Path) {
         fs::copy(&src, &dst).unwrap();
 
         cbindgen::Builder::new()
-          .with_crate(parts[0])
+          .with_crate(parts[2])
           .with_language(cbindgen::Language::C)
           .with_pragma_once(true)
           .with_cpp_compat(false)
-          .with_include_guard("RIND_API_H")
           .generate()
           .expect("Unable to generate bindings")
           .write_to_file(incl_dst.join(format!("{}.h", parts[1])));

@@ -115,7 +115,7 @@ install = [
 
 # C header files and static libs
 libs = [
-  "Crind-api:rind"
+  "Crind-api:rind:crates/api"
 ]
 
 # Busybox Setup
