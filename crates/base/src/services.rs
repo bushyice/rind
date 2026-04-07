@@ -9,6 +9,8 @@
 
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
+use rind_ipc::Message;
+use rind_ipc::payloads::ServicePayload;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -25,6 +27,7 @@ use std::time::Instant;
 use rind_core::prelude::*;
 
 use crate::flow::{FlowInstance, FlowItem, FlowPayload, FlowType, StateMachineShared, Trigger};
+use crate::ipc::payload_to;
 use crate::transport::{TransportMessage, TransportMethod, start_stdout_listener};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -922,7 +925,7 @@ impl Runtime for ServiceRuntime {
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Option<serde_json::Value>, CoreError> {
     match action {
       "watch_events" => {
         if let Some(event_bus) = ctx.scope.get::<EventBus>() {
@@ -983,10 +986,10 @@ impl Runtime for ServiceRuntime {
 
         let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
         let Some(sm_lock) = &sm_shared else {
-          return Ok(());
+          return Ok(None);
         };
         let Ok(sm) = sm_lock.read() else {
-          return Ok(());
+          return Ok(None);
         };
         let emit_event = match (
           emit_trig.state.as_ref(),
@@ -1390,9 +1393,34 @@ impl Runtime for ServiceRuntime {
           }
         }
       }
+
+      // IPC Responses
+      "ipc:start" => {
+        let payload = payload_to::<ServicePayload>(payload)?;
+
+        let _ = dispatch.dispatch(
+          "services",
+          "start",
+          serde_json::json!({ "name": payload.name }).into(),
+        );
+
+        return Ok(Some(
+          Message::ok(format!("started {}", payload.name)).into(),
+        ));
+      }
+      "ipc:stop" => {
+        let payload = payload_to::<ServicePayload>(payload)?;
+
+        let force = payload.force.unwrap_or(false);
+        let _ = dispatch.dispatch("services", "stop", serde_json::json!({ "name": payload.name, "mode": if force { "force" } else { "graceful" } }).into());
+
+        return Ok(Some(
+          Message::ok(format!("stopped {}", payload.name)).into(),
+        ));
+      }
       _ => {}
     }
-    Ok(())
+    Ok(None)
   }
 
   fn id(&self) -> &str {

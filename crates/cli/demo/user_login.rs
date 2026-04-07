@@ -8,7 +8,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::thread;
 use std::time::Duration;
 
-use rind_ipc::{LoginPayload, Message, MessageType, send::send_message};
+use rind_ipc::{Message, payloads::LoginPayload, send::send_message};
 
 fn tty_path() -> String {
   let path = std::env::var("RIND_LOGIN_TTY")
@@ -65,7 +65,7 @@ fn send_login_state(user: &str, pass: Option<String>, tty: &str, writer: &mut Fi
     tty: tty.to_string(),
   };
 
-  let msg = Message::from_type(MessageType::Login).with(serde_json::to_string(&payload).unwrap());
+  let msg = Message::from("login").with(serde_json::to_string(&payload).unwrap());
 
   match send_message(msg) {
     Err(e) => {

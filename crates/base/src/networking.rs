@@ -5,8 +5,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rind_core::prelude::*;
+use rind_ipc::payloads::NetworkPayload;
+use rind_ipc::ser::PortStateSerialized;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+
+use crate::ipc::payload_to;
 
 const NETWORKING_INTERFACE_STATE: &str = "rind@net-interface";
 const NETWORKING_ONLINE_STATE: &str = "rind@online";
@@ -594,21 +598,192 @@ impl Runtime for NetworkingRuntime {
   fn handle(
     &mut self,
     action: &str,
-    _payload: RuntimePayload,
+    payload: RuntimePayload,
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Option<serde_json::Value>, CoreError> {
     match action {
       "scan" => self.scan_and_sync(dispatch)?,
       "bootstrap" => self.bootstrap(ctx, log)?,
       "configure" => self.configure(ctx, dispatch, log)?,
       "reconcile" => self.reconcile(ctx, dispatch, log)?,
+
+      "ipc:network" => {
+        let payload = payload_to::<NetworkPayload>(payload)?;
+
+        if payload.method == "up" || payload.method == "down" {
+          unsafe {
+            let sock = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
+            if sock >= 0 {
+              let mut req: libc::ifreq = std::mem::zeroed();
+              let bytes = payload.iface.as_bytes();
+              let len = std::cmp::min(bytes.len(), 15);
+              std::ptr::copy_nonoverlapping(
+                bytes.as_ptr(),
+                req.ifr_name.as_mut_ptr() as *mut u8,
+                len,
+              );
+              if libc::ioctl(sock, libc::SIOCGIFFLAGS, &mut req) == 0 {
+                if payload.method == "up" {
+                  req.ifr_ifru.ifru_flags |= libc::IFF_UP as i16 | libc::IFF_RUNNING as i16;
+                } else if payload.method == "down" {
+                  req.ifr_ifru.ifru_flags &= !(libc::IFF_UP as i16);
+                }
+                libc::ioctl(sock, libc::SIOCSIFFLAGS, &req);
+              }
+              libc::close(sock);
+            }
+          }
+        }
+      }
       _ => {}
     }
 
-    Ok(())
+    Ok(None)
   }
+}
+
+// utils
+pub fn get_ports() -> Vec<PortStateSerialized> {
+  #[allow(unused)]
+  #[derive(Clone, Copy)]
+  enum TcpState {
+    Established = 1,
+    SynSent,
+    SynRecv,
+    FinWait1,
+    FinWait2,
+    TimeWait,
+    Close,
+    CloseWait,
+    LastAck,
+    Listen,
+    Closing,
+    NewSynRecv,
+  }
+
+  impl TcpState {
+    fn as_str(&self) -> &'static str {
+      match self {
+        Self::Established => "ESTABLISHED",
+        Self::SynSent => "SYN_SENT",
+        Self::SynRecv => "SYN_RECV",
+        Self::FinWait1 => "FIN_WAIT1",
+        Self::FinWait2 => "FIN_WAIT2",
+        Self::TimeWait => "TIME_WAIT",
+        Self::Close => "CLOSE",
+        Self::CloseWait => "CLOSE_WAIT",
+        Self::LastAck => "LAST_ACK",
+        Self::Listen => "LISTEN",
+        Self::Closing => "CLOSING",
+        Self::NewSynRecv => "NEW_SYN_RECV",
+      }
+    }
+  }
+
+  let mut ports = Vec::new();
+
+  let parse_ip_port = |s: &str| -> Option<(String, u16)> {
+    let mut parts = s.split(':');
+    let ip_hex = parts.next()?;
+    let port_hex = parts.next()?;
+
+    let ip_int = u32::from_str_radix(ip_hex, 16).ok()?;
+    let port = u16::from_str_radix(port_hex, 16).ok()?;
+
+    let ip = std::net::Ipv4Addr::from(u32::from_be(ip_int));
+    Some((ip.to_string(), port))
+  };
+
+  let mut inode_to_pid: HashMap<u64, (u32, String)> = HashMap::new();
+  if let Ok(entries) = std::fs::read_dir("/proc") {
+    for entry in entries.flatten() {
+      let name = entry.file_name();
+      let name_str = name.to_string_lossy();
+      if let Ok(pid) = name_str.parse::<u32>() {
+        if let Ok(fds) = std::fs::read_dir(format!("/proc/{}/fd", pid)) {
+          let proc_name = std::fs::read_to_string(format!("/proc/{}/comm", pid))
+            .unwrap_or_else(|_| "unknown".to_string())
+            .trim()
+            .to_string();
+          for fd_entry in fds.flatten() {
+            if let Ok(target) = std::fs::read_link(fd_entry.path()) {
+              let t_str = target.to_string_lossy();
+              if t_str.starts_with("socket:[") && t_str.ends_with("]") {
+                if let Ok(inode) = t_str[8..t_str.len() - 1].parse::<u64>() {
+                  inode_to_pid.insert(inode, (pid, proc_name.clone()));
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if let Ok(content) = std::fs::read_to_string("/proc/net/tcp") {
+    for line in content.lines().skip(1) {
+      let parts: Vec<&str> = line.split_whitespace().collect();
+      if parts.len() < 4 {
+        continue;
+      }
+
+      if let Some((ip, port)) = parse_ip_port(parts[1]) {
+        let state_hex = parts[3];
+        let state_int = u8::from_str_radix(state_hex, 16).unwrap_or(0);
+
+        let state_str = match state_int {
+          1 => TcpState::Established.as_str(),
+          10 => TcpState::Listen.as_str(),
+          _ => "UNKNOWN",
+        };
+
+        let inode = parts.get(9).and_then(|s| s.parse::<u64>().ok());
+        let (pid, process) = inode
+          .and_then(|i| inode_to_pid.get(&i))
+          .map(|(p, n)| (Some(*p), Some(n.clone())))
+          .unwrap_or((None, None));
+
+        ports.push(PortStateSerialized {
+          protocol: "tcp".to_string(),
+          local_address: ip,
+          local_port: port,
+          state: state_str.to_string(),
+          pid,
+          process,
+        });
+      }
+    }
+  }
+
+  if let Ok(content) = std::fs::read_to_string("/proc/net/udp") {
+    for line in content.lines().skip(1) {
+      let parts: Vec<&str> = line.split_whitespace().collect();
+      if parts.len() < 10 {
+        continue;
+      }
+
+      if let Some((ip, port)) = parse_ip_port(parts[1]) {
+        let inode = parts.get(9).and_then(|s| s.parse::<u64>().ok());
+        let (pid, process) = inode
+          .and_then(|i| inode_to_pid.get(&i))
+          .map(|(p, n)| (Some(*p), Some(n.clone())))
+          .unwrap_or((None, None));
+
+        ports.push(PortStateSerialized {
+          protocol: "udp".to_string(),
+          local_address: ip,
+          local_port: port,
+          state: "UNCONN".to_string(),
+          pid,
+          process,
+        });
+      }
+    }
+  }
+
+  ports
 }
 
 // low level stuff

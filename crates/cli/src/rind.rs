@@ -111,7 +111,7 @@ pub fn handle_parse<T>(result: Result<T, String>, payload: String) -> Option<T> 
 
 pub fn handle_run0_message(args: Vec<String>, message: Message) {
   match &message.r#type {
-    MessageType::RequestPassword => {
+    MessageType::RequestInput => {
       print!("root password: ");
       use std::io::Write;
       std::io::stdout().flush().unwrap();
@@ -123,9 +123,7 @@ pub fn handle_run0_message(args: Vec<String>, message: Message) {
       };
       handle_run0_message(
         args,
-        match send_message(
-          Message::from_type(MessageType::Run0).with(serde_json::to_string(&payload).unwrap()),
-        ) {
+        match send_message(Message::from("run0").with(serde_json::to_string(&payload).unwrap())) {
           Ok(m) => m,
           Err(e) => {
             report_error("run0 request failed", e);

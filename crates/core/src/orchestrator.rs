@@ -49,6 +49,7 @@ impl OrchestratorContext<'_> {
       action: action.into(),
       payload,
       context_id: self.context_id,
+      reply: None,
     })
   }
 }

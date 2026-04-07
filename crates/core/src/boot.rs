@@ -190,7 +190,7 @@ mod tests {
       ctx: &mut RuntimeContext<'_>,
       _dispatch: &RuntimeDispatcher,
       _log: &LogHandle,
-    ) -> Result<(), CoreError> {
+    ) -> Result<Option<serde_json::Value>, CoreError> {
       if action == "boot" {
         let value =
           ctx.scope.get::<String>().cloned().ok_or_else(|| {
@@ -198,7 +198,7 @@ mod tests {
           })?;
         let _ = self.tx.send(value);
       }
-      Ok(())
+      Ok(None)
     }
   }
 
@@ -216,11 +216,11 @@ mod tests {
       _ctx: &mut RuntimeContext<'_>,
       dispatch: &RuntimeDispatcher,
       _log: &LogHandle,
-    ) -> Result<(), CoreError> {
+    ) -> Result<Option<serde_json::Value>, CoreError> {
       if action == "kick" {
         dispatch.dispatch("pong", "from_ping", json!({ "hop": 1 }).into())?;
       }
-      Ok(())
+      Ok(None)
     }
   }
 
@@ -240,7 +240,7 @@ mod tests {
       ctx: &mut RuntimeContext<'_>,
       _dispatch: &RuntimeDispatcher,
       _log: &LogHandle,
-    ) -> Result<(), CoreError> {
+    ) -> Result<Option<serde_json::Value>, CoreError> {
       if action == "from_ping" {
         let value = ctx
           .scope
@@ -249,7 +249,7 @@ mod tests {
           .ok_or_else(|| CoreError::InvalidState("missing u32 in runtime scope".to_string()))?;
         let _ = self.tx.send(value);
       }
-      Ok(())
+      Ok(None)
     }
   }
 

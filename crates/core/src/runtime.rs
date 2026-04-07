@@ -1,13 +1,17 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
+use std::sync::mpsc::Sender;
+
+use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use crate::context::{RuntimeContext, RuntimeScopes};
 use crate::error::CoreError;
 use crate::logging::{LogHandle, LogLevel};
 use crate::registry::{InstanceMap, InstanceRegistry, MetadataRegistry};
 
-pub enum RuntimeCommand {
+pub enum RuntimeCommand<T: Serialize + DeserializeOwned = serde_json::Value> {
   RegisterScopes {
     context_id: usize,
     scopes: RuntimeScopes,
@@ -17,6 +21,7 @@ pub enum RuntimeCommand {
     action: String,
     payload: RuntimePayload,
     context_id: usize,
+    reply: Option<Sender<Result<T, CoreError>>>,
   },
   Stop,
 }
@@ -49,7 +54,7 @@ impl From<serde_json::Value> for RuntimePayload {
   }
 }
 
-pub trait Runtime: Send {
+pub trait Runtime<T: Serialize + DeserializeOwned = serde_json::Value>: Send {
   fn id(&self) -> &str;
   fn handle(
     &mut self,
@@ -58,7 +63,7 @@ pub trait Runtime: Send {
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<(), CoreError>;
+  ) -> Result<Option<T>, CoreError>;
 }
 
 #[derive(Clone)]
@@ -83,7 +88,27 @@ impl RuntimeDispatcher {
       action: action.into(),
       payload,
       context_id: self.context_id,
+      reply: None,
     })
+  }
+
+  pub fn call(
+    &self,
+    runtime_id: impl Into<String>,
+    action: impl Into<String>,
+    payload: RuntimePayload,
+  ) -> Result<serde_json::Value, CoreError> {
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    self.handle.send(RuntimeCommand::Dispatch {
+      runtime_id: runtime_id.into(),
+      action: action.into(),
+      payload,
+      context_id: self.context_id,
+      reply: Some(tx),
+    })?;
+
+    rx.recv().map_err(|_| CoreError::RuntimeStopped)?
   }
 }
 
@@ -134,6 +159,7 @@ impl RuntimeHandle {
       action: action.to_string(),
       payload,
       context_id,
+      reply: None,
     })
   }
 
@@ -165,6 +191,7 @@ impl RuntimeHandle {
         action,
         payload,
         context_id: cid,
+        reply,
       }) = command
       else {
         break;
@@ -208,17 +235,27 @@ impl RuntimeHandle {
       let mut ctx = RuntimeContext::new(runtime_id.as_str(), &mut scope, registry);
       let dispatch = RuntimeDispatcher::new(self.clone(), cid);
 
-      if let Err(err) = runtime.handle(action.as_str(), payload, &mut ctx, &dispatch, &log) {
-        let mut fields = HashMap::new();
-        fields.insert("runtime_id".to_string(), runtime_id.clone());
-        fields.insert("action".to_string(), action.clone());
-        fields.insert("context_id".to_string(), cid.to_string());
-        log.log(
-          LogLevel::Error,
-          "runtime",
-          format!("runtime dispatch failed: {err}"),
-          fields,
-        );
+      let result = runtime.handle(action.as_str(), payload, &mut ctx, &dispatch, &log);
+
+      if let Some(reply_tx) = reply {
+        let _ = reply_tx.send(match result {
+          Ok(Some(msg)) => Ok(msg),
+          Ok(None) => Err(CoreError::InvalidState("No response".into())),
+          Err(e) => Err(e),
+        });
+      } else {
+        if let Err(err) = result {
+          let mut fields = HashMap::new();
+          fields.insert("runtime_id".to_string(), runtime_id.clone());
+          fields.insert("action".to_string(), action.clone());
+          fields.insert("context_id".to_string(), cid.to_string());
+          log.log(
+            LogLevel::Error,
+            "runtime",
+            format!("runtime dispatch failed: {err}"),
+            fields,
+          );
+        }
       }
 
       {

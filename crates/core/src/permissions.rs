@@ -10,6 +10,10 @@ use crate::{error::CoreError, user::UserStoreShared};
 
 static PERM_REGISTRY: Lazy<Mutex<HashMap<u16, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
+pub trait PermissionChecker<T> {
+  fn check(&self, store: &PermissionStore, item: T) -> bool;
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PermissionId(pub u16);
 
@@ -43,6 +47,30 @@ pub struct PermissionStoreInner {
   overlay_uid_revokes: HashMap<u32, HashSet<u16>>,
   overlay_gid_grants: HashMap<u32, HashSet<u16>>,
   overlay_gid_revokes: HashMap<u32, HashSet<u16>>,
+}
+
+#[derive(Default, Clone)]
+pub enum PermissionExpr {
+  #[default]
+  All,
+
+  Any(Vec<PermissionExpr>),
+  Exact(Vec<PermissionExpr>),
+
+  Group(String),
+  Perm(PermissionId),
+}
+
+impl From<PermissionId> for PermissionExpr {
+  fn from(value: PermissionId) -> Self {
+    Self::Perm(value)
+  }
+}
+
+impl From<String> for PermissionExpr {
+  fn from(value: String) -> Self {
+    Self::Group(value)
+  }
 }
 
 #[derive(Default, Clone)]
@@ -95,6 +123,35 @@ impl PermissionStore {
           .map(|x| self.group_has(x.gid, perm))
           .unwrap_or(false)
       })
+  }
+
+  pub fn user_check(&self, uid: u32, expr: &PermissionExpr) -> bool {
+    if uid == 0 {
+      // short circuit?
+      return true;
+    }
+
+    let Some(user) = self.users.lookup_by_uid(uid) else {
+      return false;
+    };
+
+    let groups = self.users.groups_for(user);
+
+    self.eval_expr(uid, expr, &groups)
+  }
+
+  fn eval_expr(&self, uid: u32, expr: &PermissionExpr, groups: &Vec<String>) -> bool {
+    match expr {
+      PermissionExpr::All => true,
+
+      PermissionExpr::Perm(p) => self.user_has(uid, *p),
+
+      PermissionExpr::Group(name) => groups.iter().any(|g| g == name),
+
+      PermissionExpr::Any(exprs) => exprs.iter().any(|e| self.eval_expr(uid, e, groups)),
+
+      PermissionExpr::Exact(exprs) => exprs.iter().all(|e| self.eval_expr(uid, e, groups)),
+    }
   }
 
   pub fn group_has(&self, gid: u32, perm: PermissionId) -> bool {

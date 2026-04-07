@@ -819,7 +819,7 @@ impl Runtime for FlowRuntime {
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Option<serde_json::Value>, CoreError> {
     let sm_shared = ctx
       .scope
       .get::<StateMachineShared>()
@@ -941,7 +941,7 @@ impl Runtime for FlowRuntime {
       _ => {}
     }
 
-    Ok(())
+    Ok(None)
   }
 }
 

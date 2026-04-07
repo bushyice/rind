@@ -1,13 +1,14 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
-use rind_core::prelude::*;
-use rind_core::user::{PamHandle, UserStore};
 use crate::flow::{Signal, State, StateMachine, StateMachineShared};
 use crate::mount::Mount;
 use crate::networking::NetworkConfig;
 use crate::permissions::{PERM_LOGIN, PERM_RUN0, PERM_SYSTEM_SERVICES, Permission};
 use crate::services::Service;
+use rind_core::prelude::*;
+use rind_core::user::{PamHandle, UserStore};
+use rind_ipc::recv::IpcSourcemap;
 
 pub const UNITS_META: &str = "units";
 const BUILTIN_UNIT: &str = "rind";
@@ -293,7 +294,9 @@ impl Orchestrator for UnitsOrchestrator {
     let eb = self.event_bus.clone();
     let permissions = self.permissions.clone();
     let sm = self.state_machine.clone();
+    let ipcmap = IpcSourcemap::default();
     builder.globals(move |scope| {
+      scope.insert::<IpcSourcemap>(ipcmap.clone());
       scope.insert::<EventBus>(eb.clone());
       scope.insert::<StateMachineShared>(sm.clone());
       scope.insert::<PermissionStore>(permissions.clone());

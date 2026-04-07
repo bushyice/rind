@@ -1,6 +1,10 @@
+use rind_core::prelude::{PermissionExpr, PermissionId};
+
 use super::Message;
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::sync::{Arc, RwLock};
 use std::thread;
 
 type ClientHandler = fn(Message) -> Result<Option<Message>, anyhow::Error>;
@@ -41,8 +45,8 @@ pub fn recv_message(mut stream: UnixStream, handle_client: ClientHandler) {
 
     let response = match handle_client(msg) {
       Ok(Some(response)) => response,
-      Ok(None) => Message::nack("no response from handler"),
-      Err(err) => Message::nack(format!("handler error: {err}")),
+      Ok(None) => Message::err("no response from handler"),
+      Err(err) => Message::err(format!("handler error: {err}")),
     };
 
     let resp = response.as_string().into_bytes();
@@ -77,4 +81,60 @@ pub fn start_ipc_server(handle_client: ClientHandler) -> std::io::Result<()> {
   }
 
   Ok(())
+}
+
+#[derive(Default, Clone)]
+pub struct IpcSource(pub String, pub PermissionExpr);
+
+impl From<(&str, PermissionId)> for IpcSource {
+  fn from(value: (&str, PermissionId)) -> Self {
+    Self(value.0.into(), PermissionExpr::Perm(value.1))
+  }
+}
+
+impl From<(&str, Vec<PermissionId>)> for IpcSource {
+  fn from(value: (&str, Vec<PermissionId>)) -> Self {
+    Self(
+      value.0.into(),
+      PermissionExpr::Exact(value.1.iter().map(|x| PermissionExpr::from(*x)).collect()),
+    )
+  }
+}
+
+impl From<String> for IpcSource {
+  fn from(value: String) -> Self {
+    Self(value, PermissionExpr::All)
+  }
+}
+
+impl From<&str> for IpcSource {
+  fn from(value: &str) -> Self {
+    Self(value.into(), PermissionExpr::All)
+  }
+}
+
+#[derive(Default)]
+struct IpcSourcemapInner {
+  sources: HashMap<String, IpcSource>,
+  // command_builder: Vec<Box<dyn FnMut()>>,
+}
+
+#[derive(Default, Clone)]
+pub struct IpcSourcemap {
+  inner: Arc<RwLock<IpcSourcemapInner>>,
+}
+
+impl IpcSourcemap {
+  pub fn entry(&self, runtime: &str, source: impl Into<IpcSource>) {
+    let mut map = self.inner.write().unwrap();
+    map.sources.insert(runtime.into(), source.into());
+    drop(map);
+  }
+
+  pub fn message(&self, action: &str) -> Option<IpcSource> {
+    let map = self.inner.read().unwrap();
+    let result = map.sources.get(action).cloned();
+    drop(map);
+    result
+  }
 }

@@ -254,7 +254,7 @@ impl Runtime for TransportRuntime {
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     _log: &LogHandle,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Option<serde_json::Value>, CoreError> {
     let pm = ctx
       .scope
       .get::<PermissionStore>()
@@ -394,6 +394,6 @@ impl Runtime for TransportRuntime {
       }
       _ => {}
     }
-    Ok(())
+    Ok(None)
   }
 }

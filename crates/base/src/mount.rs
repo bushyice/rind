@@ -158,7 +158,7 @@ impl Runtime for MountRuntime {
     ctx: &mut RuntimeContext<'_>,
     _dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Option<serde_json::Value>, CoreError> {
     match action {
       "mount" => {
         let name = payload.get::<String>("name")?;
@@ -197,7 +197,7 @@ impl Runtime for MountRuntime {
       }
       _ => {}
     }
-    Ok(())
+    Ok(None)
   }
 
   fn id(&self) -> &str {

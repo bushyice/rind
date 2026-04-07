@@ -21,7 +21,7 @@ impl Runtime for ReaperRuntime {
     _ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Option<serde_json::Value>, CoreError> {
     match action {
       "reap_once" => loop {
         match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
@@ -65,6 +65,6 @@ impl Runtime for ReaperRuntime {
       }
       _ => {}
     }
-    Ok(())
+    Ok(None)
   }
 }
