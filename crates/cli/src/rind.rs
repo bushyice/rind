@@ -31,14 +31,15 @@ mod print;
 struct Cli {
   #[command(subcommand)]
   command: Commands,
-
-  #[arg(short = 'E', long, trailing_var_arg = true, num_args(1..), allow_hyphen_values = true)]
-  run0: Option<Vec<String>>,
 }
 
 #[derive(clap::Subcommand)]
 enum Commands {
   Logout,
+  Su {
+    #[arg(name = "ARGS", trailing_var_arg = true, num_args(1..), allow_hyphen_values = true)]
+    args: Vec<String>,
+  },
   List {
     #[arg(name = "NAME")]
     name: Option<String>,
@@ -69,7 +70,7 @@ enum Commands {
     #[arg(name = "NAME")]
     name: String,
 
-    #[arg(short = 't', long, default_missing_value = "service")]
+    #[arg(short = 't', long, default_value = "service")]
     r#type: String,
   },
 
@@ -77,7 +78,7 @@ enum Commands {
     #[arg(name = "NAME")]
     name: String,
 
-    #[arg(short = 't', long, default_missing_value = "service")]
+    #[arg(short = 't', long, default_value = "service")]
     r#type: String,
 
     #[arg(short = 'f', long)]
@@ -179,20 +180,18 @@ pub fn handle_message(message: Message) {
 fn main() {
   let cli = Cli::parse();
 
-  if let Some(args) = cli.run0 {
-    let output = match send_message(Message::from("run0")) {
-      Ok(m) => m,
-      Err(e) => {
-        report_error("run0 request failed", e);
-        return;
-      }
-    };
-
-    handle_run0_message(args, output);
-    return;
-  }
-
   match cli.command {
+    Commands::Su { args } => {
+      let output = match send_message(Message::from("run0")) {
+        Ok(m) => m,
+        Err(e) => {
+          report_error("run0 request failed", e);
+          return;
+        }
+      };
+
+      handle_run0_message(args, output);
+    }
     Commands::Logout => {
       let username = std::env::var("USER").expect("unknown user");
       let tty = "tty1".to_string();
@@ -221,10 +220,10 @@ fn main() {
             "mount"
           } else if state {
             "state"
-          } else if network {
-            "netiface"
           } else if port && network {
             "netport"
+          } else if network {
+            "netiface"
           } else if r#type.is_some() {
             r#type.as_ref().unwrap()
           } else {
@@ -255,6 +254,12 @@ fn main() {
             .parse_payload::<StateSerialized>()
             .expect("Failed to parse"),
         );
+      } else if port && network {
+        print_ports(
+          &result
+            .parse_vec_payload::<PortStateSerialized>()
+            .expect("Failed to parse"),
+        );
       } else if network {
         for status in result
           .parse_vec_payload::<NetworkStatusSerialized>()
@@ -262,12 +267,6 @@ fn main() {
         {
           print_network(&status);
         }
-      } else if port && network {
-        print_ports(
-          &result
-            .parse_vec_payload::<PortStateSerialized>()
-            .expect("Failed to parse"),
-        );
       } else {
         print_units(
           &result

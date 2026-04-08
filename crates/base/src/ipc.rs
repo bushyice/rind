@@ -15,9 +15,10 @@ use std::thread;
 
 use crate::flow::{State, StateMachineShared};
 use crate::mount::{Mount, is_mounted};
-use crate::networking::get_ports;
+use crate::networking::{get_ports, handle_ipc_network};
 use crate::permissions::{PERM_LOGIN, PERM_NETWORK, PERM_SYSTEM_SERVICES};
-use crate::services::Service;
+use crate::services::{Service, handle_ipc_start, handle_ipc_stop};
+use crate::user::{handle_ipc_login, handle_ipc_logout, handle_ipc_run0};
 use rind_core::prelude::*;
 use rind_ipc::ser::{
   MountSerialized, ServiceSerialized, UnitItemsSerialized, UnitSerialized, serialize_many,
@@ -55,6 +56,271 @@ pub fn payload_msg(payload: RuntimePayload) -> Result<Message, CoreError> {
   payload.r#as::<Message>()
 }
 
+fn build_ipc_list_response(
+  payload: ListPayload,
+  ctx: &mut RuntimeContext<'_>,
+) -> Result<Message, CoreError> {
+  let sm_shared = ctx
+    .scope
+    .get::<StateMachineShared>()
+    .cloned()
+    .ok_or_else(|| CoreError::InvalidState("state machine not found in scope".into()))?;
+
+  Ok(if payload.unit_type == "unit" {
+    let services = if let Some(services) = ctx
+      .registry
+      .metadata
+      .group_items::<Service>("units", &payload.name)
+    {
+      services
+    } else {
+      Vec::new()
+    };
+    let mounts = if let Some(mounts) = ctx
+      .registry
+      .metadata
+      .group_items::<Mount>("units", &payload.name)
+    {
+      mounts
+    } else {
+      Vec::new()
+    };
+
+    let ser_instances: HashMap<&String, (String, Vec<u32>)> = services
+      .iter()
+      .filter_map(|ser| {
+        ctx
+          .registry
+          .as_one::<Service>("units", &format!("{}@{}", payload.name, ser.name))
+          .map_or(None, |x| {
+            Some((&ser.name, (x.instances.last_state(), x.instances.pid())))
+          })
+      })
+      .collect();
+
+    Message::from_type(MessageType::Ok).with(
+      UnitItemsSerialized {
+        mounts: mounts
+          .iter()
+          .map(|mnt| MountSerialized {
+            fstype: mnt.fstype.clone(),
+            mounted: is_mounted(&mnt.target).unwrap_or(false),
+            source: mnt.source.clone(),
+            target: mnt.target.clone(),
+          })
+          .collect(),
+        services: services
+          .iter()
+          .map(|svc| ServiceSerialized {
+            after: svc.after.clone(),
+            run: svc.run.to_string(),
+            last_state: ser_instances
+              .get(&svc.name)
+              .map_or("Inactive".into(), |x| x.0.clone()),
+            name: svc.name().to_string(),
+            pid: ser_instances
+              .get(&svc.name)
+              .map_or(None, |x| if x.1.is_empty() { None } else { Some(x.1[0]) }),
+            restart: svc.restart.as_ref().map_or(false, |_| true),
+          })
+          .collect(),
+      }
+      .stringify(),
+    )
+  } else if payload.unit_type == "service" {
+    let Some(service_meta) = ctx
+      .registry
+      .metadata
+      .find::<Service>("units", &payload.name)
+    else {
+      return Err(CoreError::MetadataNotFound(format!(
+        "Service not found: {}",
+        payload.name
+      )));
+    };
+
+    let service = if let Ok(s) = ctx.registry.as_one::<Service>("units", &payload.name) {
+      s
+    } else {
+      &Service::new(service_meta)
+    };
+
+    Message::from_type(MessageType::Ok).with(
+      ServiceSerialized {
+        name: service.metadata.name.clone(),
+        after: service.metadata.after.clone(),
+        last_state: service.instances.last_state(),
+        pid: service.instances.pid().get(0).cloned(),
+        restart: service.metadata.restart.as_ref().map_or(false, |_| true),
+        run: service.metadata.run.to_string(),
+      }
+      .stringify(),
+    )
+  } else if payload.unit_type == "state" && !payload.name.is_empty() {
+    let states = &sm_shared.read().unwrap();
+    let Some(instances) = states.states.get(&payload.name) else {
+      return Err(CoreError::MetadataNotFound(format!(
+        "State not found: {}",
+        payload.name
+      )));
+    };
+    let Some(def) = ctx.registry.metadata.find::<State>("units", &payload.name) else {
+      return Err(CoreError::MetadataNotFound(format!(
+        "State not found: {}",
+        payload.name
+      )));
+    };
+    let branches = def.branch.as_ref();
+
+    Message::from_type(MessageType::Ok).with(
+      StateSerialized {
+        name: payload.name,
+        instances: instances.iter().map(|x| x.payload.to_json()).collect(),
+        keys: if let Some(branches) = branches {
+          branches.clone()
+        } else {
+          Default::default()
+        },
+      }
+      .stringify(),
+    )
+  } else if payload.unit_type == "state" {
+    let states = &sm_shared.read().unwrap().states;
+
+    Message::from_type(MessageType::Ok).with(
+      serde_json::to_string(
+        &states
+          .iter()
+          .filter_map(|(name, inst)| {
+            let def = ctx.registry.metadata.find::<State>("units", name)?;
+            let branches = def.branch.as_ref()?;
+            Some(StateSerialized {
+              name: name.clone(),
+              instances: inst.iter().map(|x| x.payload.to_json()).collect(),
+              keys: branches.clone(),
+            })
+          })
+          .collect::<Vec<StateSerialized>>(),
+      )
+      .unwrap_or_default(),
+    )
+  } else if payload.unit_type == "netiface" {
+    let mut statuses = Vec::new();
+    let sm = sm_shared.read().unwrap();
+    if let Some(groups) = ctx.registry.metadata.groups("units") {
+      for group in groups {
+        if let Some(cfgs) = ctx
+          .registry
+          .metadata
+          .group_items::<crate::networking::NetworkConfig>("units", &group)
+        {
+          for cfg in cfgs {
+            let config = {
+              if let Some(instances) = sm.states.get("rind@net-configured") {
+                instances.iter().find(|i| {
+                  if let Some(obj) = i.payload.to_json().as_object() {
+                    obj.get("name").and_then(|v| v.as_str()) == Some(&cfg.name)
+                  } else {
+                    false
+                  }
+                })
+              } else {
+                None
+              }
+            };
+            let state = if config.is_some() {
+              "Configured"
+            } else {
+              "Down"
+            }
+            .to_string();
+            statuses.push(NetworkStatusSerialized {
+              interface: cfg.name.clone(),
+              method: match cfg.method {
+                crate::networking::NetworkMethod::Dhcp => "dhcp".to_string(),
+                crate::networking::NetworkMethod::Static => "static".to_string(),
+              },
+              address: config
+                .map(|x| x.payload.get_json_field_as::<String>("ip"))
+                .unwrap_or_default(),
+              gateway: config
+                .map(|x| x.payload.get_json_field_as::<String>("gateway"))
+                .unwrap_or_default(),
+              state,
+            });
+          }
+        }
+      }
+    }
+    Message::from_type(MessageType::Ok).with_vec(statuses)
+  } else if payload.unit_type == "netport" {
+    Message::from_type(MessageType::Ok).with_vec(get_ports())
+  } else {
+    let mut units_map: HashMap<String, UnitSerialized> = HashMap::new();
+
+    if let Some(groups) = ctx.registry.metadata.groups("units") {
+      for group in groups {
+        let services = if let Some(services) = ctx
+          .registry
+          .metadata
+          .group_items::<Service>("units", &group)
+        {
+          services
+        } else {
+          Vec::new()
+        };
+        let mounts =
+          if let Some(mounts) = ctx.registry.metadata.group_items::<Mount>("units", &group) {
+            mounts
+          } else {
+            Vec::new()
+          };
+
+        let mounted = mounts
+          .iter()
+          .filter(|mnt| is_mounted(&mnt.target).unwrap_or(false))
+          .count();
+        let active = services
+          .iter()
+          .filter(|s| {
+            ctx
+              .registry
+              .instances::<Service>("units", &format!("{group}@{}", s.name))
+              .ok()
+              .map_or(false, |x| x.iter().any(|x| x.instances.is_active()))
+          })
+          .count();
+        units_map.insert(
+          group.to_string(),
+          UnitSerialized {
+            active_services: active,
+            mounted: mounted,
+            mounts: mounts.len(),
+            name: group.to_string(),
+            services: services.len(),
+          },
+        );
+      }
+    }
+
+    let mut units_list: Vec<UnitSerialized> = units_map.into_values().collect();
+    units_list.sort_by(|a, b| a.name.cmp(&b.name));
+    Message::from_type(MessageType::Ok).with(serialize_many(&units_list))
+  })
+}
+
+pub fn handle_ipc_list(
+  msg: Message,
+  ctx: &mut RuntimeContext<'_>,
+  _dispatch: &RuntimeDispatcher,
+  _log: &LogHandle,
+) -> Result<Message, CoreError> {
+  let payload = msg
+    .parse_payload::<ListPayload>()
+    .map_err(CoreError::Custom)?;
+  build_ipc_list_response(payload, ctx)
+}
+
 impl Runtime for IpcRuntime {
   fn id(&self) -> &str {
     IPC_RUNTIME_ID
@@ -70,292 +336,18 @@ impl Runtime for IpcRuntime {
   ) -> Result<Option<serde_json::Value>, CoreError> {
     match action {
       "ipc:list" => {
-        println!("Reached all the way here");
-
-        let sm_shared = ctx
-          .scope
-          .get::<StateMachineShared>()
-          .cloned()
-          .ok_or_else(|| CoreError::InvalidState("state machine not found in scope".into()))?;
-
-        let payload = payload_to::<ListPayload>(payload)?;
-        println!("Reached all the way here: {payload:?}");
-
-        return Ok(Some(
-          if payload.unit_type == "unit" {
-            let services = if let Some(services) = ctx
-              .registry
-              .metadata
-              .group_items::<Service>("units", &payload.name)
-            {
-              services
-            } else {
-              Vec::new()
-            };
-            let mounts = if let Some(mounts) = ctx
-              .registry
-              .metadata
-              .group_items::<Mount>("units", &payload.name)
-            {
-              mounts
-            } else {
-              Vec::new()
-            };
-
-            let ser_instances: HashMap<&String, (String, Vec<u32>)> = services
-              .iter()
-              .filter_map(|ser| {
-                ctx
-                  .registry
-                  .as_one::<Service>("units", &format!("{}@{}", payload.name, ser.name))
-                  .map_or(None, |x| {
-                    Some((&ser.name, (x.instances.last_state(), x.instances.pid())))
-                  })
-              })
-              .collect();
-
-            Message::from_type(MessageType::Ok).with(
-              UnitItemsSerialized {
-                mounts: mounts
-                  .iter()
-                  .map(|mnt| MountSerialized {
-                    fstype: mnt.fstype.clone(),
-                    mounted: is_mounted(&mnt.target).unwrap_or(false),
-                    source: mnt.source.clone(),
-                    target: mnt.target.clone(),
-                  })
-                  .collect(),
-                services: services
-                  .iter()
-                  .map(|svc| ServiceSerialized {
-                    after: svc.after.clone(),
-                    run: svc.run.to_string(),
-                    last_state: ser_instances
-                      .get(&svc.name)
-                      .map_or("Inactive".into(), |x| x.0.clone()),
-                    name: svc.name().to_string(),
-                    pid: ser_instances
-                      .get(&svc.name)
-                      .map_or(None, |x| if x.1.is_empty() { None } else { Some(x.1[0]) }),
-                    restart: svc.restart.as_ref().map_or(false, |_| true),
-                  })
-                  .collect(),
-              }
-              .stringify(),
-            )
-          } else if payload.unit_type == "service" {
-            let Some(service_meta) = ctx
-              .registry
-              .metadata
-              .find::<Service>("units", &payload.name)
-            else {
-              return Err(CoreError::MetadataNotFound(format!(
-                "Service not found: {}",
-                payload.name
-              )));
-            };
-
-            let service = if let Ok(s) = ctx.registry.as_one::<Service>("units", &payload.name) {
-              s
-            } else {
-              &Service::new(service_meta)
-            };
-
-            Message::from_type(MessageType::Ok).with(
-              ServiceSerialized {
-                name: service.metadata.name.clone(),
-                after: service.metadata.after.clone(),
-                last_state: service.instances.last_state(),
-                pid: service.instances.pid().get(0).cloned(),
-                restart: service.metadata.restart.as_ref().map_or(false, |_| true),
-                run: service.metadata.run.to_string(),
-              }
-              .stringify(),
-            )
-          } else if payload.unit_type == "state" && !payload.name.is_empty() {
-            let states = &sm_shared.read().unwrap();
-            let Some(instances) = states.states.get(&payload.name) else {
-              return Err(CoreError::MetadataNotFound(format!(
-                "State not found: {}",
-                payload.name
-              )));
-            };
-            let Some(def) = ctx.registry.metadata.find::<State>("units", &payload.name) else {
-              return Err(CoreError::MetadataNotFound(format!(
-                "State not found: {}",
-                payload.name
-              )));
-            };
-            let branches = def.branch.as_ref();
-
-            Message::from_type(MessageType::Ok).with(
-              StateSerialized {
-                name: payload.name,
-                instances: instances.iter().map(|x| x.payload.to_json()).collect(),
-                keys: if let Some(branches) = branches {
-                  branches.clone()
-                } else {
-                  Default::default()
-                },
-              }
-              .stringify(),
-            )
-          } else if payload.unit_type == "state" {
-            let states = &sm_shared.read().unwrap().states;
-
-            Message::from_type(MessageType::Ok).with(
-              serde_json::to_string(
-                &states
-                  .iter()
-                  .filter_map(|(name, inst)| {
-                    let def = ctx.registry.metadata.find::<State>("units", name)?;
-                    let branches = def.branch.as_ref()?;
-                    Some(StateSerialized {
-                      name: name.clone(),
-                      instances: inst.iter().map(|x| x.payload.to_json()).collect(),
-                      keys: branches.clone(),
-                    })
-                  })
-                  .collect::<Vec<StateSerialized>>(),
-              )
-              .unwrap_or_default(),
-            )
-          } else if payload.unit_type == "netiface" {
-            let mut statuses = Vec::new();
-            let sm = sm_shared.read().unwrap();
-            if let Some(groups) = ctx.registry.metadata.groups("units") {
-              for group in groups {
-                if let Some(cfgs) = ctx
-                  .registry
-                  .metadata
-                  .group_items::<crate::networking::NetworkConfig>("units", &group)
-                {
-                  for cfg in cfgs {
-                    let config = {
-                      if let Some(instances) = sm.states.get("rind@net-configured") {
-                        instances.iter().find(|i| {
-                          if let Some(obj) = i.payload.to_json().as_object() {
-                            obj.get("name").and_then(|v| v.as_str()) == Some(&cfg.name)
-                          } else {
-                            false
-                          }
-                        })
-                      } else {
-                        None
-                      }
-                    };
-                    let state = if config.is_some() {
-                      "Configured"
-                    } else {
-                      "Down"
-                    }
-                    .to_string();
-                    statuses.push(NetworkStatusSerialized {
-                      interface: cfg.name.clone(),
-                      method: match cfg.method {
-                        crate::networking::NetworkMethod::Dhcp => "dhcp".to_string(),
-                        crate::networking::NetworkMethod::Static => "static".to_string(),
-                      },
-                      address: config
-                        .map(|x| x.payload.get_json_field_as::<String>("ip"))
-                        .unwrap_or_default(),
-                      gateway: config
-                        .map(|x| x.payload.get_json_field_as::<String>("gateway"))
-                        .unwrap_or_default(),
-                      state,
-                    });
-                  }
-                }
-              }
-            }
-            Message::from_type(MessageType::Ok).with_vec(statuses)
-          } else if payload.unit_type == "netport" {
-            Message::from_type(MessageType::Ok).with_vec(get_ports())
-          } else {
-            let mut units_map: HashMap<String, UnitSerialized> = HashMap::new();
-
-            if let Some(groups) = ctx.registry.metadata.groups("units") {
-              for group in groups {
-                let services = if let Some(services) = ctx
-                  .registry
-                  .metadata
-                  .group_items::<Service>("units", &group)
-                {
-                  services
-                } else {
-                  Vec::new()
-                };
-                let mounts = if let Some(mounts) =
-                  ctx.registry.metadata.group_items::<Mount>("units", &group)
-                {
-                  mounts
-                } else {
-                  Vec::new()
-                };
-
-                let mounted = mounts
-                  .iter()
-                  .filter(|mnt| is_mounted(&mnt.target).unwrap_or(false))
-                  .count();
-                let active = services
-                  .iter()
-                  .filter(|s| {
-                    ctx
-                      .registry
-                      .instances::<Service>("units", &format!("{group}@{}", s.name))
-                      .ok()
-                      .map_or(false, |x| x.iter().any(|x| x.instances.is_active()))
-                  })
-                  .count();
-                units_map.insert(
-                  group.to_string(),
-                  UnitSerialized {
-                    active_services: active,
-                    mounted: mounted,
-                    mounts: mounts.len(),
-                    name: group.to_string(),
-                    services: services.len(),
-                  },
-                );
-              }
-            }
-
-            let mut units_list: Vec<UnitSerialized> = units_map.into_values().collect();
-            units_list.sort_by(|a, b| a.name.cmp(&b.name));
-            Message::from_type(MessageType::Ok).with(serialize_many(&units_list))
-          }
-          .into(),
-        ));
+        let msg = payload_msg(payload)?;
+        return Ok(Some(handle_ipc_list(msg, ctx, dispatch, log)?.into()));
       }
       "init_actions" => {
         let ipcsrc = ctx.scope.get::<IpcSourcemap>().cloned().unwrap_or_default();
-
-        ipcsrc
-          // user
-          .build("user")
-          .insert("login")
-          .allow(PERM_LOGIN)
-          .insert("logout")
-          .allow_all()
-          .insert("run0")
-          .allow_all()
-          .build()
-          // services
-          .build("services")
-          .insert("start")
-          .allow(PERM_SYSTEM_SERVICES)
-          .insert("stop")
-          .allow(PERM_SYSTEM_SERVICES)
-          .build()
-          // ipc
-          .build("ipc")
-          .insert("list")
-          .allow_all()
-          .build()
-          .build("networking")
-          .insert("network")
-          .allow(PERM_NETWORK)
-          .build();
+        ipcsrc.register("login", handle_ipc_login, PERM_LOGIN);
+        ipcsrc.register("logout", handle_ipc_logout, PermissionExpr::All);
+        ipcsrc.register("run0", handle_ipc_run0, PermissionExpr::All);
+        ipcsrc.register("start", handle_ipc_start, PERM_SYSTEM_SERVICES);
+        ipcsrc.register("stop", handle_ipc_stop, PERM_SYSTEM_SERVICES);
+        ipcsrc.register("list", handle_ipc_list, PermissionExpr::All);
+        ipcsrc.register("network", handle_ipc_network, PERM_NETWORK);
       }
       "start_server" => {
         if self.listener_thread.is_none() {
@@ -496,40 +488,18 @@ fn handle_ipc_message(
 
   drop(ipcsrc_shared);
 
-  if !matches!(&source.1, PermissionExpr::All)
-    && !pm.user_check(msg.from_uid.unwrap_or(0), &source.1)
+  if !matches!(&source.perms, PermissionExpr::All)
+    && !pm.user_check(msg.from_uid.unwrap_or(0), &source.perms)
   {
     return Message::from_type(MessageType::Error).with(format!("Permission Denied"));
   }
 
-  let action = format!("ipc:{}", msg.action);
   let mut fields = HashMap::new();
-  fields.insert("name".to_string(), action.clone());
-  fields.insert("runtime".to_string(), source.0.clone());
+  fields.insert("name".to_string(), msg.action.clone());
   log.log(LogLevel::Trace, "ipc-runtime", "ipc call", fields);
 
-  let Ok(msg) = dispatch
-    .call(
-      source.0,
-      action,
-      serde_json::json!({
-        "msg": msg,
-      })
-      .into(),
-    )
-    .unwrap()
-    .recv()
-    .map_err(|_| CoreError::RuntimeStopped)
-    .unwrap()
-  else {
-    return Message::from_type(MessageType::Error)
-      .with(format!("Failed to dispatch from IPC runtime"));
-  };
-
-  let Ok(msg) = serde_json::from_value::<Message>(msg) else {
-    return Message::from_type(MessageType::Error)
-      .with(format!("Failed to parse response from IPC runtime"));
-  };
-
-  msg
+  match (source.handler)(msg, ctx, dispatch, log) {
+    Ok(resp) => resp,
+    Err(e) => Message::from_type(MessageType::Error).with(format!("IPC handler failed: {e}")),
+  }
 }

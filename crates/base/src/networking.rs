@@ -5,12 +5,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rind_core::prelude::*;
+use rind_ipc::Message;
 use rind_ipc::payloads::NetworkPayload;
 use rind_ipc::ser::PortStateSerialized;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-
-use crate::ipc::payload_to;
 
 const NETWORKING_INTERFACE_STATE: &str = "rind@net-interface";
 const NETWORKING_ONLINE_STATE: &str = "rind@online";
@@ -598,7 +597,7 @@ impl Runtime for NetworkingRuntime {
   fn handle(
     &mut self,
     action: &str,
-    payload: RuntimePayload,
+    _payload: RuntimePayload,
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
@@ -608,40 +607,45 @@ impl Runtime for NetworkingRuntime {
       "bootstrap" => self.bootstrap(ctx, log)?,
       "configure" => self.configure(ctx, dispatch, log)?,
       "reconcile" => self.reconcile(ctx, dispatch, log)?,
-
-      "ipc:network" => {
-        let payload = payload_to::<NetworkPayload>(payload)?;
-
-        if payload.method == "up" || payload.method == "down" {
-          unsafe {
-            let sock = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
-            if sock >= 0 {
-              let mut req: libc::ifreq = std::mem::zeroed();
-              let bytes = payload.iface.as_bytes();
-              let len = std::cmp::min(bytes.len(), 15);
-              std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                req.ifr_name.as_mut_ptr() as *mut u8,
-                len,
-              );
-              if libc::ioctl(sock, libc::SIOCGIFFLAGS, &mut req) == 0 {
-                if payload.method == "up" {
-                  req.ifr_ifru.ifru_flags |= libc::IFF_UP as i16 | libc::IFF_RUNNING as i16;
-                } else if payload.method == "down" {
-                  req.ifr_ifru.ifru_flags &= !(libc::IFF_UP as i16);
-                }
-                libc::ioctl(sock, libc::SIOCSIFFLAGS, &req);
-              }
-              libc::close(sock);
-            }
-          }
-        }
-      }
       _ => {}
     }
 
     Ok(None)
   }
+}
+
+pub fn handle_ipc_network(
+  msg: Message,
+  _ctx: &mut RuntimeContext<'_>,
+  _dispatch: &RuntimeDispatcher,
+  _log: &LogHandle,
+) -> Result<Message, CoreError> {
+  let payload = msg
+    .parse_payload::<NetworkPayload>()
+    .map_err(CoreError::Custom)?;
+
+  if payload.method == "up" || payload.method == "down" {
+    unsafe {
+      let sock = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
+      if sock >= 0 {
+        let mut req: libc::ifreq = std::mem::zeroed();
+        let bytes = payload.iface.as_bytes();
+        let len = std::cmp::min(bytes.len(), 15);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), req.ifr_name.as_mut_ptr() as *mut u8, len);
+        if libc::ioctl(sock, libc::SIOCGIFFLAGS, &mut req) == 0 {
+          if payload.method == "up" {
+            req.ifr_ifru.ifru_flags |= libc::IFF_UP as i16 | libc::IFF_RUNNING as i16;
+          } else if payload.method == "down" {
+            req.ifr_ifru.ifru_flags &= !(libc::IFF_UP as i16);
+          }
+          libc::ioctl(sock, libc::SIOCSIFFLAGS, &req);
+        }
+        libc::close(sock);
+      }
+    }
+  }
+
+  Ok(Message::ok("ok"))
 }
 
 // utils

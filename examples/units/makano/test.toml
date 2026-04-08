@@ -4,3 +4,10 @@ run.exec = "/bin/tcp"
 run.args = ["makano-test"]
 space = "user"
 start-on = [{ state = "rind@user_session" }]
+
+[[service]]
+name = "something"
+run.exec = "/bin/tcp"
+run.args = ["makano-test"]
+run.env = { PORT = 4433 }
+space = "user"

@@ -6,6 +6,7 @@ use crate::mount::Mount;
 use crate::networking::NetworkConfig;
 use crate::permissions::{PERM_LOGIN, PERM_RUN0, PERM_SYSTEM_SERVICES, Permission};
 use crate::services::Service;
+use crate::user::Run0QueueState;
 use rind_core::prelude::*;
 use rind_core::user::{PamHandle, UserStore};
 use rind_ipc::recv::IpcSourcemap;
@@ -295,11 +296,13 @@ impl Orchestrator for UnitsOrchestrator {
     let permissions = self.permissions.clone();
     let sm = self.state_machine.clone();
     let ipcmap = IpcSourcemap::default();
+    let run0_queue: Run0QueueState = Arc::new(std::sync::Mutex::new(Default::default()));
     builder.globals(move |scope| {
       scope.insert::<IpcSourcemap>(ipcmap.clone());
       scope.insert::<EventBus>(eb.clone());
       scope.insert::<StateMachineShared>(sm.clone());
       scope.insert::<PermissionStore>(permissions.clone());
+      scope.insert::<Run0QueueState>(run0_queue.clone());
     });
 
     Ok(())

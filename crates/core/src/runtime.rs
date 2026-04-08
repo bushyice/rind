@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Sender;
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -90,25 +90,6 @@ impl RuntimeDispatcher {
       context_id: self.context_id,
       reply: None,
     })
-  }
-
-  pub fn call(
-    &self,
-    runtime_id: impl Into<String>,
-    action: impl Into<String>,
-    payload: RuntimePayload,
-  ) -> Result<Receiver<Result<serde_json::Value, CoreError>>, CoreError> {
-    let (tx, rx) = std::sync::mpsc::channel();
-
-    self.handle.send(RuntimeCommand::Dispatch {
-      runtime_id: runtime_id.into(),
-      action: action.into(),
-      payload,
-      context_id: self.context_id,
-      reply: Some(tx),
-    })?;
-
-    Ok(rx)
   }
 }
 

@@ -27,7 +27,6 @@ use std::time::Instant;
 use rind_core::prelude::*;
 
 use crate::flow::{FlowInstance, FlowItem, FlowPayload, FlowType, StateMachineShared, Trigger};
-use crate::ipc::payload_to;
 use crate::transport::{TransportMessage, TransportMethod, start_stdout_listener};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -917,6 +916,46 @@ impl Into<serde_json::Value> for EmitTrigger {
   }
 }
 
+pub fn handle_ipc_start(
+  msg: Message,
+  _ctx: &mut RuntimeContext<'_>,
+  dispatch: &RuntimeDispatcher,
+  _log: &LogHandle,
+) -> Result<Message, CoreError> {
+  let payload = msg
+    .parse_payload::<ServicePayload>()
+    .map_err(CoreError::Custom)?;
+
+  let _ = dispatch.dispatch(
+    "services",
+    "start",
+    serde_json::json!({ "name": payload.name }).into(),
+  );
+
+  Ok(Message::ok(format!("started {}", payload.name)))
+}
+
+pub fn handle_ipc_stop(
+  msg: Message,
+  _ctx: &mut RuntimeContext<'_>,
+  dispatch: &RuntimeDispatcher,
+  _log: &LogHandle,
+) -> Result<Message, CoreError> {
+  let payload = msg
+    .parse_payload::<ServicePayload>()
+    .map_err(CoreError::Custom)?;
+
+  let force = payload.force.unwrap_or(false);
+  let _ = dispatch.dispatch(
+    "services",
+    "stop",
+    serde_json::json!({ "name": payload.name, "mode": if force { "force" } else { "graceful" } })
+      .into(),
+  );
+
+  Ok(Message::ok(format!("stopped {}", payload.name)))
+}
+
 impl Runtime for ServiceRuntime {
   fn handle(
     &mut self,
@@ -1392,31 +1431,6 @@ impl Runtime for ServiceRuntime {
             }
           }
         }
-      }
-
-      // IPC Responses
-      "ipc:start" => {
-        let payload = payload_to::<ServicePayload>(payload)?;
-
-        let _ = dispatch.dispatch(
-          "services",
-          "start",
-          serde_json::json!({ "name": payload.name }).into(),
-        );
-
-        return Ok(Some(
-          Message::ok(format!("started {}", payload.name)).into(),
-        ));
-      }
-      "ipc:stop" => {
-        let payload = payload_to::<ServicePayload>(payload)?;
-
-        let force = payload.force.unwrap_or(false);
-        let _ = dispatch.dispatch("services", "stop", serde_json::json!({ "name": payload.name, "mode": if force { "force" } else { "graceful" } }).into());
-
-        return Ok(Some(
-          Message::ok(format!("stopped {}", payload.name)).into(),
-        ));
       }
       _ => {}
     }

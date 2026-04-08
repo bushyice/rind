@@ -1,4 +1,6 @@
-use rind_core::prelude::{PermissionExpr, PermissionId};
+use rind_core::prelude::{
+  CoreError, LogHandle, PermissionExpr, RuntimeContext, RuntimeDispatcher,
+};
 
 use super::Message;
 use std::collections::HashMap;
@@ -83,40 +85,18 @@ pub fn start_ipc_server(handle_client: ClientHandler) -> std::io::Result<()> {
   Ok(())
 }
 
-#[derive(Default, Clone)]
-pub struct IpcSource(pub String, pub PermissionExpr);
+pub type IpcHandler =
+  fn(Message, &mut RuntimeContext<'_>, &RuntimeDispatcher, &LogHandle) -> Result<Message, CoreError>;
 
-impl From<(&str, PermissionId)> for IpcSource {
-  fn from(value: (&str, PermissionId)) -> Self {
-    Self(value.0.into(), PermissionExpr::Perm(value.1))
-  }
-}
-
-impl From<(&str, Vec<PermissionId>)> for IpcSource {
-  fn from(value: (&str, Vec<PermissionId>)) -> Self {
-    Self(
-      value.0.into(),
-      PermissionExpr::Exact(value.1.iter().map(|x| PermissionExpr::from(*x)).collect()),
-    )
-  }
-}
-
-impl From<String> for IpcSource {
-  fn from(value: String) -> Self {
-    Self(value, PermissionExpr::All)
-  }
-}
-
-impl From<&str> for IpcSource {
-  fn from(value: &str) -> Self {
-    Self(value.into(), PermissionExpr::All)
-  }
+#[derive(Clone)]
+pub struct IpcSource {
+  pub handler: IpcHandler,
+  pub perms: PermissionExpr,
 }
 
 #[derive(Default)]
 struct IpcSourcemapInner {
   sources: HashMap<String, IpcSource>,
-  // command_builder: Vec<Box<dyn FnMut()>>,
 }
 
 #[derive(Default, Clone)]
@@ -124,65 +104,21 @@ pub struct IpcSourcemap {
   inner: Arc<RwLock<IpcSourcemapInner>>,
 }
 
-pub struct IpcSourceBuilder2 {
-  builder: IpcSourceBuilder,
-  name: String,
-  perms: PermissionExpr,
-}
-
-impl IpcSourceBuilder2 {
-  fn new(builder: IpcSourceBuilder, name: String) -> Self {
-    Self {
-      name,
-      perms: PermissionExpr::All,
-      builder,
-    }
-  }
-
-  pub fn allow(mut self, perm: impl Into<PermissionExpr>) -> IpcSourceBuilder {
-    self.perms = perm.into();
-    self.allow_all()
-  }
-
-  pub fn allow_all(mut self) -> IpcSourceBuilder {
-    self.builder.actions.insert(self.name, self.perms);
-    self.builder
-  }
-}
-
-pub struct IpcSourceBuilder {
-  srcmap: IpcSourcemap,
-  runtime: String,
-  actions: HashMap<String, PermissionExpr>,
-}
-
-impl IpcSourceBuilder {
-  fn new(srcmap: IpcSourcemap, runtime: String) -> Self {
-    Self {
-      runtime,
-      actions: Default::default(),
-      srcmap,
-    }
-  }
-
-  pub fn insert(self, name: impl Into<String>) -> IpcSourceBuilder2 {
-    IpcSourceBuilder2::new(self, name.into())
-  }
-
-  pub fn build(self) -> IpcSourcemap {
-    for (action, perm) in self.actions {
-      self
-        .srcmap
-        .entry(&action, IpcSource(self.runtime.clone(), perm));
-    }
-    self.srcmap
-  }
-}
-
 impl IpcSourcemap {
-  pub fn entry(&self, action: &str, source: impl Into<IpcSource>) {
+  pub fn register(
+    &self,
+    action: impl Into<String>,
+    handler: IpcHandler,
+    perms: impl Into<PermissionExpr>,
+  ) {
     let mut map = self.inner.write().unwrap();
-    map.sources.insert(action.into(), source.into());
+    map.sources.insert(
+      action.into(),
+      IpcSource {
+        handler,
+        perms: perms.into(),
+      },
+    );
     drop(map);
   }
 
@@ -191,9 +127,5 @@ impl IpcSourcemap {
     let result = map.sources.get(action).cloned();
     drop(map);
     result
-  }
-
-  pub fn build(self, name: impl Into<String>) -> IpcSourceBuilder {
-    IpcSourceBuilder::new(self, name.into())
   }
 }

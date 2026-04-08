@@ -25,11 +25,6 @@ pub struct Message {
   pub from_pid: Option<i32>,
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ArrayPayload<T> {
-  items: Vec<T>,
-}
-
 impl Message {
   pub fn from_type(t: MessageType) -> Self {
     Self {
@@ -62,7 +57,7 @@ impl Message {
   }
 
   pub fn with_vec<T: serde::Serialize>(mut self, payload: Vec<T>) -> Self {
-    self.payload = serde_json::to_string(&ArrayPayload { items: payload }).ok();
+    self.payload = serde_json::to_string(&payload).ok();
     self
   }
 
@@ -71,10 +66,7 @@ impl Message {
   }
 
   pub fn parse_vec_payload<T: serde::de::DeserializeOwned>(&self) -> Option<Vec<T>> {
-    self
-      .parse_payload::<ArrayPayload<T>>()
-      .ok()
-      .map(|x| x.items)
+    self.parse_payload::<Vec<T>>().ok()
   }
 
   pub fn parse_payload<T: serde::de::DeserializeOwned>(&self) -> Result<T, String> {
