@@ -1,20 +1,7 @@
-#[derive(Debug, Copy, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
-pub enum UnitType {
-  Flow,
-  State,
-  Signal,
-  Service,
-  Mount,
-  Unit,
-  Unknown,
-  NetInterface,
-  NetPort,
-}
-
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct ListPayload {
   pub name: String,
-  pub unit_type: UnitType,
+  pub unit_type: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]

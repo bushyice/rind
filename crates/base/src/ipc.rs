@@ -1,6 +1,6 @@
 use libc::{SO_PEERCRED, SOL_SOCKET, getsockopt, ucred};
-use rind_ipc::payloads::{ListPayload, UnitType};
-use rind_ipc::recv::{IpcSource, IpcSourcemap};
+use rind_ipc::payloads::ListPayload;
+use rind_ipc::recv::IpcSourcemap;
 use rind_ipc::ser::{NetworkStatusSerialized, StateSerialized};
 use rind_ipc::{Message, MessageType};
 use std::collections::HashMap;
@@ -70,6 +70,8 @@ impl Runtime for IpcRuntime {
   ) -> Result<Option<serde_json::Value>, CoreError> {
     match action {
       "ipc:list" => {
+        println!("Reached all the way here");
+
         let sm_shared = ctx
           .scope
           .get::<StateMachineShared>()
@@ -77,9 +79,10 @@ impl Runtime for IpcRuntime {
           .ok_or_else(|| CoreError::InvalidState("state machine not found in scope".into()))?;
 
         let payload = payload_to::<ListPayload>(payload)?;
+        println!("Reached all the way here: {payload:?}");
 
         return Ok(Some(
-          if payload.unit_type == UnitType::Unit {
+          if payload.unit_type == "unit" {
             let services = if let Some(services) = ctx
               .registry
               .metadata
@@ -140,7 +143,7 @@ impl Runtime for IpcRuntime {
               }
               .stringify(),
             )
-          } else if payload.unit_type == UnitType::Service {
+          } else if payload.unit_type == "service" {
             let Some(service_meta) = ctx
               .registry
               .metadata
@@ -169,7 +172,7 @@ impl Runtime for IpcRuntime {
               }
               .stringify(),
             )
-          } else if payload.unit_type == UnitType::State && !payload.name.is_empty() {
+          } else if payload.unit_type == "state" && !payload.name.is_empty() {
             let states = &sm_shared.read().unwrap();
             let Some(instances) = states.states.get(&payload.name) else {
               return Err(CoreError::MetadataNotFound(format!(
@@ -197,7 +200,7 @@ impl Runtime for IpcRuntime {
               }
               .stringify(),
             )
-          } else if payload.unit_type == UnitType::State {
+          } else if payload.unit_type == "state" {
             let states = &sm_shared.read().unwrap().states;
 
             Message::from_type(MessageType::Ok).with(
@@ -217,7 +220,7 @@ impl Runtime for IpcRuntime {
               )
               .unwrap_or_default(),
             )
-          } else if payload.unit_type == UnitType::NetInterface {
+          } else if payload.unit_type == "netiface" {
             let mut statuses = Vec::new();
             let sm = sm_shared.read().unwrap();
             if let Some(groups) = ctx.registry.metadata.groups("units") {
@@ -266,7 +269,7 @@ impl Runtime for IpcRuntime {
               }
             }
             Message::from_type(MessageType::Ok).with_vec(statuses)
-          } else if payload.unit_type == UnitType::NetPort {
+          } else if payload.unit_type == "netport" {
             Message::from_type(MessageType::Ok).with_vec(get_ports())
           } else {
             let mut units_map: HashMap<String, UnitSerialized> = HashMap::new();
@@ -327,16 +330,32 @@ impl Runtime for IpcRuntime {
       "init_actions" => {
         let ipcsrc = ctx.scope.get::<IpcSourcemap>().cloned().unwrap_or_default();
 
-        ipcsrc.entry(
-          "user",
-          IpcSource("login".into(), PermissionExpr::Perm(PERM_LOGIN)),
-        );
-        ipcsrc.entry("user", "logout");
-        ipcsrc.entry("user", "run0");
-        ipcsrc.entry("services", ("start", PERM_SYSTEM_SERVICES));
-        ipcsrc.entry("services", ("stop", PERM_SYSTEM_SERVICES));
-        ipcsrc.entry("ipc", "list");
-        ipcsrc.entry("networking", ("network", PERM_NETWORK));
+        ipcsrc
+          // user
+          .build("user")
+          .insert("login")
+          .allow(PERM_LOGIN)
+          .insert("logout")
+          .allow_all()
+          .insert("run0")
+          .allow_all()
+          .build()
+          // services
+          .build("services")
+          .insert("start")
+          .allow(PERM_SYSTEM_SERVICES)
+          .insert("stop")
+          .allow(PERM_SYSTEM_SERVICES)
+          .build()
+          // ipc
+          .build("ipc")
+          .insert("list")
+          .allow_all()
+          .build()
+          .build("networking")
+          .insert("network")
+          .allow(PERM_NETWORK)
+          .build();
       }
       "start_server" => {
         if self.listener_thread.is_none() {
@@ -460,7 +479,7 @@ fn handle_ipc_message(
   msg: Message,
   ctx: &mut RuntimeContext<'_>,
   dispatch: &RuntimeDispatcher,
-  _log: &LogHandle,
+  log: &LogHandle,
 ) -> Message {
   let pm = ctx
     .scope
@@ -484,15 +503,25 @@ fn handle_ipc_message(
   }
 
   let action = format!("ipc:{}", msg.action);
+  let mut fields = HashMap::new();
+  fields.insert("name".to_string(), action.clone());
+  fields.insert("runtime".to_string(), source.0.clone());
+  log.log(LogLevel::Trace, "ipc-runtime", "ipc call", fields);
 
-  let Ok(msg) = dispatch.call(
-    source.0,
-    action,
-    serde_json::json!({
-      "msg": msg,
-    })
-    .into(),
-  ) else {
+  let Ok(msg) = dispatch
+    .call(
+      source.0,
+      action,
+      serde_json::json!({
+        "msg": msg,
+      })
+      .into(),
+    )
+    .unwrap()
+    .recv()
+    .map_err(|_| CoreError::RuntimeStopped)
+    .unwrap()
+  else {
     return Message::from_type(MessageType::Error)
       .with(format!("Failed to dispatch from IPC runtime"));
   };

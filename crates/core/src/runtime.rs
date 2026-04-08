@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, Sender};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -97,7 +97,7 @@ impl RuntimeDispatcher {
     runtime_id: impl Into<String>,
     action: impl Into<String>,
     payload: RuntimePayload,
-  ) -> Result<serde_json::Value, CoreError> {
+  ) -> Result<Receiver<Result<serde_json::Value, CoreError>>, CoreError> {
     let (tx, rx) = std::sync::mpsc::channel();
 
     self.handle.send(RuntimeCommand::Dispatch {
@@ -108,7 +108,7 @@ impl RuntimeDispatcher {
       reply: Some(tx),
     })?;
 
-    rx.recv().map_err(|_| CoreError::RuntimeStopped)?
+    Ok(rx)
   }
 }
 
@@ -235,7 +235,9 @@ impl RuntimeHandle {
       let mut ctx = RuntimeContext::new(runtime_id.as_str(), &mut scope, registry);
       let dispatch = RuntimeDispatcher::new(self.clone(), cid);
 
+      println!("Calling runtime: {action}");
       let result = runtime.handle(action.as_str(), payload, &mut ctx, &dispatch, &log);
+      println!("Called runtime: {action}");
 
       if let Some(reply_tx) = reply {
         let _ = reply_tx.send(match result {

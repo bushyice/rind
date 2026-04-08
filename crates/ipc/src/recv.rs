@@ -124,10 +124,65 @@ pub struct IpcSourcemap {
   inner: Arc<RwLock<IpcSourcemapInner>>,
 }
 
+pub struct IpcSourceBuilder2 {
+  builder: IpcSourceBuilder,
+  name: String,
+  perms: PermissionExpr,
+}
+
+impl IpcSourceBuilder2 {
+  fn new(builder: IpcSourceBuilder, name: String) -> Self {
+    Self {
+      name,
+      perms: PermissionExpr::All,
+      builder,
+    }
+  }
+
+  pub fn allow(mut self, perm: impl Into<PermissionExpr>) -> IpcSourceBuilder {
+    self.perms = perm.into();
+    self.allow_all()
+  }
+
+  pub fn allow_all(mut self) -> IpcSourceBuilder {
+    self.builder.actions.insert(self.name, self.perms);
+    self.builder
+  }
+}
+
+pub struct IpcSourceBuilder {
+  srcmap: IpcSourcemap,
+  runtime: String,
+  actions: HashMap<String, PermissionExpr>,
+}
+
+impl IpcSourceBuilder {
+  fn new(srcmap: IpcSourcemap, runtime: String) -> Self {
+    Self {
+      runtime,
+      actions: Default::default(),
+      srcmap,
+    }
+  }
+
+  pub fn insert(self, name: impl Into<String>) -> IpcSourceBuilder2 {
+    IpcSourceBuilder2::new(self, name.into())
+  }
+
+  pub fn build(self) -> IpcSourcemap {
+    for (action, perm) in self.actions {
+      self
+        .srcmap
+        .entry(&action, IpcSource(self.runtime.clone(), perm));
+    }
+    self.srcmap
+  }
+}
+
 impl IpcSourcemap {
-  pub fn entry(&self, runtime: &str, source: impl Into<IpcSource>) {
+  pub fn entry(&self, action: &str, source: impl Into<IpcSource>) {
     let mut map = self.inner.write().unwrap();
-    map.sources.insert(runtime.into(), source.into());
+    map.sources.insert(action.into(), source.into());
     drop(map);
   }
 
@@ -136,5 +191,9 @@ impl IpcSourcemap {
     let result = map.sources.get(action).cloned();
     drop(map);
     result
+  }
+
+  pub fn build(self, name: impl Into<String>) -> IpcSourceBuilder {
+    IpcSourceBuilder::new(self, name.into())
   }
 }
