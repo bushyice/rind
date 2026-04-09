@@ -9,5 +9,15 @@ start-on = [{ state = "rind@user_session" }]
 name = "something"
 run.exec = "/bin/tcp"
 run.args = ["makano-test"]
-run.env = { PORT = 4433 }
+run.env = { PORT = "4433" }
 space = "user"
+
+[[service]]
+name = "many"
+run.variable = "someservice"
+space = "user"
+start-on = [{ state = "rind@user_session" }, { state = "rind@net-configured" }]
+
+[[variable]]
+name = "someservice"
+default = { exec = "/bin/tcp", args = ["makano-test"], env = { PORT = "4533" } }

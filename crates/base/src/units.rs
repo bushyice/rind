@@ -7,6 +7,7 @@ use crate::networking::NetworkConfig;
 use crate::permissions::{PERM_LOGIN, PERM_RUN0, PERM_SYSTEM_SERVICES, Permission};
 use crate::services::Service;
 use crate::user::Run0QueueState;
+use crate::variables::{Variable, VariableHeap, VariableHeapShared, variables_path};
 use rind_core::prelude::*;
 use rind_core::user::{PamHandle, UserStore};
 use rind_ipc::recv::IpcSourcemap;
@@ -21,11 +22,14 @@ pub struct UnitsOrchestrator {
   event_bus: EventBus,
   users: UserStoreShared,
   permissions: PermissionStore,
+  variable_heap: VariableHeapShared,
 }
 
 impl UnitsOrchestrator {
   pub fn new(units_dir: impl Into<PathBuf>) -> Self {
     let users = Arc::new(UserStore::load_system().unwrap_or_default());
+    let mut heap = VariableHeap::new(variables_path());
+    let _ = heap.load();
     Self {
       units_dir: units_dir.into(),
       state_machine: Arc::new(RwLock::new(StateMachine::default())),
@@ -33,6 +37,7 @@ impl UnitsOrchestrator {
       event_bus: EventBus::new(),
       permissions: PermissionStore::new(users.clone()),
       users,
+      variable_heap: Arc::new(RwLock::new(heap)),
     }
   }
 
@@ -53,7 +58,8 @@ impl UnitsOrchestrator {
       .of::<NetworkConfig>("network")
       .of::<State>("state")
       .of::<Signal>("signal")
-      .of::<Permission>("permission");
+      .of::<Permission>("permission")
+      .of::<Variable>("variable");
 
     let dir = std::fs::read_dir(&self.units_dir).map_err(|e| {
       CoreError::Custom(format!(
@@ -147,6 +153,16 @@ impl UnitsOrchestrator {
 
     Self::add_builtin_defs(&mut metadata);
 
+    if let Ok(mut heap) = self.variable_heap.write() {
+      for group in metadata.groups() {
+        if let Some(vars) = metadata.get_in_group::<Variable>(group) {
+          for var in vars {
+            heap.register(&var.name, var.default.clone());
+          }
+        }
+      }
+    }
+
     ctx.metadata.insert_metadata(metadata);
     ctx.metadata.ensure_index_for_type::<Service>(UNITS_META)?;
     ctx.metadata.ensure_index_for_type::<Mount>(UNITS_META)?;
@@ -237,6 +253,9 @@ impl Orchestrator for UnitsOrchestrator {
 
   fn preload(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
     if ctx.metadata.metadata(UNITS_META).is_none() {
+      let mut vars = self.variable_heap.write().unwrap();
+      vars.load()?;
+      drop(vars);
       self.load_all_units(ctx)?;
       self.load_permissions()?;
     }
@@ -297,12 +316,14 @@ impl Orchestrator for UnitsOrchestrator {
     let sm = self.state_machine.clone();
     let ipcmap = IpcSourcemap::default();
     let run0_queue: Run0QueueState = Arc::new(std::sync::Mutex::new(Default::default()));
+    let variable_heap = self.variable_heap.clone();
     builder.globals(move |scope| {
       scope.insert::<IpcSourcemap>(ipcmap.clone());
       scope.insert::<EventBus>(eb.clone());
       scope.insert::<StateMachineShared>(sm.clone());
       scope.insert::<PermissionStore>(permissions.clone());
       scope.insert::<Run0QueueState>(run0_queue.clone());
+      scope.insert::<VariableHeapShared>(variable_heap.clone());
     });
 
     Ok(())

@@ -279,7 +279,7 @@ fn main() {
       handle_send_raw!(name.as_str(), payload);
     }
     Commands::Start { name, r#type: _ } => {
-      handle_send!("start", &ServicePayload { force: None, name });
+      handle_send!("start_service", &ServicePayload { force: None, name });
     }
     Commands::Stop {
       name,
@@ -287,7 +287,7 @@ fn main() {
       force,
     } => {
       handle_send!(
-        "stop",
+        "start_service",
         &ServicePayload {
           force: Some(force),
           name

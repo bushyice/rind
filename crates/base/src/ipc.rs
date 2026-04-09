@@ -16,9 +16,10 @@ use std::thread;
 use crate::flow::{State, StateMachineShared};
 use crate::mount::{Mount, is_mounted};
 use crate::networking::{get_ports, handle_ipc_network};
-use crate::permissions::{PERM_LOGIN, PERM_NETWORK, PERM_SYSTEM_SERVICES};
+use crate::permissions::{PERM_LOGIN, PERM_NETWORK};
 use crate::services::{Service, handle_ipc_start, handle_ipc_stop};
 use crate::user::{handle_ipc_login, handle_ipc_logout, handle_ipc_run0};
+use crate::variables::VariableHeapShared;
 use rind_core::prelude::*;
 use rind_ipc::ser::{
   MountSerialized, ServiceSerialized, UnitItemsSerialized, UnitSerialized, serialize_many,
@@ -321,6 +322,29 @@ pub fn handle_ipc_list(
   build_ipc_list_response(payload, ctx)
 }
 
+pub fn handle_ipc_set(
+  _msg: Message,
+  ctx: &mut RuntimeContext<'_>,
+  _dispatch: &RuntimeDispatcher,
+  _log: &LogHandle,
+) -> Result<Message, CoreError> {
+  let _ = ctx
+    .scope
+    .get::<VariableHeapShared>()
+    .ok_or(CoreError::Custom("Failed to get variable heap".into()))?;
+
+  Ok(Message::default())
+}
+
+pub fn handle_ipc_remove(
+  _msg: Message,
+  _ctx: &mut RuntimeContext<'_>,
+  _dispatch: &RuntimeDispatcher,
+  _log: &LogHandle,
+) -> Result<Message, CoreError> {
+  Ok(Message::default())
+}
+
 impl Runtime for IpcRuntime {
   fn id(&self) -> &str {
     IPC_RUNTIME_ID
@@ -344,10 +368,12 @@ impl Runtime for IpcRuntime {
         ipcsrc.register("login", handle_ipc_login, PERM_LOGIN);
         ipcsrc.register("logout", handle_ipc_logout, PermissionExpr::All);
         ipcsrc.register("run0", handle_ipc_run0, PermissionExpr::All);
-        ipcsrc.register("start", handle_ipc_start, PERM_SYSTEM_SERVICES);
-        ipcsrc.register("stop", handle_ipc_stop, PERM_SYSTEM_SERVICES);
+        ipcsrc.register("start_service", handle_ipc_start, PermissionExpr::All);
+        ipcsrc.register("stop_service", handle_ipc_stop, PermissionExpr::All);
         ipcsrc.register("list", handle_ipc_list, PermissionExpr::All);
         ipcsrc.register("network", handle_ipc_network, PERM_NETWORK);
+        ipcsrc.register("set_variable", handle_ipc_set, PermissionExpr::All);
+        ipcsrc.register("remove_variable", handle_ipc_remove, PermissionExpr::All);
       }
       "start_server" => {
         if self.listener_thread.is_none() {

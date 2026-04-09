@@ -27,13 +27,18 @@ use std::time::Instant;
 use rind_core::prelude::*;
 
 use crate::flow::{FlowInstance, FlowItem, FlowPayload, FlowType, StateMachineShared, Trigger};
+use crate::permissions::PERM_SYSTEM_SERVICES;
 use crate::transport::{TransportMessage, TransportMethod, start_stdout_listener};
+use crate::variables::VariableHeapShared;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RunOption {
+  #[serde(default)]
   pub exec: String,
+  #[serde(default)]
   pub args: Vec<String>,
   pub env: Option<HashMap<String, String>>,
+  pub variable: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -274,13 +279,59 @@ impl ServiceRuntime {
     log: &LogHandle,
     branch_key: Option<&str>,
     sm_shared: Option<&StateMachineShared>,
+    variable_heap: Option<&VariableHeapShared>,
   ) -> anyhow::Result<Vec<ChildInstance>> {
     service
       .metadata
       .run
       .as_many()
-      .map(|run| self.spawn_process(service, run, log, branch_key, sm_shared))
+      .map(|run| {
+        let resolved = self.resolve_run_option(run, variable_heap);
+        let run_ref = resolved.as_ref().unwrap_or(run);
+        self.spawn_process(service, run_ref, log, branch_key, sm_shared)
+      })
       .collect()
+  }
+
+  fn resolve_run_option(
+    &self,
+    run: &RunOption,
+    variable_heap: Option<&VariableHeapShared>,
+  ) -> Option<RunOption> {
+    let var_ref = run.variable.as_deref()?;
+    let heap_shared = variable_heap?;
+    let heap = heap_shared.read().ok()?;
+
+    let value = heap.get(var_ref)?;
+
+    let table = value.as_table()?;
+    let exec = table
+      .get("exec")
+      .and_then(|v| v.as_str())
+      .unwrap_or_default()
+      .to_string();
+    let args = table
+      .get("args")
+      .and_then(|v| v.as_array())
+      .map(|arr| {
+        arr
+          .iter()
+          .filter_map(|v| v.as_str().map(|s| s.to_string()))
+          .collect()
+      })
+      .unwrap_or_default();
+    let env = table.get("env").and_then(|v| v.as_table()).map(|t| {
+      t.iter()
+        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+        .collect()
+    });
+
+    Some(RunOption {
+      exec,
+      args,
+      env,
+      variable: None,
+    })
   }
 
   pub fn spawn_service(
@@ -288,6 +339,7 @@ impl ServiceRuntime {
     service: &mut Service,
     log: &LogHandle,
     sm_shared: Option<&StateMachineShared>,
+    variable_heap: Option<&VariableHeapShared>,
   ) -> anyhow::Result<()> {
     log.log(
       LogLevel::Info,
@@ -296,7 +348,7 @@ impl ServiceRuntime {
       self.log_fields(service, "start"),
     );
 
-    let instances = self.spawn_all(service, log, None, sm_shared)?;
+    let instances = self.spawn_all(service, log, None, sm_shared, variable_heap)?;
     service.instances.extend(instances);
     Ok(())
   }
@@ -490,6 +542,7 @@ impl ServiceRuntime {
     log: &LogHandle,
     sm_shared: Option<&StateMachineShared>,
     dispatch: &RuntimeDispatcher,
+    variable_heap: Option<&VariableHeapShared>,
   ) {
     if let Some(inst) = service.instances.as_one() {
       if inst.state == ServiceState::Active || inst.state == ServiceState::Starting {
@@ -497,7 +550,7 @@ impl ServiceRuntime {
       }
     }
 
-    match self.spawn_service(service, log, sm_shared) {
+    match self.spawn_service(service, log, sm_shared, variable_heap) {
       Ok(_) => {
         self.register_stdio_transport(service, dispatch);
         if let Some(inst) = service.instances.as_one_mut() {
@@ -918,13 +971,35 @@ impl Into<serde_json::Value> for EmitTrigger {
 
 pub fn handle_ipc_start(
   msg: Message,
-  _ctx: &mut RuntimeContext<'_>,
+  ctx: &mut RuntimeContext<'_>,
   dispatch: &RuntimeDispatcher,
   _log: &LogHandle,
 ) -> Result<Message, CoreError> {
+  let pm = ctx
+    .scope
+    .get::<PermissionStore>()
+    .cloned()
+    .unwrap_or_default();
+
   let payload = msg
     .parse_payload::<ServicePayload>()
     .map_err(CoreError::Custom)?;
+
+  let Some(uid) = msg.from_uid else {
+    return Err(CoreError::PermissionDenied);
+  };
+
+  if !{
+    uid == 0
+      || pm.user_has(uid, PERM_SYSTEM_SERVICES)
+      || pm
+        .users
+        .lookup_by_uid(uid)
+        .map(|u| payload.name.starts_with(&format!("{}/", u.username)))
+        .unwrap_or(false)
+  } {
+    return Err(CoreError::PermissionDenied);
+  }
 
   let _ = dispatch.dispatch(
     "services",
@@ -937,13 +1012,35 @@ pub fn handle_ipc_start(
 
 pub fn handle_ipc_stop(
   msg: Message,
-  _ctx: &mut RuntimeContext<'_>,
+  ctx: &mut RuntimeContext<'_>,
   dispatch: &RuntimeDispatcher,
   _log: &LogHandle,
 ) -> Result<Message, CoreError> {
+  let pm = ctx
+    .scope
+    .get::<PermissionStore>()
+    .cloned()
+    .unwrap_or_default();
+
   let payload = msg
     .parse_payload::<ServicePayload>()
     .map_err(CoreError::Custom)?;
+
+  let Some(uid) = msg.from_uid else {
+    return Err(CoreError::PermissionDenied);
+  };
+
+  if !{
+    uid == 0
+      || pm.user_has(uid, PERM_SYSTEM_SERVICES)
+      || pm
+        .users
+        .lookup_by_uid(uid)
+        .map(|u| payload.name.starts_with(&format!("{}/", u.username)))
+        .unwrap_or(false)
+  } {
+    return Err(CoreError::PermissionDenied);
+  }
 
   let force = payload.force.unwrap_or(false);
   let _ = dispatch.dispatch(
@@ -1024,6 +1121,7 @@ impl Runtime for ServiceRuntime {
         // println!("{:?} {:?}", emit_trig.state, emit_trig.action);
 
         let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
+        let vh = ctx.scope.get::<VariableHeapShared>().cloned();
         let Some(sm_lock) = &sm_shared else {
           return Ok(None);
         };
@@ -1181,7 +1279,9 @@ impl Runtime for ServiceRuntime {
                       break;
                     }
                   }
-                  if let Ok(instances) = self.spawn_all(ser, log, Some(&key), sm_shared.as_ref()) {
+                  if let Ok(instances) =
+                    self.spawn_all(ser, log, Some(&key), sm_shared.as_ref(), vh.as_ref())
+                  {
                     ser.instances.extend(instances);
                     self.register_stdio_transport(ser, dispatch);
                     let _ = dispatch.dispatch(
@@ -1197,7 +1297,7 @@ impl Runtime for ServiceRuntime {
               }
             }
 
-            self.start_service(ser, log, sm_shared.as_ref(), dispatch);
+            self.start_service(ser, log, sm_shared.as_ref(), dispatch, vh.as_ref());
           }
         }
       }
@@ -1207,7 +1307,8 @@ impl Runtime for ServiceRuntime {
           .registry
           .instantiate_one::<Service>("units", &name, |x| Ok(Service::new(x)))?;
         let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
-        self.start_service(service, log, sm_shared.as_ref(), dispatch);
+        let vh = ctx.scope.get::<VariableHeapShared>().cloned();
+        self.start_service(service, log, sm_shared.as_ref(), dispatch, vh.as_ref());
         if service
           .metadata
           .transport
@@ -1256,6 +1357,7 @@ impl Runtime for ServiceRuntime {
         let mut pending: Vec<(String, Vec<String>, Arc<ServiceMetadata>)> = Vec::new();
 
         let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
+        let vh = ctx.scope.get::<VariableHeapShared>().cloned();
 
         for (full_name, svc_meta) in &all_services {
           if let Some(afters) = &svc_meta.after {
@@ -1264,7 +1366,7 @@ impl Runtime for ServiceRuntime {
             let service = ctx
               .registry
               .instantiate_one::<Service>("units", &full_name, |x| Ok(Service::new(x)))?;
-            self.start_service(service, log, sm_shared.as_ref(), dispatch);
+            self.start_service(service, log, sm_shared.as_ref(), dispatch, vh.as_ref());
             started.insert(full_name.clone());
           }
         }
@@ -1277,7 +1379,7 @@ impl Runtime for ServiceRuntime {
                 .registry
                 .instantiate_one::<Service>("units", name, |x| Ok(Service::new(x)))
               {
-                self.start_service(service, log, sm_shared.as_ref(), dispatch);
+                self.start_service(service, log, sm_shared.as_ref(), dispatch, vh.as_ref());
                 started.insert(name.clone());
                 progress = true;
               }
@@ -1313,6 +1415,7 @@ impl Runtime for ServiceRuntime {
           .metadata("units")
           .ok_or_else(|| CoreError::MetadataNotFound("units".to_string()))?;
         let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
+        let vh = ctx.scope.get::<VariableHeapShared>().cloned();
 
         let mut dependents: Vec<(String, Arc<ServiceMetadata>)> = Vec::new();
         for group in metadata.groups() {
@@ -1363,7 +1466,7 @@ impl Runtime for ServiceRuntime {
                   ctx
                     .registry
                     .instantiate_one::<Service>("units", &dependent, |x| Ok(Service::new(x)))?;
-                self.start_service(service, log, sm_shared.as_ref(), dispatch);
+                self.start_service(service, log, sm_shared.as_ref(), dispatch, vh.as_ref());
               }
             }
           }
@@ -1391,7 +1494,8 @@ impl Runtime for ServiceRuntime {
                   match exit_action {
                     ServiceExitAction::Restart => {
                       let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
-                      self.start_service(service, log, sm_shared.as_ref(), dispatch);
+                      let vh = ctx.scope.get::<VariableHeapShared>().cloned();
+                      self.start_service(service, log, sm_shared.as_ref(), dispatch, vh.as_ref());
                     }
                     ServiceExitAction::StopDependents => {
                       let _ = dispatch.dispatch(
