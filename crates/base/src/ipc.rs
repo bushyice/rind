@@ -345,6 +345,52 @@ pub fn handle_ipc_remove(
   Ok(Message::default())
 }
 
+fn queue_lifecycle_action(
+  msg: Message,
+  ctx: &mut RuntimeContext<'_>,
+  action: LifecycleAction,
+  response: &str,
+) -> Result<Message, CoreError> {
+  if msg.from_uid.unwrap_or(u32::MAX) != 0 {
+    return Err(CoreError::PermissionDenied);
+  }
+
+  let queue = ctx
+    .scope
+    .get::<LifecycleQueue>()
+    .cloned()
+    .ok_or_else(|| CoreError::InvalidState("lifecycle queue not found in scope".into()))?;
+  queue.request(action);
+  Ok(Message::ok(response))
+}
+
+pub fn handle_ipc_reload_units(
+  msg: Message,
+  ctx: &mut RuntimeContext<'_>,
+  _dispatch: &RuntimeDispatcher,
+  _log: &LogHandle,
+) -> Result<Message, CoreError> {
+  queue_lifecycle_action(msg, ctx, LifecycleAction::ReloadUnits, "unit reload scheduled")
+}
+
+pub fn handle_ipc_reboot(
+  msg: Message,
+  ctx: &mut RuntimeContext<'_>,
+  _dispatch: &RuntimeDispatcher,
+  _log: &LogHandle,
+) -> Result<Message, CoreError> {
+  queue_lifecycle_action(msg, ctx, LifecycleAction::Reboot, "reboot scheduled")
+}
+
+pub fn handle_ipc_shutdown(
+  msg: Message,
+  ctx: &mut RuntimeContext<'_>,
+  _dispatch: &RuntimeDispatcher,
+  _log: &LogHandle,
+) -> Result<Message, CoreError> {
+  queue_lifecycle_action(msg, ctx, LifecycleAction::Shutdown, "shutdown scheduled")
+}
+
 impl Runtime for IpcRuntime {
   fn id(&self) -> &str {
     IPC_RUNTIME_ID
@@ -374,6 +420,9 @@ impl Runtime for IpcRuntime {
         ipcsrc.register("network", handle_ipc_network, PERM_NETWORK);
         ipcsrc.register("set_variable", handle_ipc_set, PermissionExpr::All);
         ipcsrc.register("remove_variable", handle_ipc_remove, PermissionExpr::All);
+        ipcsrc.register("reload_units", handle_ipc_reload_units, PermissionExpr::All);
+        ipcsrc.register("reboot", handle_ipc_reboot, PermissionExpr::All);
+        ipcsrc.register("shutdown", handle_ipc_shutdown, PermissionExpr::All);
       }
       "start_server" => {
         if self.listener_thread.is_none() {

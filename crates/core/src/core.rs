@@ -3,6 +3,7 @@ pub mod context;
 pub mod error;
 pub mod events;
 pub mod logging;
+pub mod lifecycle;
 pub mod metadata;
 pub mod orchestrator;
 pub mod permissions;
@@ -19,6 +20,7 @@ pub mod prelude {
   pub use error::*;
   pub use events::*;
   pub use logging::*;
+  pub use lifecycle::*;
   pub use metadata::*;
   pub use orchestrator::*;
   pub use permissions::*;

@@ -19,6 +19,7 @@ pub struct UnitsOrchestrator {
   units_dir: PathBuf,
   state_machine: StateMachineShared,
   state_persistence: Arc<RwLock<StatePersistence>>,
+  lifecycle: LifecycleQueue,
   event_bus: EventBus,
   users: UserStoreShared,
   permissions: PermissionStore,
@@ -34,11 +35,16 @@ impl UnitsOrchestrator {
       units_dir: units_dir.into(),
       state_machine: Arc::new(RwLock::new(StateMachine::default())),
       state_persistence: Arc::new(RwLock::new(StatePersistence::new(state_path()))),
+      lifecycle: LifecycleQueue::default(),
       event_bus: EventBus::new(),
       permissions: PermissionStore::new(users.clone()),
       users,
       variable_heap: Arc::new(RwLock::new(heap)),
     }
+  }
+
+  pub fn lifecycle_queue(&self) -> LifecycleQueue {
+    self.lifecycle.clone()
   }
 
   fn load_permissions(&self) -> Result<(), CoreError> {
@@ -317,6 +323,7 @@ impl Orchestrator for UnitsOrchestrator {
     let ipcmap = IpcSourcemap::default();
     let run0_queue: Run0QueueState = Arc::new(std::sync::Mutex::new(Default::default()));
     let variable_heap = self.variable_heap.clone();
+    let lifecycle = self.lifecycle.clone();
     builder.globals(move |scope| {
       scope.insert::<IpcSourcemap>(ipcmap.clone());
       scope.insert::<EventBus>(eb.clone());
@@ -324,6 +331,7 @@ impl Orchestrator for UnitsOrchestrator {
       scope.insert::<PermissionStore>(permissions.clone());
       scope.insert::<Run0QueueState>(run0_queue.clone());
       scope.insert::<VariableHeapShared>(variable_heap.clone());
+      scope.insert::<LifecycleQueue>(lifecycle.clone());
     });
 
     Ok(())

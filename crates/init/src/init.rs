@@ -129,6 +129,58 @@ impl Orchestrator for PumpOrchestrator {
   }
 }
 
+fn try_stop_services(
+  boot: &BootEngine,
+  metadata: &MetadataRegistry,
+  runtime: &RuntimeHandle,
+  force: bool,
+) {
+  let Some(context_id) = boot.primary_context_id() else {
+    return;
+  };
+
+  let _ = runtime.dispatch(
+    "services",
+    "stop_all",
+    json!({ "force": force }).into(),
+    context_id,
+  );
+  let _ = runtime.flush_context(context_id, metadata);
+}
+
+fn process_lifecycle_action(
+  action: LifecycleAction,
+  boot: &mut BootEngine,
+  metadata: &mut MetadataRegistry,
+  instances: &mut InstanceMap,
+  runtime: &RuntimeHandle,
+) -> bool {
+  match action {
+    LifecycleAction::ReloadUnits => {
+      let _ = boot.reload_units_collection(metadata, instances, runtime);
+      true
+    }
+    LifecycleAction::Reboot => {
+      try_stop_services(boot, metadata, runtime, false);
+      let _ = runtime.send(RuntimeCommand::Stop);
+      unsafe {
+        libc::sync();
+        libc::reboot(libc::LINUX_REBOOT_CMD_RESTART);
+      }
+      false
+    }
+    LifecycleAction::Shutdown => {
+      try_stop_services(boot, metadata, runtime, false);
+      let _ = runtime.send(RuntimeCommand::Stop);
+      unsafe {
+        libc::sync();
+        libc::reboot(libc::LINUX_REBOOT_CMD_POWER_OFF);
+      }
+      false
+    }
+  }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
   let units_dir = if let Ok(path) = std::env::var("RIND_UNITS_DIR") {
     PathBuf::from(path)
@@ -140,7 +192,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut boot = BootEngine::default();
 
   boot.orchestrators.push(RuntimeProviderOrchestrator);
-  boot.orchestrators.push(UnitsOrchestrator::new(units_dir));
+  let units = UnitsOrchestrator::new(units_dir);
+  let lifecycle = units.lifecycle_queue();
+  boot.orchestrators.push(units);
   boot.orchestrators.push(BootOrchestrator);
   boot.orchestrators.push(PumpOrchestrator);
 
@@ -153,6 +207,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .map_err(|e| format!("boot failed: {e}"))?;
 
   loop {
+    while let Some(action) = lifecycle.next() {
+      if !process_lifecycle_action(action, &mut boot, &mut metadata, &mut instances, &runtime) {
+        return Ok(());
+      }
+    }
     let _ = boot.pump_once(&mut metadata, &mut instances, &runtime);
     std::thread::sleep(std::time::Duration::from_millis(50));
   }

@@ -92,6 +92,9 @@ enum Commands {
     #[arg(name = "PAYLOAD")]
     payload: String,
   },
+  ReloadUnits,
+  Reboot,
+  Shutdown,
 }
 
 pub fn report_error(msg: &str, err: impl std::fmt::Display) {
@@ -277,6 +280,15 @@ fn main() {
     }
     Commands::Invoke { name, payload } => {
       handle_send_raw!(name.as_str(), payload);
+    }
+    Commands::ReloadUnits => {
+      handle_send_raw!("reload_units", "{}".to_string());
+    }
+    Commands::Reboot => {
+      handle_send_raw!("reboot", "{}".to_string());
+    }
+    Commands::Shutdown => {
+      handle_send_raw!("shutdown", "{}".to_string());
     }
     Commands::Start { name, r#type: _ } => {
       handle_send!("start_service", &ServicePayload { force: None, name });

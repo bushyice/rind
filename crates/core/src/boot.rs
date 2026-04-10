@@ -101,6 +101,44 @@ impl BootEngine {
 
     Ok(())
   }
+
+  pub fn primary_context_id(&self) -> Option<usize> {
+    self.persistent_context_ids.first().copied()
+  }
+
+  pub fn reload_units_collection(
+    &mut self,
+    metadata: &mut MetadataRegistry,
+    instances: &mut InstanceMap,
+    runtime: &RuntimeHandle,
+  ) -> Result<(), CoreError> {
+    metadata.remove_metadata("units");
+
+    for phase in [BootPhase::Start, BootPhase::End] {
+      let context_id = self.alloc_context_id();
+      let mut builder = ScopeBuilder::default();
+      self
+        .orchestrators
+        .build_scope_cycle_phase(BootCycle::Collect, phase, &mut builder)?;
+      runtime.register_scopes(context_id, builder.build())?;
+
+      {
+        let mut ctx = OrchestratorContext {
+          context_id,
+          metadata,
+          instances,
+          runtime,
+        };
+        self
+          .orchestrators
+          .run_cycle_phase(BootCycle::Collect, phase, &mut ctx)?;
+      }
+
+      runtime.flush_context(context_id, metadata)?;
+    }
+
+    Ok(())
+  }
 }
 
 #[cfg(test)]

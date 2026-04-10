@@ -136,6 +136,14 @@ impl MetadataRegistry {
   pub fn metadata(&self, metadata: &str) -> Option<Arc<Metadata>> {
     self.metadata.get(metadata).map(|x| x.clone())
   }
+
+  pub fn remove_metadata(&mut self, metadata: &str) -> bool {
+    let removed = self.metadata.remove(metadata).is_some();
+    if removed {
+      self.indexes.clear();
+    }
+    removed
+  }
 }
 
 pub type InstanceMap = HashMap<String, Vec<Box<dyn Any>>>;

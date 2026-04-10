@@ -1337,6 +1337,32 @@ impl Runtime for ServiceRuntime {
           .instantiate_one::<Service>("units", &name, |x| Ok(Service::new(x)))?;
         self.stop_service(service, mode, log, dispatch, None);
       }
+      "stop_all" => {
+        let force = payload.get::<bool>("force").unwrap_or(false);
+        let mode = if force {
+          StopMode::ForceKill
+        } else {
+          StopMode::Graceful
+        };
+
+        let keys: Vec<String> = ctx
+          .registry
+          .instances
+          .keys()
+          .filter(|k| k.starts_with("units@"))
+          .cloned()
+          .collect();
+
+        for key in keys {
+          if let Some(instances) = ctx.registry.instances.get_mut(&key) {
+            for instance in instances.iter_mut() {
+              if let Some(service) = instance.downcast_mut::<Service>() {
+                self.stop_service(service, mode, log, dispatch, None);
+              }
+            }
+          }
+        }
+      }
       "start_all" => {
         let metadata = ctx
           .registry
