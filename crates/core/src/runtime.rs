@@ -128,6 +128,23 @@ impl RuntimeHandle {
     Ok(())
   }
 
+  pub fn log(
+    &self,
+    level: LogLevel,
+    target: &str,
+    message: &str,
+    fields: HashMap<String, String>,
+  ) -> Result<(), CoreError> {
+    let inner = self.inner.borrow();
+    if inner.stopped {
+      return Err(CoreError::RuntimeStopped);
+    }
+
+    inner.log.log(level, target, message, fields);
+
+    Ok(())
+  }
+
   pub fn dispatch(
     &self,
     target: &str,
@@ -216,9 +233,9 @@ impl RuntimeHandle {
       let mut ctx = RuntimeContext::new(runtime_id.as_str(), &mut scope, registry);
       let dispatch = RuntimeDispatcher::new(self.clone(), cid);
 
-      println!("Calling runtime: {action}");
+      // println!("Calling runtime: {action}");
       let result = runtime.handle(action.as_str(), payload, &mut ctx, &dispatch, &log);
-      println!("Called runtime: {action}");
+      // println!("Called runtime: {action}");
 
       if let Some(reply_tx) = reply {
         let _ = reply_tx.send(match result {

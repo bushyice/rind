@@ -80,6 +80,10 @@ impl OrchestratorStore {
     self.list.push(Box::new(orchestrator));
   }
 
+  pub fn extend(&mut self, orchestrator: Vec<Box<dyn Orchestrator>>) {
+    self.list.extend(orchestrator);
+  }
+
   pub fn planned_indexes(
     &self,
     cycle: BootCycle,

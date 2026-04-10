@@ -3,4 +3,12 @@ name = "rind-plugins"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+path = "src/plugins.rs"
+
 [dependencies]
+rind-core = { path = "../core" }
+rind-base = { path = "../base" }
+libloading.workspace = true
+libc.workspace = true
+bitflags.workspace = true

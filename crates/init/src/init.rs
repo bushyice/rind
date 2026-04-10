@@ -21,6 +21,7 @@ use rind_base::transport::TransportRuntime;
 use rind_base::units::UnitsOrchestrator;
 use rind_base::user::UserRuntime;
 use rind_core::prelude::*;
+use rind_plugins::{collect_plugins, plugins_path};
 use serde_json::json;
 
 struct BootOrchestrator;
@@ -250,6 +251,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut metadata = MetadataRegistry::default();
   let mut instances = InstanceMap::default();
   let runtime = boot.init_runtime();
+
+  for plugin in collect_plugins(plugins_path(), &runtime)? {
+    boot.orchestrators.extend(plugin.provide_orchestrators());
+  }
 
   boot
     .run(&mut metadata, &mut instances, &runtime)

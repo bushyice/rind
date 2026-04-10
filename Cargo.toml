@@ -6,7 +6,7 @@ members = [
   # "crates/common",
   "crates/base",
   "crates/init", "crates/macros",
-  "crates/ipc", "crates/api", "crates/plugins",
+  "crates/ipc", "crates/api", "crates/plugins", "crates/rind-test-plugin",
 ]
 resolver = "3"
 

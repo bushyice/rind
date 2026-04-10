@@ -488,6 +488,7 @@ dependencies = [
  "nix",
  "rind-base",
  "rind-core",
+ "rind-plugins",
  "serde_json",
 ]
 
@@ -516,6 +517,20 @@ dependencies = [
 [[package]]
 name = "rind-plugins"
 version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "libc",
+ "libloading",
+ "rind-base",
+ "rind-core",
+]
+
+[[package]]
+name = "rind-test-plugin"
+version = "0.1.0"
+dependencies = [
+ "rind-plugins",
+]
 
 [[package]]
 name = "rpassword"

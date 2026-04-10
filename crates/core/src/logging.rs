@@ -114,7 +114,7 @@ fn logger_loop(config: LogConfig, rx: Receiver<LogEntry>) {
     };
 
     println!(
-      "[{:?} {}] {{{}}}: {} ({:?}",
+      "[{:?} {}] {{{}}}: {} ({:?})",
       entry.level,
       timestamp_fmt(entry.timestamp),
       entry.target,

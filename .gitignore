@@ -3,3 +3,4 @@
 b
 .direnv/
 bcup
+.env
