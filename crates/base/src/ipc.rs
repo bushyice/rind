@@ -382,6 +382,15 @@ pub fn handle_ipc_reboot(
   queue_lifecycle_action(msg, ctx, LifecycleAction::Reboot, "reboot scheduled")
 }
 
+pub fn handle_ipc_soft_reboot(
+  msg: Message,
+  ctx: &mut RuntimeContext<'_>,
+  _dispatch: &RuntimeDispatcher,
+  _log: &LogHandle,
+) -> Result<Message, CoreError> {
+  queue_lifecycle_action(msg, ctx, LifecycleAction::SoftReboot, "soft reboot scheduled")
+}
+
 pub fn handle_ipc_shutdown(
   msg: Message,
   ctx: &mut RuntimeContext<'_>,
@@ -422,6 +431,7 @@ impl Runtime for IpcRuntime {
         ipcsrc.register("remove_variable", handle_ipc_remove, PermissionExpr::All);
         ipcsrc.register("reload_units", handle_ipc_reload_units, PermissionExpr::All);
         ipcsrc.register("reboot", handle_ipc_reboot, PermissionExpr::All);
+        ipcsrc.register("soft_reboot", handle_ipc_soft_reboot, PermissionExpr::All);
         ipcsrc.register("shutdown", handle_ipc_shutdown, PermissionExpr::All);
       }
       "start_server" => {

@@ -7,7 +7,10 @@
  */
 
 use std::path::PathBuf;
+use std::time::Duration;
 
+use nix::sys::signal::{Signal, kill};
+use nix::unistd::Pid;
 use rind_base::flow::FlowRuntime;
 use rind_base::ipc::IpcRuntime;
 use rind_base::mount::MountRuntime;
@@ -148,6 +151,43 @@ fn try_stop_services(
   let _ = runtime.flush_context(context_id, metadata);
 }
 
+fn collect_other_pids() -> Vec<i32> {
+  let self_pid = std::process::id() as i32;
+  let mut pids = Vec::new();
+
+  let Ok(entries) = std::fs::read_dir("/proc") else {
+    return pids;
+  };
+
+  for entry in entries.flatten() {
+    let name = entry.file_name();
+    let name = name.to_string_lossy();
+    let Ok(pid) = name.parse::<i32>() else {
+      continue;
+    };
+    if pid <= 1 || pid == self_pid {
+      continue;
+    }
+    pids.push(pid);
+  }
+
+  pids
+}
+
+fn terminate_all_processes() {
+  let pids = collect_other_pids();
+  for pid in &pids {
+    let _ = kill(Pid::from_raw(*pid), Signal::SIGTERM);
+  }
+
+  std::thread::sleep(Duration::from_millis(500));
+
+  let pids = collect_other_pids();
+  for pid in &pids {
+    let _ = kill(Pid::from_raw(*pid), Signal::SIGKILL);
+  }
+}
+
 fn process_lifecycle_action(
   action: LifecycleAction,
   boot: &mut BootEngine,
@@ -160,8 +200,16 @@ fn process_lifecycle_action(
       let _ = boot.reload_units_collection(metadata, instances, runtime);
       true
     }
+    LifecycleAction::SoftReboot => {
+      try_stop_services(boot, metadata, runtime, false);
+      terminate_all_processes();
+      metadata.remove_metadata("units");
+      let _ = boot.run(metadata, instances, runtime);
+      true
+    }
     LifecycleAction::Reboot => {
       try_stop_services(boot, metadata, runtime, false);
+      terminate_all_processes();
       let _ = runtime.send(RuntimeCommand::Stop);
       unsafe {
         libc::sync();
@@ -170,7 +218,8 @@ fn process_lifecycle_action(
       false
     }
     LifecycleAction::Shutdown => {
-      try_stop_services(boot, metadata, runtime, false);
+      try_stop_services(boot, metadata, runtime, true);
+      terminate_all_processes();
       let _ = runtime.send(RuntimeCommand::Stop);
       unsafe {
         libc::sync();

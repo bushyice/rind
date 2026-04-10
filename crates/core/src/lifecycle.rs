@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LifecycleAction {
   ReloadUnits,
+  SoftReboot,
   Reboot,
   Shutdown,
 }

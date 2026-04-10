@@ -93,6 +93,7 @@ enum Commands {
     payload: String,
   },
   ReloadUnits,
+  SoftReboot,
   Reboot,
   Shutdown,
 }
@@ -283,6 +284,9 @@ fn main() {
     }
     Commands::ReloadUnits => {
       handle_send_raw!("reload_units", "{}".to_string());
+    }
+    Commands::SoftReboot => {
+      handle_send_raw!("soft_reboot", "{}".to_string());
     }
     Commands::Reboot => {
       handle_send_raw!("reboot", "{}".to_string());
