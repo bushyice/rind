@@ -1,6 +1,6 @@
 use crate::context::ScopeBuilder;
 use crate::error::CoreError;
-use crate::logging::{LogConfig, start_logger};
+use crate::logging::{LogConfig, LogHandle, start_logger};
 use crate::orchestrator::{BootCycle, BootPhase, OrchestratorContext, OrchestratorStore};
 use crate::registry::{InstanceMap, MetadataRegistry};
 use crate::runtime::{RuntimeHandle, start_runtime};
@@ -28,9 +28,11 @@ impl BootEngine {
     current
   }
 
-  pub fn init_runtime(&self) -> RuntimeHandle {
-    let log = start_logger(LogConfig::default());
+  pub fn start_logger(&self) -> LogHandle {
+    start_logger(LogConfig::default())
+  }
 
+  pub fn init_runtime(&self, log: LogHandle) -> RuntimeHandle {
     start_runtime(log, self.orchestrators.runtimes())
   }
 
@@ -179,7 +181,7 @@ mod tests {
       self.value.as_str()
     }
 
-    fn depends_on(&self) -> &[String] {
+    fn depends_on(&self) -> &[&str] {
       &[]
     }
 
@@ -298,7 +300,7 @@ mod tests {
       "kickoff"
     }
 
-    fn depends_on(&self) -> &[String] {
+    fn depends_on(&self) -> &[&str] {
       &[]
     }
 

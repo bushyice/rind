@@ -15,6 +15,38 @@ use rind_ipc::recv::IpcSourcemap;
 pub const UNITS_META: &str = "units";
 const BUILTIN_UNIT: &str = "rind";
 
+pub enum UnitExtensionAction {
+  Metadata(Metadata),
+  CreateIndex,
+  BuiltIn(Metadata),
+  LoadedUnits(Metadata),
+}
+
+impl UnitExtensionAction {
+  pub fn as_metadata(self) -> Metadata {
+    match self {
+      UnitExtensionAction::Metadata(m) => m,
+      UnitExtensionAction::LoadedUnits(m) => m,
+      UnitExtensionAction::BuiltIn(m) => m,
+      _ => Metadata::new("unknown"),
+    }
+  }
+}
+
+impl From<Metadata> for UnitExtensionAction {
+  fn from(value: Metadata) -> Self {
+    UnitExtensionAction::Metadata(value)
+  }
+}
+
+impl From<()> for UnitExtensionAction {
+  fn from(_value: ()) -> Self {
+    UnitExtensionAction::CreateIndex
+  }
+}
+
+pub type UnitExtension = fn(UnitExtensionAction) -> UnitExtensionAction;
+
 pub struct UnitsOrchestrator {
   units_dir: PathBuf,
   state_machine: StateMachineShared,
@@ -24,6 +56,7 @@ pub struct UnitsOrchestrator {
   users: UserStoreShared,
   permissions: PermissionStore,
   variable_heap: VariableHeapShared,
+  extensions: Vec<UnitExtension>,
 }
 
 impl UnitsOrchestrator {
@@ -40,7 +73,12 @@ impl UnitsOrchestrator {
       permissions: PermissionStore::new(users.clone()),
       users,
       variable_heap: Arc::new(RwLock::new(heap)),
+      extensions: Default::default(),
     }
+  }
+
+  pub fn insert_extension(&mut self, ext: UnitExtension) {
+    self.extensions.push(ext);
   }
 
   pub fn lifecycle_queue(&self) -> LifecycleQueue {
@@ -66,6 +104,10 @@ impl UnitsOrchestrator {
       .of::<Signal>("signal")
       .of::<Permission>("permission")
       .of::<Variable>("variable");
+
+    for ext in self.extensions.iter() {
+      metadata = ext(metadata.into()).as_metadata();
+    }
 
     let dir = std::fs::read_dir(&self.units_dir).map_err(|e| {
       CoreError::Custom(format!(
@@ -159,6 +201,10 @@ impl UnitsOrchestrator {
 
     Self::add_builtin_defs(&mut metadata);
 
+    for ext in self.extensions.iter() {
+      metadata = ext(UnitExtensionAction::BuiltIn(metadata)).as_metadata();
+    }
+
     if let Ok(mut heap) = self.variable_heap.write() {
       for group in metadata.groups() {
         if let Some(vars) = metadata.get_in_group::<Variable>(group) {
@@ -169,11 +215,19 @@ impl UnitsOrchestrator {
       }
     }
 
+    for ext in self.extensions.iter() {
+      metadata = ext(UnitExtensionAction::LoadedUnits(metadata)).as_metadata();
+    }
+
     ctx.metadata.insert_metadata(metadata);
     ctx.metadata.ensure_index_for_type::<Service>(UNITS_META)?;
     ctx.metadata.ensure_index_for_type::<Mount>(UNITS_META)?;
     ctx.metadata.ensure_index_for_type::<State>(UNITS_META)?;
     ctx.metadata.ensure_index_for_type::<Signal>(UNITS_META)?;
+
+    for ext in self.extensions.iter() {
+      ext(UnitExtensionAction::CreateIndex);
+    }
 
     Ok(())
   }
@@ -242,7 +296,7 @@ impl Orchestrator for UnitsOrchestrator {
     "units"
   }
 
-  fn depends_on(&self) -> &[String] {
+  fn depends_on(&self) -> &[&str] {
     &[]
   }
 

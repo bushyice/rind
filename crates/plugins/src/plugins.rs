@@ -4,7 +4,11 @@ use std::{
 };
 
 use libloading::os::unix::{Library, Symbol};
-use rind_core::{error::CoreError, prelude::Orchestrator, runtime::RuntimeHandle};
+use rind_base::units::UnitExtension;
+use rind_core::{
+  error::CoreError,
+  prelude::{LogHandle, Orchestrator},
+};
 
 pub use rind_base as base;
 
@@ -27,6 +31,10 @@ pub trait Plugin {
   fn get_metadata(&self) -> PluginMetadata;
 
   fn provide_orchestrators(&self) -> Vec<Box<dyn Orchestrator>>;
+
+  fn unit_extension(&self) -> Option<UnitExtension> {
+    None
+  }
 }
 
 pub fn plugins_path() -> PathBuf {
@@ -52,7 +60,7 @@ impl Deref for PluginCache {
 
 pub fn collect_plugins<P: AsRef<Path>>(
   path: P,
-  runtime: &RuntimeHandle,
+  log: &LogHandle,
 ) -> Result<impl Iterator<Item = PluginCache>, CoreError> {
   // ignore error
   let _ = std::fs::create_dir_all(&path);
@@ -65,14 +73,12 @@ pub fn collect_plugins<P: AsRef<Path>>(
       let lib = match Library::new(&path) {
         Ok(l) => l,
         Err(e) => {
-          runtime
-            .log(
-              rind_core::prelude::LogLevel::Error,
-              "plugin-loader",
-              &format!("Failed to load plugin: {e}"),
-              [("name".to_string(), path.to_string_lossy().to_string())].into(),
-            )
-            .ok();
+          log.log(
+            rind_core::prelude::LogLevel::Error,
+            "plugin-loader",
+            &format!("Failed to load plugin: {e}"),
+            [("name".to_string(), path.to_string_lossy().to_string())].into(),
+          );
           return None;
         }
       };
@@ -86,14 +92,12 @@ pub fn collect_plugins<P: AsRef<Path>>(
         match lib.get(b"get_plugin") {
           Ok(s) => s,
           Err(e) => {
-            runtime
-              .log(
-                rind_core::prelude::LogLevel::Error,
-                "plugin-loader",
-                &format!("Failed to load plugin: {e}"),
-                [("name".to_string(), path.to_string_lossy().to_string())].into(),
-              )
-              .ok();
+            log.log(
+              rind_core::prelude::LogLevel::Error,
+              "plugin-loader",
+              &format!("Failed to load plugin: {e}"),
+              [("name".to_string(), path.to_string_lossy().to_string())].into(),
+            );
             return None;
           }
         };
@@ -109,19 +113,17 @@ pub fn collect_plugins<P: AsRef<Path>>(
         plugin,
       };
 
-      runtime
-        .log(
-          rind_core::prelude::LogLevel::Info,
-          "plugin-loader",
-          &format!("Loaded plugin"),
-          [
-            ("name".to_string(), pc.meta.name.to_string()),
-            ("path".into(), path.to_string_lossy().to_string()),
-            ("abi_version".into(), version.to_string()),
-          ]
-          .into(),
-        )
-        .ok();
+      log.log(
+        rind_core::prelude::LogLevel::Info,
+        "plugin-loader",
+        &format!("Loaded plugin"),
+        [
+          ("name".to_string(), pc.meta.name.to_string()),
+          ("path".into(), path.to_string_lossy().to_string()),
+          ("abi_version".into(), version.to_string()),
+        ]
+        .into(),
+      );
 
       Some(pc)
     });
@@ -152,9 +154,11 @@ pub mod prelude {
 
       orchestrators: [$($body:expr),* $(,)?],
 
+      $(extension: $ext:expr,)?
+
       struct $plugin_name:ident $($body_struct:tt)?
     ) => {
-      pub struct $plugin_name $($body_struct)?;
+      pub struct $plugin_name $($body_struct)?
 
       impl Plugin for $plugin_name {
         fn get_metadata(&self) -> PluginMetadata {
@@ -169,6 +173,10 @@ pub mod prelude {
         fn provide_orchestrators(&self) -> Vec<Box<dyn Orchestrator>> {
           vec![$(Box::new($body)),*]
         }
+
+        $(fn unit_extension(&self) -> Option<UnitExtension> {
+          Some($ext)
+        })?
       }
 
       #[unsafe(no_mangle)]

@@ -9,3 +9,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rind-plugins = { path = "../plugins" }
+serde.workspace = true

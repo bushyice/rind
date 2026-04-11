@@ -31,7 +31,7 @@ impl Orchestrator for BootOrchestrator {
     "boot"
   }
 
-  fn depends_on(&self) -> &[String] {
+  fn depends_on(&self) -> &[&str] {
     &[]
   }
 
@@ -74,7 +74,7 @@ impl Orchestrator for RuntimeProviderOrchestrator {
     "runtime-provider"
   }
 
-  fn depends_on(&self) -> &[String] {
+  fn depends_on(&self) -> &[&str] {
     &[]
   }
 
@@ -110,7 +110,7 @@ impl Orchestrator for PumpOrchestrator {
     "pump"
   }
 
-  fn depends_on(&self) -> &[String] {
+  fn depends_on(&self) -> &[&str] {
     &[]
   }
 
@@ -241,20 +241,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let mut boot = BootEngine::default();
 
-  boot.orchestrators.push(RuntimeProviderOrchestrator);
-  let units = UnitsOrchestrator::new(units_dir);
+  let mut units = UnitsOrchestrator::new(units_dir);
   let lifecycle = units.lifecycle_queue();
-  boot.orchestrators.push(units);
-  boot.orchestrators.push(BootOrchestrator);
-  boot.orchestrators.push(PumpOrchestrator);
 
   let mut metadata = MetadataRegistry::default();
   let mut instances = InstanceMap::default();
-  let runtime = boot.init_runtime();
 
-  for plugin in collect_plugins(plugins_path(), &runtime)? {
+  let log = boot.start_logger();
+
+  for plugin in collect_plugins(plugins_path(), &log)? {
     boot.orchestrators.extend(plugin.provide_orchestrators());
+    if let Some(ext) = plugin.unit_extension() {
+      units.insert_extension(ext);
+    }
   }
+
+  boot.orchestrators.insert(0, PumpOrchestrator);
+  boot.orchestrators.insert(0, BootOrchestrator);
+  boot.orchestrators.insert(0, units);
+  boot.orchestrators.insert(0, RuntimeProviderOrchestrator);
+
+  let runtime = boot.init_runtime(log);
 
   boot
     .run(&mut metadata, &mut instances, &runtime)

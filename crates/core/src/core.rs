@@ -2,8 +2,8 @@ pub mod boot;
 pub mod context;
 pub mod error;
 pub mod events;
-pub mod logging;
 pub mod lifecycle;
+pub mod logging;
 pub mod metadata;
 pub mod orchestrator;
 pub mod permissions;
@@ -19,8 +19,8 @@ pub mod prelude {
   pub use context::*;
   pub use error::*;
   pub use events::*;
-  pub use logging::*;
   pub use lifecycle::*;
+  pub use logging::*;
   pub use metadata::*;
   pub use orchestrator::*;
   pub use permissions::*;
@@ -31,3 +31,14 @@ pub mod prelude {
 
   pub use rind_macros::*;
 }
+
+pub use anyhow;
+pub use bincode_next;
+pub use bitflags;
+pub use libc;
+pub use nix;
+pub use once_cell;
+pub use serde;
+pub use serde_json;
+pub use sha_crypt;
+pub use toml;

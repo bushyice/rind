@@ -54,6 +54,12 @@ impl From<serde_json::Value> for RuntimePayload {
   }
 }
 
+impl From<String> for RuntimePayload {
+  fn from(value: String) -> Self {
+    Self(value.into())
+  }
+}
+
 pub trait Runtime<T: Serialize + DeserializeOwned = serde_json::Value>: Send {
   fn id(&self) -> &str;
   fn handle(

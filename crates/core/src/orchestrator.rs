@@ -56,7 +56,7 @@ impl OrchestratorContext<'_> {
 
 pub trait Orchestrator: Send {
   fn id(&self) -> &str;
-  fn depends_on(&self) -> &[String];
+  fn depends_on(&self) -> &[&str];
   fn when(&self) -> OrchestratorWhen<'static>;
   fn build_scope(&mut self, _builder: &mut ScopeBuilder) -> Result<(), CoreError> {
     Ok(())
@@ -72,12 +72,16 @@ pub trait Orchestrator: Send {
 
 #[derive(Default)]
 pub struct OrchestratorStore {
-  list: Vec<Box<dyn Orchestrator>>,
+  pub list: Vec<Box<dyn Orchestrator>>,
 }
 
 impl OrchestratorStore {
   pub fn push<O: Orchestrator + 'static>(&mut self, orchestrator: O) {
     self.list.push(Box::new(orchestrator));
+  }
+
+  pub fn insert<O: Orchestrator + 'static>(&mut self, index: usize, orchestrator: O) {
+    self.list.insert(index, Box::new(orchestrator));
   }
 
   pub fn extend(&mut self, orchestrator: Vec<Box<dyn Orchestrator>>) {
@@ -115,7 +119,7 @@ impl OrchestratorStore {
 
     for idx in &selected {
       for dep_id in self.list[*idx].depends_on() {
-        if let Some(dep_idx) = id_to_idx.get(dep_id) {
+        if let Some(dep_idx) = id_to_idx.get(&dep_id.to_string()) {
           deps.entry(*dep_idx).or_default().push(*idx);
           *indegree.entry(*idx).or_default() += 1;
         }

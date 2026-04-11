@@ -11,3 +11,8 @@ name = "example-inactive"
 run.exec = "/usr/bin/example-inactive"
 run.args = ["arg1", "arg2"]
 restart = { max_retries = 5 }
+
+# for the plugin
+[[themodel]]
+name = "example"
+data = "mydata"
