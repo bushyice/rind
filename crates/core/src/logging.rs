@@ -40,7 +40,7 @@ pub struct LogConfig {
 impl Default for LogConfig {
   fn default() -> Self {
     Self {
-      dir: PathBuf::from("/tmp/logs"),
+      dir: PathBuf::from("/var/log/rind"),
       flush_interval: Duration::from_millis(250),
       segment_max_bytes: 16 * 1024 * 1024,
     }
@@ -101,11 +101,16 @@ fn timestamp_fmt(timestamp: u64) -> String {
 }
 
 fn logger_loop(config: LogConfig, rx: Receiver<LogEntry>) {
-  let _ = create_dir_all(config.dir.as_path());
+  if let Err(err) = create_dir_all(config.dir.as_path()) {
+    eprintln!(
+      "logger: failed to create log dir '{}': {err}",
+      config.dir.display()
+    );
+  }
 
   let mut segment_id = 1u64;
   let mut written = 0u64;
-  let mut writer = open_segment(config.dir.as_path(), segment_id);
+  let (mut writer, mut current_path) = open_segment(config.dir.as_path(), segment_id);
 
   loop {
     let Ok(entry) = rx.recv_timeout(config.flush_interval) else {
@@ -122,9 +127,27 @@ fn logger_loop(config: LogConfig, rx: Receiver<LogEntry>) {
       entry.fields
     );
 
-    if let Ok(bytes) = encode_record(&entry) {
-      if writer.write_all(&bytes).is_ok() {
+    match encode_record(&entry) {
+      Ok(bytes) => {
+        if let Err(err) = writer.write_all(&bytes) {
+          eprintln!(
+            "logger: failed to write to '{}': {err}",
+            current_path.display()
+          );
+          continue;
+        }
+
         written += bytes.len() as u64;
+
+        if let Err(err) = writer.flush() {
+          eprintln!(
+            "logger: failed to flush '{}': {err}",
+            current_path.display()
+          );
+        }
+      }
+      Err(err) => {
+        eprintln!("logger: failed to encode entry: {err}");
       }
     }
 
@@ -132,26 +155,34 @@ fn logger_loop(config: LogConfig, rx: Receiver<LogEntry>) {
       let _ = writer.flush();
       let _ = writer.get_ref().sync_data();
       segment_id += 1;
-      writer = open_segment(config.dir.as_path(), segment_id);
+      (writer, current_path) = open_segment(config.dir.as_path(), segment_id);
       written = 0;
     }
   }
 }
 
-fn open_segment(dir: &Path, id: u64) -> BufWriter<File> {
+fn open_segment(dir: &Path, id: u64) -> (BufWriter<File>, PathBuf) {
+  const FALLBACK_LOG_PATH: &str = "/var/log/rind-fallback.rlog";
+
   let path = dir.join(format!("{id:08}.rlog"));
-  let file = OpenOptions::new()
-    .create(true)
-    .append(true)
-    .open(path)
-    .unwrap_or_else(|_| {
-      OpenOptions::new()
+
+  match OpenOptions::new().create(true).append(true).open(&path) {
+    Ok(file) => (BufWriter::new(file), path),
+    Err(err) => {
+      eprintln!(
+        "logger: failed to open segment in '{}': {err}; using fallback '{}'",
+        dir.display(),
+        FALLBACK_LOG_PATH
+      );
+      let fallback = PathBuf::from(FALLBACK_LOG_PATH);
+      let file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open("/tmp/rind-fallback.rlog")
-        .unwrap_or_else(|err| panic!("failed to open fallback log file: {err}"))
-    });
-  BufWriter::new(file)
+        .open(&fallback)
+        .unwrap_or_else(|err| panic!("failed to open fallback log file: {err}")); // change (if not opened, don't crash)
+      (BufWriter::new(file), fallback)
+    }
+  }
 }
 
 const MAGIC: u32 = 0x524C4F47; // "RLOG"

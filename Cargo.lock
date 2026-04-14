@@ -451,7 +451,9 @@ dependencies = [
 name = "rind-cli"
 version = "0.1.0"
 dependencies = [
+ "bincode-next",
  "clap",
+ "crc32fast",
  "libc",
  "owo-colors",
  "rind-core",
