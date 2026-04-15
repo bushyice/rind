@@ -1,8 +1,3 @@
-/*
- * TODO: Userspace Update
- * - stuff
- */
-
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::thread;

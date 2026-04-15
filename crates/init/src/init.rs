@@ -1,11 +1,3 @@
-/*
- * TODO: Userspace Update
- * - spaces (user/system), give the uid/gid for services.
- * - active/inactive services in start_all
- * - start_all based on the space
- * - Fetch isolated user services from units/username
- */
-
 use std::path::PathBuf;
 use std::time::Duration;
 

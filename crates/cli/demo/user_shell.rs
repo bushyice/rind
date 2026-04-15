@@ -1,8 +1,3 @@
-/*
- * TODO: Userspace Update
- * - stuff
- */
-
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::os::unix::io::{AsRawFd, FromRawFd};

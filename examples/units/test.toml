@@ -3,6 +3,7 @@ name = "test"
 run.exec = "/bin/tcp"
 run.args = ["makano-test"]
 space = "user"
+user-source = { state = "rind@user_session", username-field = "username" }
 start-on = [{ state = "rind@user_session" }]
 
 [[service]]
@@ -11,12 +12,14 @@ run.exec = "/bin/tcp"
 run.args = ["makano-test"]
 run.env = { PORT = "4433" }
 space = "user"
+user-source = { state = "rind@user_session", username-field = "username" }
 
 [[service]]
 name = "many"
 run.variable = "someservice"
 space = "user"
 start-on = [{ state = "rind@user_session" }, { state = "rind@net-configured" }]
+user-source = { state = "rind@user_session", username-field = "username" }
 
 [[variable]]
 name = "someservice"

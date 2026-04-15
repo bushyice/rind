@@ -370,7 +370,12 @@ pub fn handle_ipc_reload_units(
   _dispatch: &RuntimeDispatcher,
   _log: &LogHandle,
 ) -> Result<Message, CoreError> {
-  queue_lifecycle_action(msg, ctx, LifecycleAction::ReloadUnits, "unit reload scheduled")
+  queue_lifecycle_action(
+    msg,
+    ctx,
+    LifecycleAction::ReloadUnits,
+    "unit reload scheduled",
+  )
 }
 
 pub fn handle_ipc_reboot(
@@ -388,7 +393,12 @@ pub fn handle_ipc_soft_reboot(
   _dispatch: &RuntimeDispatcher,
   _log: &LogHandle,
 ) -> Result<Message, CoreError> {
-  queue_lifecycle_action(msg, ctx, LifecycleAction::SoftReboot, "soft reboot scheduled")
+  queue_lifecycle_action(
+    msg,
+    ctx,
+    LifecycleAction::SoftReboot,
+    "soft reboot scheduled",
+  )
 }
 
 pub fn handle_ipc_shutdown(

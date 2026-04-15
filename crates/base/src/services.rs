@@ -1,12 +1,3 @@
-/*
- * TODO: Userspace Update
- * - spaces (user/system), give the uid/gid for services.
- * - starting active services in start_all
- * - start_all based on the space
- * - Fetch isolated user services from units/username
- * - add working_dir
- */
-
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use rind_ipc::Message;
@@ -114,6 +105,7 @@ pub enum ServiceState {
 
 pub struct ChildInstance {
   pub key: String,
+  pub user: Option<String>,
   pub child: Option<Child>,
   pub state: ServiceState,
   pub retry_count: u32,
@@ -122,9 +114,10 @@ pub struct ChildInstance {
 }
 
 impl ChildInstance {
-  pub fn new(key: String, child: Option<Child>) -> Self {
+  pub fn new(key: String, user: Option<String>, child: Option<Child>) -> Self {
     Self {
       key,
+      user,
       child,
       state: ServiceState::Active,
       retry_count: 0,
@@ -198,6 +191,19 @@ pub struct BranchingConfig {
   pub max_instances: Option<usize>,
 }
 
+fn default_username_field() -> String {
+  "username".to_string()
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ServiceUserSource {
+  pub state: String,
+  #[serde(rename = "username-field", default = "default_username_field")]
+  pub username_field: String,
+  #[serde(rename = "match-branch-key")]
+  pub match_branch_key: Option<String>,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServiceSpace {
@@ -213,7 +219,7 @@ pub enum ServiceSpace {
   meta_name = name,
   meta_fields(
     name, run, after, branching, restart, start_on, stop_on, on_start, on_stop,
-    transport, working_dir, space
+    transport, working_dir, space, user_source
   ),
   derive_metadata(Debug)
 )]
@@ -234,6 +240,8 @@ pub struct Service {
   pub working_dir: Option<String>,
   #[serde(default, rename = "space")]
   pub space: ServiceSpace,
+  #[serde(rename = "user-source")]
+  pub user_source: Option<ServiceUserSource>,
   pub transport: Option<TransportMethod>,
   pub branching: Option<BranchingConfig>,
   pub restart: Option<RestartPolicy>,
@@ -273,11 +281,148 @@ impl Default for ServiceRuntime {
 }
 
 impl ServiceRuntime {
+  fn payload_field_as_key(payload: &FlowPayload, field: &str) -> Option<String> {
+    payload.get_json_field(field).map(|v| {
+      if let Some(s) = v.as_str() {
+        s.to_string()
+      } else {
+        v.to_string()
+      }
+    })
+  }
+
+  fn branch_key_from_payload(payload: &FlowPayload, key_name: Option<&str>) -> Option<String> {
+    if let Some(key_name) = key_name {
+      return Self::payload_field_as_key(payload, key_name).filter(|v| !v.is_empty());
+    }
+    let value = payload.to_string_payload();
+    if value.is_empty() { None } else { Some(value) }
+  }
+
+  fn resolve_user_from_source(
+    &self,
+    source: &ServiceUserSource,
+    branch_ctx: Option<&ServiceBranchContext>,
+    sm_shared: Option<&StateMachineShared>,
+  ) -> anyhow::Result<Option<String>> {
+    let Some(sm_shared) = sm_shared else {
+      return Ok(None);
+    };
+    let sm = sm_shared
+      .read()
+      .map_err(|e| anyhow::anyhow!("failed to read state machine for user resolution: {e}"))?;
+    let Some(branches) = sm.states.get(&source.state) else {
+      return Ok(None);
+    };
+
+    if let Some(field) = &source.match_branch_key {
+      let Some(expected) = branch_ctx.and_then(|ctx| ctx.key.as_deref()) else {
+        return Ok(None);
+      };
+      let mut matches = HashSet::new();
+      for branch in branches {
+        let Some(found) = Self::payload_field_as_key(&branch.payload, field) else {
+          continue;
+        };
+        if found != expected {
+          continue;
+        }
+        if let Some(user) = Self::payload_field_as_key(&branch.payload, &source.username_field) {
+          matches.insert(user);
+        }
+      }
+      if matches.is_empty() {
+        return Ok(None);
+      }
+      if matches.len() > 1 {
+        return Err(anyhow::anyhow!(
+          "ambiguous users for state '{}' using match key '{}'",
+          source.state,
+          field
+        ));
+      }
+      return Ok(matches.into_iter().next());
+    }
+
+    if let Some(payload) = branch_ctx.and_then(|ctx| ctx.payload.as_ref())
+      && let Some(user) = Self::payload_field_as_key(payload, &source.username_field)
+    {
+      return Ok(Some(user));
+    }
+
+    let mut users = HashSet::new();
+    for branch in branches {
+      if let Some(user) = Self::payload_field_as_key(&branch.payload, &source.username_field) {
+        users.insert(user);
+      }
+    }
+    if users.is_empty() {
+      return Ok(None);
+    }
+    if users.len() > 1 {
+      return Err(anyhow::anyhow!(
+        "ambiguous users in state '{}' (set user-source.match-branch-key)",
+        source.state
+      ));
+    }
+    Ok(users.into_iter().next())
+  }
+
+  fn resolve_service_user(
+    &self,
+    service: &Service,
+    branch_ctx: Option<&ServiceBranchContext>,
+    sm_shared: Option<&StateMachineShared>,
+  ) -> anyhow::Result<Option<String>> {
+    if let Some(user) = branch_ctx.and_then(|ctx| ctx.forced_user.as_ref()) {
+      return Ok(Some(user.clone()));
+    }
+
+    match &service.metadata.space {
+      ServiceSpace::System => Ok(None),
+      ServiceSpace::UserSelective { user } => Ok(Some(user.clone())),
+      ServiceSpace::User => {
+        if let Some(source) = &service.metadata.user_source
+          && let Some(user) = self.resolve_user_from_source(source, branch_ctx, sm_shared)?
+        {
+          return Ok(Some(user));
+        }
+
+        if let Some(user) = branch_ctx.and_then(|ctx| ctx.key.as_ref()) {
+          return Ok(Some(user.clone()));
+        }
+
+        if let Some(sm_shared) = sm_shared
+          && let Ok(sm) = sm_shared.read()
+          && let Some(sessions) = sm.states.get("rind@user_session")
+        {
+          let mut users = HashSet::new();
+          for sess in sessions {
+            if let Some(user) = Self::payload_field_as_key(&sess.payload, "username") {
+              users.insert(user);
+            }
+          }
+          if users.len() == 1 {
+            return Ok(users.into_iter().next());
+          }
+          if users.len() > 1 {
+            return Err(anyhow::anyhow!(
+              "service '{}' is userspace but username is ambiguous; configure `user-source`",
+              service.metadata.name
+            ));
+          }
+        }
+
+        Ok(None)
+      }
+    }
+  }
+
   pub fn spawn_all(
     &self,
     service: &Service,
     log: &LogHandle,
-    branch_key: Option<&str>,
+    branch_ctx: Option<&ServiceBranchContext>,
     sm_shared: Option<&StateMachineShared>,
     variable_heap: Option<&VariableHeapShared>,
   ) -> anyhow::Result<Vec<ChildInstance>> {
@@ -288,7 +433,7 @@ impl ServiceRuntime {
       .map(|run| {
         let resolved = self.resolve_run_option(run, variable_heap);
         let run_ref = resolved.as_ref().unwrap_or(run);
-        self.spawn_process(service, run_ref, log, branch_key, sm_shared)
+        self.spawn_process(service, run_ref, log, branch_ctx, sm_shared)
       })
       .collect()
   }
@@ -365,11 +510,13 @@ impl ServiceRuntime {
     service: &Service,
     run: &RunOption,
     log: &LogHandle,
-    branch_key: Option<&str>,
+    branch_ctx: Option<&ServiceBranchContext>,
     sm_shared: Option<&StateMachineShared>,
   ) -> anyhow::Result<ChildInstance> {
     let mut args = run.args.clone();
     let mut envs = run.env.clone().unwrap_or_default();
+    let branch_key = branch_ctx.and_then(|ctx| ctx.key.as_deref());
+    let resolved_user = self.resolve_service_user(service, branch_ctx, sm_shared)?;
 
     if let Some(transport) = &service.metadata.transport {
       if let Some(sm_shared) = sm_shared {
@@ -458,42 +605,44 @@ impl ServiceRuntime {
           libc::setsid();
           Ok(())
         });
-      let user_info = match &service.metadata.space {
-        ServiceSpace::UserSelective { user } => rind_core::user::UserStore::load_system()
-          .ok()
-          .and_then(|store| {
-            store
-              .lookup_by_name(user)
-              .map(|u| (u.uid, u.gid, u.home.clone()))
-          }),
-        // TODO: this is dumb, i'll replace it with optional branch_key and/or other methods
-        // by connecting to UserLogin boot state
-        ServiceSpace::User => {
-          if let Some(user) = branch_key {
-            rind_core::user::UserStore::load_system()
-              .ok()
-              .and_then(|store| {
-                store
-                  .lookup_by_name(user)
-                  .map(|u| (u.uid, u.gid, u.home.clone()))
-              })
-          } else {
-            None
-          }
-        }
-        ServiceSpace::System => None,
+      let user_info = if let Some(username) = resolved_user.as_deref() {
+        let store = rind_core::user::UserStore::load_system()
+          .map_err(|e| anyhow::anyhow!("failed to load user store: {e}"))?;
+        let Some(user) = store.lookup_by_name(username) else {
+          return Err(anyhow::anyhow!(
+            "user '{}' not found for service '{}'",
+            username,
+            service.metadata.name
+          ));
+        };
+        Some((user.uid, user.gid, user.home.clone(), username.to_string()))
+      } else {
+        None
       };
 
-      if let Some((uid, gid, home)) = user_info {
+      if let Some(dir) = &service.metadata.working_dir {
+        cmd.current_dir(dir);
+      }
+
+      if matches!(service.metadata.space, ServiceSpace::User) && user_info.is_none() {
+        return Err(anyhow::anyhow!(
+          "failed to resolve userspace identity for '{}'",
+          service.metadata.name
+        ));
+      }
+
+      if let Some((uid, gid, home, username)) = user_info {
         cmd.uid(uid);
         cmd.gid(gid);
-        if let Some(user) = branch_key.or(match &service.metadata.space {
-          ServiceSpace::UserSelective { user } => Some(user),
-          _ => None,
-        }) {
-          envs.insert("HOME".to_string(), home);
-          envs.insert("USER".to_string(), user.to_string());
+
+        if let Some(dir) = &service.metadata.working_dir
+          && dir.starts_with("~")
+        {
+          cmd.current_dir(format!("{}{}", home, &dir[1..]));
         }
+
+        envs.insert("HOME".to_string(), home);
+        envs.insert("USER".to_string(), username);
       }
 
       if let Some(key) = branch_key {
@@ -532,6 +681,7 @@ impl ServiceRuntime {
 
     Ok(ChildInstance::new(
       branch_key.map(|x| x.to_string()).unwrap_or_default(),
+      resolved_user,
       Some(child),
     ))
   }
@@ -593,6 +743,7 @@ impl ServiceRuntime {
     log: &LogHandle,
     dispatch: &RuntimeDispatcher,
     key: Option<String>,
+    user: Option<String>,
   ) {
     for inst in service.instances.iter_mut() {
       if let Some(ref key) = key {
@@ -600,6 +751,13 @@ impl ServiceRuntime {
           continue;
         }
       };
+      if let Some(ref user) = user {
+        let matches_owner = inst.user.as_ref().map(|u| u == user).unwrap_or(false)
+          || (inst.user.is_none() && &inst.key == user);
+        if !matches_owner {
+          continue;
+        }
+      }
       if let Some(child) = inst.child.as_ref() {
         let pgid = Pid::from_raw(-(child.id() as i32));
         let signal = if mode == StopMode::ForceKill {
@@ -623,6 +781,9 @@ impl ServiceRuntime {
     fields.insert("mode".to_string(), format!("{mode:?}"));
     if let Some(ref key) = key {
       fields.insert("key".to_string(), format!("{key}"));
+    };
+    if let Some(ref user) = user {
+      fields.insert("user".to_string(), user.clone());
     };
     log.log(
       LogLevel::Info,
@@ -963,6 +1124,13 @@ pub struct EmitTrigger {
   pub action: FlowAction,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ServiceBranchContext {
+  pub key: Option<String>,
+  pub payload: Option<FlowPayload>,
+  pub forced_user: Option<String>,
+}
+
 impl Into<serde_json::Value> for EmitTrigger {
   fn into(self) -> serde_json::Value {
     serde_json::to_value(self).unwrap_or_default()
@@ -989,22 +1157,37 @@ pub fn handle_ipc_start(
     return Err(CoreError::PermissionDenied);
   };
 
-  if !{
-    uid == 0
-      || pm.user_has(uid, PERM_SYSTEM_SERVICES)
-      || pm
-        .users
-        .lookup_by_uid(uid)
-        .map(|u| payload.name.starts_with(&format!("{}/", u.username)))
-        .unwrap_or(false)
-  } {
+  let svc = ctx
+    .registry
+    .metadata
+    .find::<Service>("units", &payload.name);
+  let caller = pm.users.lookup_by_uid(uid);
+  let can_manage = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
+    true
+  } else if let (Some(caller), Some(svc)) = (caller, svc.as_ref()) {
+    match &svc.space {
+      ServiceSpace::User => true,
+      ServiceSpace::UserSelective { user } => user == &caller.username,
+      ServiceSpace::System => false,
+    }
+  } else {
+    false
+  };
+
+  if !can_manage {
     return Err(CoreError::PermissionDenied);
   }
+
+  let only_user = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
+    None
+  } else {
+    caller.map(|u| u.username.clone())
+  };
 
   let _ = dispatch.dispatch(
     "services",
     "start",
-    serde_json::json!({ "name": payload.name }).into(),
+    serde_json::json!({ "name": payload.name, "only_user": only_user }).into(),
   );
 
   Ok(Message::ok(format!("started {}", payload.name)))
@@ -1030,24 +1213,37 @@ pub fn handle_ipc_stop(
     return Err(CoreError::PermissionDenied);
   };
 
-  if !{
-    uid == 0
-      || pm.user_has(uid, PERM_SYSTEM_SERVICES)
-      || pm
-        .users
-        .lookup_by_uid(uid)
-        .map(|u| payload.name.starts_with(&format!("{}/", u.username)))
-        .unwrap_or(false)
-  } {
+  let svc = ctx
+    .registry
+    .metadata
+    .find::<Service>("units", &payload.name);
+  let caller = pm.users.lookup_by_uid(uid);
+  let can_manage = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
+    true
+  } else if let (Some(caller), Some(svc)) = (caller, svc.as_ref()) {
+    match &svc.space {
+      ServiceSpace::User => true,
+      ServiceSpace::UserSelective { user } => user == &caller.username,
+      ServiceSpace::System => false,
+    }
+  } else {
+    false
+  };
+
+  if !can_manage {
     return Err(CoreError::PermissionDenied);
   }
 
   let force = payload.force.unwrap_or(false);
+  let only_user = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
+    None
+  } else {
+    caller.map(|u| u.username.clone())
+  };
   let _ = dispatch.dispatch(
     "services",
     "stop",
-    serde_json::json!({ "name": payload.name, "mode": if force { "force" } else { "graceful" } })
-      .into(),
+    serde_json::json!({ "name": payload.name, "force": force, "only_user": only_user }).into(),
   );
 
   Ok(Message::ok(format!("stopped {}", payload.name)))
@@ -1169,10 +1365,8 @@ impl Runtime for ServiceRuntime {
                         && branching.enabled == true
                         && event.name == branching.source_state =>
                     {
-                      let key = event
-                        .payload
-                        .get_json_field(branching.key.as_ref().unwrap())
-                        .map(|x| x.to_string());
+                      let key =
+                        Self::branch_key_from_payload(&event.payload, branching.key.as_deref());
 
                       let to_stop: Vec<String> = service
                         .instances
@@ -1186,7 +1380,14 @@ impl Runtime for ServiceRuntime {
                         .collect();
 
                       for i in to_stop {
-                        self.stop_service(service, StopMode::Graceful, log, dispatch, Some(i));
+                        self.stop_service(
+                          service,
+                          StopMode::Graceful,
+                          log,
+                          dispatch,
+                          Some(i),
+                          None,
+                        );
                       }
                     }
                     _ => {}
@@ -1223,7 +1424,7 @@ impl Runtime for ServiceRuntime {
                   };
 
                   if (should_stop || auto_stop_on_revert) && is_running {
-                    self.stop_service(service, StopMode::Graceful, log, dispatch, None);
+                    self.stop_service(service, StopMode::Graceful, log, dispatch, None, None);
                   }
                 }
               }
@@ -1240,7 +1441,21 @@ impl Runtime for ServiceRuntime {
             })
             .unwrap_or(false);
 
-          if should_start && !is_running {
+          if !should_start {
+            continue;
+          }
+
+          if !service
+            .branching
+            .as_ref()
+            .map(|b| b.enabled)
+            .unwrap_or(false)
+            && is_running
+          {
+            continue;
+          }
+
+          {
             let ser =
               ctx
                 .registry
@@ -1258,18 +1473,11 @@ impl Runtime for ServiceRuntime {
 
                 let mut started = 0usize;
                 for branch in branches {
-                  let key = if let Some(key_name) = &branching.key {
-                    branch
-                      .payload
-                      .get_json_field(key_name)
-                      .map(|v| v.to_string())
-                      .unwrap_or_default()
-                  } else {
-                    branch.payload.to_string_payload()
-                  };
-                  if key.is_empty() {
+                  let Some(key) =
+                    Self::branch_key_from_payload(&branch.payload, branching.key.as_deref())
+                  else {
                     continue;
-                  }
+                  };
 
                   if ser.instances.iter().any(|i| i.key == key) {
                     continue;
@@ -1279,18 +1487,35 @@ impl Runtime for ServiceRuntime {
                       break;
                     }
                   }
-                  if let Ok(instances) =
-                    self.spawn_all(ser, log, Some(&key), sm_shared.as_ref(), vh.as_ref())
+                  let branch_ctx = ServiceBranchContext {
+                    key: Some(key.clone()),
+                    payload: Some(branch.payload.clone()),
+                    forced_user: None,
+                  };
+                  match self.spawn_all(ser, log, Some(&branch_ctx), sm_shared.as_ref(), vh.as_ref())
                   {
-                    ser.instances.extend(instances);
-                    self.register_stdio_transport(ser, dispatch);
-                    let _ = dispatch.dispatch(
-                      "transport",
-                      "register_stdio",
-                      serde_json::json!({ "endpoint": format!("{unit}@{}", ser.metadata.name) })
-                        .into(),
-                    );
-                    started += 1;
+                    Ok(instances) => {
+                      ser.instances.extend(instances);
+                      self.register_stdio_transport(ser, dispatch);
+                      let _ = dispatch.dispatch(
+                        "transport",
+                        "register_stdio",
+                        serde_json::json!({ "endpoint": format!("{unit}@{}", ser.metadata.name) })
+                          .into(),
+                      );
+                      started += 1;
+                    }
+                    Err(e) => {
+                      let mut fields = self.log_fields(ser, "start");
+                      fields.insert("branch".into(), key);
+                      fields.insert("error".into(), e.to_string());
+                      log.log(
+                        LogLevel::Error,
+                        "service-runtime",
+                        "failed to start branched service instance",
+                        fields,
+                      );
+                    }
                   }
                 }
                 continue;
@@ -1303,12 +1528,62 @@ impl Runtime for ServiceRuntime {
       }
       "start" => {
         let name = payload.get::<String>("name")?;
+        let only_user = payload.get::<String>("only_user").ok();
         let service = ctx
           .registry
           .instantiate_one::<Service>("units", &name, |x| Ok(Service::new(x)))?;
         let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
         let vh = ctx.scope.get::<VariableHeapShared>().cloned();
-        self.start_service(service, log, sm_shared.as_ref(), dispatch, vh.as_ref());
+        if let Some(user) = only_user {
+          let launch_ctx = ServiceBranchContext {
+            key: None,
+            payload: None,
+            forced_user: Some(user),
+          };
+
+          match self.spawn_all(
+            service,
+            log,
+            Some(&launch_ctx),
+            sm_shared.as_ref(),
+            vh.as_ref(),
+          ) {
+            Ok(instances) => {
+              service.instances.extend(instances);
+              self.register_stdio_transport(service, dispatch);
+              if let Some(inst) = service.instances.as_one_mut() {
+                inst.state = ServiceState::Active;
+                self.run_triggers(service.metadata.on_start.as_ref(), dispatch);
+              }
+              let _ = dispatch.dispatch(
+                "services",
+                "reconcile_stacks",
+                json!({
+                  "service": service.metadata.name,
+                  "id": service.id.0,
+                  "action": ServiceEventKind::Started
+                })
+                .into(),
+              );
+            }
+            Err(e) => {
+              let err = format!("Failed to start service \"{}\": {e}", service.metadata.name);
+              let mut fields = self.log_fields(service, "start");
+              fields.insert("error".into(), e.to_string());
+              log.log(
+                LogLevel::Error,
+                "service-runtime",
+                "failed to start service",
+                fields,
+              );
+              if let Some(inst) = service.instances.as_one_mut() {
+                inst.state = ServiceState::Error(err);
+              }
+            }
+          }
+        } else {
+          self.start_service(service, log, sm_shared.as_ref(), dispatch, vh.as_ref());
+        }
         if service
           .metadata
           .transport
@@ -1335,7 +1610,8 @@ impl Runtime for ServiceRuntime {
         let service = ctx
           .registry
           .instantiate_one::<Service>("units", &name, |x| Ok(Service::new(x)))?;
-        self.stop_service(service, mode, log, dispatch, None);
+        let only_user = payload.get::<String>("only_user").ok();
+        self.stop_service(service, mode, log, dispatch, None, only_user);
       }
       "stop_all" => {
         let force = payload.get::<bool>("force").unwrap_or(false);
@@ -1357,7 +1633,7 @@ impl Runtime for ServiceRuntime {
           if let Some(instances) = ctx.registry.instances.get_mut(&key) {
             for instance in instances.iter_mut() {
               if let Some(service) = instance.downcast_mut::<Service>() {
-                self.stop_service(service, mode, log, dispatch, None);
+                self.stop_service(service, mode, log, dispatch, None, None);
               }
             }
           }
@@ -1467,7 +1743,7 @@ impl Runtime for ServiceRuntime {
           | ServiceEventKind::Exited { code: _ } => {
             for (dependent, _) in dependents {
               if let Ok(service) = ctx.registry.as_one_mut::<Service>("units", &dependent) {
-                self.stop_service(service, StopMode::Graceful, log, dispatch, None);
+                self.stop_service(service, StopMode::Graceful, log, dispatch, None, None);
               }
             }
           }

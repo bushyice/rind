@@ -1,8 +1,3 @@
-/*
- * TODO: Userspace Update
- * - permissions.
- */
-
 use std::{
   collections::HashMap,
   fs::{self, File},

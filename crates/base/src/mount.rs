@@ -1,8 +1,3 @@
-/*
- * TODO: Userspace Update
- * - spaces (user/system), mount user-specific units from registry as units/username, unmount when logged out.
- */
-
 use std::{
   collections::{HashMap, HashSet},
   fs::File,

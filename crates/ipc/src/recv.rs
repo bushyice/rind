@@ -1,6 +1,4 @@
-use rind_core::prelude::{
-  CoreError, LogHandle, PermissionExpr, RuntimeContext, RuntimeDispatcher,
-};
+use rind_core::prelude::{CoreError, LogHandle, PermissionExpr, RuntimeContext, RuntimeDispatcher};
 
 use super::Message;
 use std::collections::HashMap;
@@ -85,8 +83,12 @@ pub fn start_ipc_server(handle_client: ClientHandler) -> std::io::Result<()> {
   Ok(())
 }
 
-pub type IpcHandler =
-  fn(Message, &mut RuntimeContext<'_>, &RuntimeDispatcher, &LogHandle) -> Result<Message, CoreError>;
+pub type IpcHandler = fn(
+  Message,
+  &mut RuntimeContext<'_>,
+  &RuntimeDispatcher,
+  &LogHandle,
+) -> Result<Message, CoreError>;
 
 #[derive(Clone)]
 pub struct IpcSource {
