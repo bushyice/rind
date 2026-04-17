@@ -153,6 +153,16 @@ pub struct InstanceRegistry<'a> {
   pub instances: &'a mut InstanceMap,
 }
 
+#[doc(hidden)]
+pub trait HandleTuple: Sized {
+  type Keys;
+  fn run<R>(
+    store: &mut InstanceRegistry,
+    keys: Self::Keys,
+    f: impl FnOnce(&mut InstanceRegistry, Self) -> Result<R, CoreError>,
+  ) -> Result<R, CoreError>;
+}
+
 impl<'a> InstanceRegistry<'a> {
   pub fn new(metadata: &'a MetadataRegistry, instances: &'a mut InstanceMap) -> Self {
     Self {
@@ -289,7 +299,126 @@ impl<'a> InstanceRegistry<'a> {
         .expect("instance type mismatch"),
     )
   }
+
+  pub fn singleton<T: 'static>(&self, key: &str) -> Option<&T> {
+    self.instances.get(key)?.first()?.downcast_ref::<T>()
+  }
+
+  pub fn singleton_mut<T: 'static>(&mut self, key: &str) -> Option<&mut T> {
+    self
+      .instances
+      .get_mut(key)?
+      .first_mut()?
+      .downcast_mut::<T>()
+  }
+
+  pub fn singleton_or_insert_with<T: 'static>(
+    &mut self,
+    key: impl Into<String>,
+    init: impl FnOnce() -> T,
+  ) -> &mut T {
+    let key = key.into();
+    let entry = self.instances.entry(key).or_default();
+    if entry.is_empty() {
+      entry.push(Box::new(init()));
+    }
+    entry
+      .first_mut()
+      .expect("singleton entry unexpectedly empty")
+      .downcast_mut::<T>()
+      .expect("singleton type mismatch")
+  }
+
+  #[allow(warnings)]
+  pub fn singleton_handle<T, R>(
+    &mut self,
+    keys: T::Keys,
+    f: impl FnOnce(&mut InstanceRegistry, T) -> Result<R, CoreError>,
+  ) -> Result<R, CoreError>
+  where
+    T: HandleTuple,
+  {
+    T::run(self, keys, f)
+  }
 }
+
+macro_rules! impl_handle_tuple {
+  (@string $T:ident) => { String };
+  ($($T:ident),+) => {
+    impl_handle_tuple!($($T : $T),+);
+  };
+  ($($T:ident : $k:ident),+) => {
+    impl<$($T: 'static),+> HandleTuple for ($(&mut $T,)+) {
+      type Keys = ($(impl_handle_tuple!(@string $T),)+);
+
+      fn run<R>(
+        store: &mut InstanceRegistry,
+        keys: Self::Keys,
+        f: impl FnOnce(&mut InstanceRegistry, Self) -> Result<R, CoreError>,
+      ) -> Result<R, CoreError> {
+        #[allow(non_snake_case)]
+        let ($($k,)+) = keys;
+
+        {
+          let keys_slice = [$( &$k ),+];
+          for i in 0..keys_slice.len() {
+            for j in i + 1..keys_slice.len() {
+              if keys_slice[i] == keys_slice[j] {
+                return Err(CoreError::DoubleKey);
+              }
+            }
+          }
+        }
+
+        $(
+          #[allow(non_snake_case)]
+          let mut $k = {
+            let val = store.instances
+              .remove(&$k)
+              .ok_or(CoreError::MissingField { path: $k.clone() })?;
+            ($k, val)
+          };
+        )+
+
+        let result = {
+          let tuple = (
+            $(
+              {
+                let val = $k.1
+                  .first_mut()
+                  .ok_or(CoreError::MissingField { path: $k.0.clone() })?;
+
+                let downcasted = val
+                  .downcast_mut::<$T>()
+                  .ok_or(CoreError::TypeMismatch {
+                    path: $k.0.clone(),
+                    expected: stringify!($T).into(),
+                  })?;
+
+                unsafe { &mut *(downcasted as *mut $T) }
+              },
+            )+
+          );
+
+          f(store, tuple)
+        };
+
+        $(
+          store.instances.insert($k.0, $k.1);
+        )+
+
+        result
+      }
+    }
+  };
+}
+
+impl_handle_tuple!(A);
+impl_handle_tuple!(A, B);
+impl_handle_tuple!(A, B, C);
+impl_handle_tuple!(A, B, C, D);
+impl_handle_tuple!(A, B, C, D, E);
+impl_handle_tuple!(A, B, C, D, E, F);
 
 #[cfg(test)]
 mod tests {

@@ -234,7 +234,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let mut boot = BootEngine::default();
 
   let mut units = UnitsOrchestrator::new(units_dir);
-  let lifecycle = units.lifecycle_queue();
 
   let mut metadata = MetadataRegistry::default();
   let mut instances = InstanceMap::default();
@@ -259,8 +258,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .run(&mut metadata, &mut instances, &runtime)
     .map_err(|e| format!("boot failed: {e}"))?;
 
+  let context_id = boot
+    .primary_context_id()
+    .ok_or_else(|| "missing runtime context id after boot".to_string())?;
+
   loop {
-    while let Some(action) = lifecycle.next() {
+    while let Some(action) = runtime.next_lifecycle_action(context_id) {
       if !process_lifecycle_action(action, &mut boot, &mut metadata, &mut instances, &runtime) {
         return Ok(());
       }

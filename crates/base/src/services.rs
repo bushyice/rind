@@ -17,10 +17,10 @@ use std::time::Instant;
 
 use rind_core::prelude::*;
 
-use crate::flow::{FlowInstance, FlowItem, FlowPayload, FlowType, StateMachineShared, Trigger};
+use crate::flow::{FlowInstance, FlowItem, FlowPayload, FlowType, StateMachine, Trigger};
 use crate::permissions::PERM_SYSTEM_SERVICES;
 use crate::transport::{TransportMessage, TransportMethod, start_stdout_listener};
-use crate::variables::VariableHeapShared;
+use crate::variables::VariableHeap;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RunOption {
@@ -303,14 +303,11 @@ impl ServiceRuntime {
     &self,
     source: &ServiceUserSource,
     branch_ctx: Option<&ServiceBranchContext>,
-    sm_shared: Option<&StateMachineShared>,
+    sm: Option<&StateMachine>,
   ) -> anyhow::Result<Option<String>> {
-    let Some(sm_shared) = sm_shared else {
+    let Some(sm) = sm else {
       return Ok(None);
     };
-    let sm = sm_shared
-      .read()
-      .map_err(|e| anyhow::anyhow!("failed to read state machine for user resolution: {e}"))?;
     let Some(branches) = sm.states.get(&source.state) else {
       return Ok(None);
     };
@@ -372,7 +369,7 @@ impl ServiceRuntime {
     &self,
     service: &Service,
     branch_ctx: Option<&ServiceBranchContext>,
-    sm_shared: Option<&StateMachineShared>,
+    sm: Option<&StateMachine>,
   ) -> anyhow::Result<Option<String>> {
     if let Some(user) = branch_ctx.and_then(|ctx| ctx.forced_user.as_ref()) {
       return Ok(Some(user.clone()));
@@ -383,7 +380,7 @@ impl ServiceRuntime {
       ServiceSpace::UserSelective { user } => Ok(Some(user.clone())),
       ServiceSpace::User => {
         if let Some(source) = &service.metadata.user_source
-          && let Some(user) = self.resolve_user_from_source(source, branch_ctx, sm_shared)?
+          && let Some(user) = self.resolve_user_from_source(source, branch_ctx, sm)?
         {
           return Ok(Some(user));
         }
@@ -392,8 +389,7 @@ impl ServiceRuntime {
           return Ok(Some(user.clone()));
         }
 
-        if let Some(sm_shared) = sm_shared
-          && let Ok(sm) = sm_shared.read()
+        if let Some(sm) = sm
           && let Some(sessions) = sm.states.get("rind@user_session")
         {
           let mut users = HashSet::new();
@@ -423,8 +419,8 @@ impl ServiceRuntime {
     service: &Service,
     log: &LogHandle,
     branch_ctx: Option<&ServiceBranchContext>,
-    sm_shared: Option<&StateMachineShared>,
-    variable_heap: Option<&VariableHeapShared>,
+    sm: Option<&StateMachine>,
+    variable_heap: Option<&VariableHeap>,
   ) -> anyhow::Result<Vec<ChildInstance>> {
     service
       .metadata
@@ -433,7 +429,7 @@ impl ServiceRuntime {
       .map(|run| {
         let resolved = self.resolve_run_option(run, variable_heap);
         let run_ref = resolved.as_ref().unwrap_or(run);
-        self.spawn_process(service, run_ref, log, branch_ctx, sm_shared)
+        self.spawn_process(service, run_ref, log, branch_ctx, sm)
       })
       .collect()
   }
@@ -441,11 +437,10 @@ impl ServiceRuntime {
   fn resolve_run_option(
     &self,
     run: &RunOption,
-    variable_heap: Option<&VariableHeapShared>,
+    variable_heap: Option<&VariableHeap>,
   ) -> Option<RunOption> {
     let var_ref = run.variable.as_deref()?;
-    let heap_shared = variable_heap?;
-    let heap = heap_shared.read().ok()?;
+    let heap = variable_heap?;
 
     let value = heap.get(var_ref)?;
 
@@ -483,8 +478,8 @@ impl ServiceRuntime {
     &self,
     service: &mut Service,
     log: &LogHandle,
-    sm_shared: Option<&StateMachineShared>,
-    variable_heap: Option<&VariableHeapShared>,
+    sm: Option<&StateMachine>,
+    variable_heap: Option<&VariableHeap>,
   ) -> anyhow::Result<()> {
     log.log(
       LogLevel::Info,
@@ -493,7 +488,7 @@ impl ServiceRuntime {
       self.log_fields(service, "start"),
     );
 
-    let instances = self.spawn_all(service, log, None, sm_shared, variable_heap)?;
+    let instances = self.spawn_all(service, log, None, sm, variable_heap)?;
     service.instances.extend(instances);
     Ok(())
   }
@@ -511,85 +506,83 @@ impl ServiceRuntime {
     run: &RunOption,
     log: &LogHandle,
     branch_ctx: Option<&ServiceBranchContext>,
-    sm_shared: Option<&StateMachineShared>,
+    sm: Option<&StateMachine>,
   ) -> anyhow::Result<ChildInstance> {
     let mut args = run.args.clone();
     let mut envs = run.env.clone().unwrap_or_default();
     let branch_key = branch_ctx.and_then(|ctx| ctx.key.as_deref());
-    let resolved_user = self.resolve_service_user(service, branch_ctx, sm_shared)?;
+    let resolved_user = self.resolve_service_user(service, branch_ctx, sm)?;
 
     if let Some(transport) = &service.metadata.transport {
-      if let Some(sm_shared) = sm_shared {
-        if let Ok(sm) = sm_shared.read() {
-          let resolve_state = |spec: &str| -> Option<String> {
-            let (state_name, path) = spec
-              .split_once('/')
-              .map(|(name, p)| (name, Some(p)))
-              .unwrap_or((spec, None));
-            let payload = sm
-              .states
-              .get(state_name)
-              .and_then(|v| v.first())
-              .map(|x| x.payload.clone())?;
-            let Some(path) = path else {
-              return Some(payload.to_string_payload());
-            };
-
-            match payload {
-              FlowPayload::Json(json) => {
-                let mut cur = json.into_json();
-                for key in path.split('.') {
-                  cur = cur.get(key)?.clone();
-                }
-                if let Some(s) = cur.as_str() {
-                  Some(s.to_string())
-                } else {
-                  Some(cur.to_string())
-                }
-              }
-              FlowPayload::String(s) => Some(s),
-              FlowPayload::Bytes(b) => Some(String::from_utf8(b).unwrap_or_default()),
-              FlowPayload::None(_) => Some(String::new()),
-            }
+      if let Some(sm) = sm {
+        let resolve_state = |spec: &str| -> Option<String> {
+          let (state_name, path) = spec
+            .split_once('/')
+            .map(|(name, p)| (name, Some(p)))
+            .unwrap_or((spec, None));
+          let payload = sm
+            .states
+            .get(state_name)
+            .and_then(|v| v.first())
+            .map(|x| x.payload.clone())?;
+          let Some(path) = path else {
+            return Some(payload.to_string_payload());
           };
 
-          match transport {
-            crate::transport::TransportMethod::Options {
-              id,
-              options,
-              permissions: _,
-            } if id.0 == "env" => {
-              for option in options {
-                let Some((key, value)) = option.split_once('=') else {
-                  continue;
-                };
-                if let Some(state_name) = value.strip_prefix("state:") {
-                  if let Some(val) = resolve_state(state_name) {
-                    envs.insert(key.to_string(), val);
-                  }
-                } else {
-                  envs.insert(key.to_string(), value.to_string());
-                }
+          match payload {
+            FlowPayload::Json(json) => {
+              let mut cur = json.into_json();
+              for key in path.split('.') {
+                cur = cur.get(key)?.clone();
+              }
+              if let Some(s) = cur.as_str() {
+                Some(s.to_string())
+              } else {
+                Some(cur.to_string())
               }
             }
-            crate::transport::TransportMethod::Options {
-              id,
-              options,
-              permissions: _,
-            } if id.0 == "args" => {
-              for option in options {
-                if let Some(state_name) = option.strip_prefix("state:") {
-                  let payload = resolve_state(state_name).unwrap_or_default();
-                  if !payload.is_empty() {
-                    args.push(payload);
-                  }
-                } else {
-                  args.push(option.clone());
-                }
-              }
-            }
-            _ => {}
+            FlowPayload::String(s) => Some(s),
+            FlowPayload::Bytes(b) => Some(String::from_utf8(b).unwrap_or_default()),
+            FlowPayload::None(_) => Some(String::new()),
           }
+        };
+
+        match transport {
+          crate::transport::TransportMethod::Options {
+            id,
+            options,
+            permissions: _,
+          } if id.0 == "env" => {
+            for option in options {
+              let Some((key, value)) = option.split_once('=') else {
+                continue;
+              };
+              if let Some(state_name) = value.strip_prefix("state:") {
+                if let Some(val) = resolve_state(state_name) {
+                  envs.insert(key.to_string(), val);
+                }
+              } else {
+                envs.insert(key.to_string(), value.to_string());
+              }
+            }
+          }
+          crate::transport::TransportMethod::Options {
+            id,
+            options,
+            permissions: _,
+          } if id.0 == "args" => {
+            for option in options {
+              if let Some(state_name) = option.strip_prefix("state:") {
+                let payload = resolve_state(state_name).unwrap_or_default();
+                if !payload.is_empty() {
+                  args.push(payload);
+                }
+              } else {
+                args.push(option.clone());
+              }
+            }
+          }
+          _ => {}
         }
       }
     }
@@ -690,9 +683,9 @@ impl ServiceRuntime {
     &self,
     service: &mut Service,
     log: &LogHandle,
-    sm_shared: Option<&StateMachineShared>,
+    sm: Option<&StateMachine>,
     dispatch: &RuntimeDispatcher,
-    variable_heap: Option<&VariableHeapShared>,
+    variable_heap: Option<&VariableHeap>,
   ) {
     if let Some(inst) = service.instances.as_one() {
       if inst.state == ServiceState::Active || inst.state == ServiceState::Starting {
@@ -700,7 +693,7 @@ impl ServiceRuntime {
       }
     }
 
-    match self.spawn_service(service, log, sm_shared, variable_heap) {
+    match self.spawn_service(service, log, sm, variable_heap) {
       Ok(_) => {
         self.register_stdio_transport(service, dispatch);
         if let Some(inst) = service.instances.as_one_mut() {
@@ -1053,7 +1046,7 @@ fn start_service_stream_logs(service_name: String, child: &mut Child, log: LogHa
     let log = log.clone();
     std::thread::spawn(move || {
       let reader = BufReader::new(stdout);
-      for line in reader.lines().map_while(Result::ok) {
+      for line in reader.lines().map_while(std::result::Result::ok) {
         if line.trim().is_empty() {
           continue;
         }
@@ -1068,7 +1061,7 @@ fn start_service_stream_logs(service_name: String, child: &mut Child, log: LogHa
   if let Some(stderr) = child.stderr.take() {
     std::thread::spawn(move || {
       let reader = BufReader::new(stderr);
-      for line in reader.lines().map_while(Result::ok) {
+      for line in reader.lines().map_while(std::result::Result::ok) {
         if line.trim().is_empty() {
           continue;
         }
@@ -1144,8 +1137,8 @@ pub fn handle_ipc_start(
   _log: &LogHandle,
 ) -> Result<Message, CoreError> {
   let pm = ctx
-    .scope
-    .get::<PermissionStore>()
+    .registry
+    .singleton::<PermissionStore>(PermissionStore::KEY)
     .cloned()
     .unwrap_or_default();
 
@@ -1200,8 +1193,8 @@ pub fn handle_ipc_stop(
   _log: &LogHandle,
 ) -> Result<Message, CoreError> {
   let pm = ctx
-    .scope
-    .get::<PermissionStore>()
+    .registry
+    .singleton::<PermissionStore>(PermissionStore::KEY)
     .cloned()
     .unwrap_or_default();
 
@@ -1260,9 +1253,7 @@ impl Runtime for ServiceRuntime {
   ) -> Result<Option<serde_json::Value>, CoreError> {
     match action {
       "watch_events" => {
-        if let Some(event_bus) = ctx.scope.get::<EventBus>() {
-          self.event_rx = Some(event_bus.subscribe::<rind_core::prelude::FlowEvent>());
-        }
+        self.event_rx = Some(ctx.event_bus.subscribe::<rind_core::prelude::FlowEvent>());
       }
       "send_stdio" => {
         let endpoint = payload.get::<String>("endpoint")?;
@@ -1315,288 +1306,286 @@ impl Runtime for ServiceRuntime {
         let emit_trig = payload.r#as::<EmitTrigger>().unwrap_or_default();
 
         // println!("{:?} {:?}", emit_trig.state, emit_trig.action);
-
-        let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
-        let vh = ctx.scope.get::<VariableHeapShared>().cloned();
-        let Some(sm_lock) = &sm_shared else {
-          return Ok(None);
-        };
-        let Ok(sm) = sm_lock.read() else {
-          return Ok(None);
-        };
-        let emit_event = match (
-          emit_trig.state.as_ref(),
-          emit_trig.flow_type,
-          emit_trig.payload.as_ref(),
-        ) {
-          (Some(name), Some(flow_type), Some(payload)) => Some(FlowInstance {
-            name: name.clone(),
-            payload: payload.clone(),
-            r#type: flow_type,
-          }),
-          _ => None,
-        };
-
-        let services = ctx
+        ctx
           .registry
-          .metadata
-          .items::<Service>("units")
-          .unwrap_or(Vec::new());
+          .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
+            (StateMachine::KEY.to_string(), VariableHeap::KEY.to_string()),
+            |registry, (sm, vh)| {
+              let emit_event = match (
+                emit_trig.state.as_ref(),
+                emit_trig.flow_type,
+                emit_trig.payload.as_ref(),
+              ) {
+                (Some(name), Some(flow_type), Some(payload)) => Some(FlowInstance {
+                  name: name.clone(),
+                  payload: payload.clone(),
+                  r#type: flow_type,
+                }),
+                _ => None,
+              };
 
-        for (unit, service) in services {
-          let mut is_running = false;
+              let services = registry
+                .metadata
+                .items::<Service>("units")
+                .unwrap_or(Vec::new());
 
-          if let Some(instances) = ctx
-            .registry
-            .instances
-            .get_mut(&format!("units@{}@{}", unit, service.name))
-          {
-            for instance in instances.iter_mut() {
-              if let Some(service) = instance.downcast_mut::<Service>() {
-                is_running = service
+              for (unit, service) in services {
+                let mut is_running = false;
+
+                if let Some(instances) = registry
                   .instances
-                  .iter()
-                  .any(|i| i.state == ServiceState::Active || i.state == ServiceState::Starting);
+                  .get_mut(&format!("units@{}@{}", unit, service.name))
+                {
+                  for instance in instances.iter_mut() {
+                    if let Some(service) = instance.downcast_mut::<Service>() {
+                      is_running = service.instances.iter().any(|i| {
+                        i.state == ServiceState::Active || i.state == ServiceState::Starting
+                      });
 
-                if let Some(ref branching) = service.metadata.branching {
-                  match (emit_trig.action, emit_event.as_ref(), is_running) {
-                    (FlowAction::Revert, Some(event), true)
-                      if branching.key.is_some()
-                        && branching.enabled == true
-                        && event.name == branching.source_state =>
-                    {
-                      let key =
-                        Self::branch_key_from_payload(&event.payload, branching.key.as_deref());
+                      if let Some(ref branching) = service.metadata.branching {
+                        match (emit_trig.action, emit_event.as_ref(), is_running) {
+                          (FlowAction::Revert, Some(event), true)
+                            if branching.key.is_some()
+                              && branching.enabled == true
+                              && event.name == branching.source_state =>
+                          {
+                            let key = Self::branch_key_from_payload(
+                              &event.payload,
+                              branching.key.as_deref(),
+                            );
 
-                      let to_stop: Vec<String> = service
-                        .instances
-                        .iter()
-                        .filter_map(|inst| {
-                          if inst.state == ServiceState::Active && key.as_ref() == Some(&inst.key) {
-                            return Some(inst.key.clone());
+                            let to_stop: Vec<String> = service
+                              .instances
+                              .iter()
+                              .filter_map(|inst| {
+                                if inst.state == ServiceState::Active
+                                  && key.as_ref() == Some(&inst.key)
+                                {
+                                  return Some(inst.key.clone());
+                                }
+                                None
+                              })
+                              .collect();
+
+                            for i in to_stop {
+                              self.stop_service(
+                                service,
+                                StopMode::Graceful,
+                                log,
+                                dispatch,
+                                Some(i),
+                                None,
+                              );
+                            }
                           }
-                          None
-                        })
-                        .collect();
+                          _ => {}
+                        }
+                      } else {
+                        let should_stop = service
+                          .metadata
+                          .stop_on
+                          .as_ref()
+                          .map(|conds| {
+                            conds.iter().any(|cond| {
+                              crate::flow::condition_matches(sm, cond, emit_event.as_ref(), None)
+                            })
+                          })
+                          .unwrap_or(false);
 
-                      for i in to_stop {
-                        self.stop_service(
-                          service,
-                          StopMode::Graceful,
-                          log,
-                          dispatch,
-                          Some(i),
-                          None,
-                        );
+                        // TODO: Should it ignore stop_on?
+                        let auto_stop_on_revert = if service.metadata.stop_on.is_none() {
+                          match (
+                            emit_trig.action,
+                            emit_event.as_ref(),
+                            service.metadata.start_on.as_ref(),
+                          ) {
+                            (FlowAction::Revert, Some(event), Some(start_conds)) => {
+                              start_conds.iter().any(|cond| {
+                                crate::triggers::check_condition(cond, event)
+                                  && !crate::flow::condition_is_active(
+                                    sm,
+                                    cond,
+                                    Some(&event.payload),
+                                  )
+                              })
+                            }
+                            _ => false,
+                          }
+                        } else {
+                          false
+                        };
+
+                        if (should_stop || auto_stop_on_revert) && is_running {
+                          self.stop_service(service, StopMode::Graceful, log, dispatch, None, None);
+                        }
                       }
                     }
-                    _ => {}
                   }
-                } else {
-                  let should_stop = service
-                    .metadata
-                    .stop_on
-                    .as_ref()
-                    .map(|conds| {
-                      conds.iter().any(|cond| {
-                        crate::flow::condition_matches(&sm, cond, emit_event.as_ref(), None)
-                      })
+                }
+
+                let should_start = service
+                  .start_on
+                  .as_ref()
+                  .map(|conds| {
+                    conds.iter().all(|cond| {
+                      crate::flow::condition_matches(sm, cond, emit_event.as_ref(), None)
                     })
-                    .unwrap_or(false);
+                  })
+                  .unwrap_or(false);
 
-                  // TODO: Should it ignore stop_on?
-                  let auto_stop_on_revert = if service.metadata.stop_on.is_none() {
-                    match (
-                      emit_trig.action,
-                      emit_event.as_ref(),
-                      service.metadata.start_on.as_ref(),
-                    ) {
-                      (FlowAction::Revert, Some(event), Some(start_conds)) => {
-                        start_conds.iter().any(|cond| {
-                          crate::triggers::check_condition(cond, event)
-                            && !crate::flow::condition_is_active(&sm, cond, Some(&event.payload))
-                        })
+                if !should_start {
+                  continue;
+                }
+
+                if !service
+                  .branching
+                  .as_ref()
+                  .map(|b| b.enabled)
+                  .unwrap_or(false)
+                  && is_running
+                {
+                  continue;
+                }
+
+                let ser =
+                  registry.instantiate_one("units", &format!("{unit}@{}", service.name), |x| {
+                    Ok(Service::new(x))
+                  })?;
+
+                if let Some(branching) = &ser.metadata.branching {
+                  if branching.enabled {
+                    let branches = sm
+                      .states
+                      .get(&branching.source_state)
+                      .cloned()
+                      .unwrap_or_default();
+
+                    let mut started = 0usize;
+                    for branch in branches {
+                      let Some(key) =
+                        Self::branch_key_from_payload(&branch.payload, branching.key.as_deref())
+                      else {
+                        continue;
+                      };
+
+                      if ser.instances.iter().any(|i| i.key == key) {
+                        continue;
                       }
-                      _ => false,
+                      if let Some(max) = branching.max_instances {
+                        if ser.instances.len() >= max || started >= max {
+                          break;
+                        }
+                      }
+                      let branch_ctx = ServiceBranchContext {
+                        key: Some(key.clone()),
+                        payload: Some(branch.payload.clone()),
+                        forced_user: None,
+                      };
+                      match self.spawn_all(ser, log, Some(&branch_ctx), Some(sm), Some(vh)) {
+                        Ok(instances) => {
+                          ser.instances.extend(instances);
+                          self.register_stdio_transport(ser, dispatch);
+                          let _ = dispatch.dispatch(
+                          "transport",
+                          "register_stdio",
+                          serde_json::json!({ "endpoint": format!("{unit}@{}", ser.metadata.name) })
+                            .into(),
+                        );
+                          started += 1;
+                        }
+                        Err(e) => {
+                          let mut fields = self.log_fields(ser, "start");
+                          fields.insert("branch".into(), key);
+                          fields.insert("error".into(), e.to_string());
+                          log.log(
+                            LogLevel::Error,
+                            "service-runtime",
+                            "failed to start branched service instance",
+                            fields,
+                          );
+                        }
+                      }
                     }
-                  } else {
-                    false
-                  };
-
-                  if (should_stop || auto_stop_on_revert) && is_running {
-                    self.stop_service(service, StopMode::Graceful, log, dispatch, None, None);
-                  }
-                }
-              }
-            }
-          }
-
-          let should_start = service
-            .start_on
-            .as_ref()
-            .map(|conds| {
-              conds
-                .iter()
-                .all(|cond| crate::flow::condition_matches(&sm, cond, emit_event.as_ref(), None))
-            })
-            .unwrap_or(false);
-
-          if !should_start {
-            continue;
-          }
-
-          if !service
-            .branching
-            .as_ref()
-            .map(|b| b.enabled)
-            .unwrap_or(false)
-            && is_running
-          {
-            continue;
-          }
-
-          {
-            let ser =
-              ctx
-                .registry
-                .instantiate_one("units", &format!("{unit}@{}", service.name), |x| {
-                  Ok(Service::new(x))
-                })?;
-
-            if let Some(branching) = &ser.metadata.branching {
-              if branching.enabled {
-                let branches = sm
-                  .states
-                  .get(&branching.source_state)
-                  .cloned()
-                  .unwrap_or_default();
-
-                let mut started = 0usize;
-                for branch in branches {
-                  let Some(key) =
-                    Self::branch_key_from_payload(&branch.payload, branching.key.as_deref())
-                  else {
-                    continue;
-                  };
-
-                  if ser.instances.iter().any(|i| i.key == key) {
                     continue;
                   }
-                  if let Some(max) = branching.max_instances {
-                    if ser.instances.len() >= max || started >= max {
-                      break;
-                    }
-                  }
-                  let branch_ctx = ServiceBranchContext {
-                    key: Some(key.clone()),
-                    payload: Some(branch.payload.clone()),
-                    forced_user: None,
-                  };
-                  match self.spawn_all(ser, log, Some(&branch_ctx), sm_shared.as_ref(), vh.as_ref())
-                  {
-                    Ok(instances) => {
-                      ser.instances.extend(instances);
-                      self.register_stdio_transport(ser, dispatch);
-                      let _ = dispatch.dispatch(
-                        "transport",
-                        "register_stdio",
-                        serde_json::json!({ "endpoint": format!("{unit}@{}", ser.metadata.name) })
-                          .into(),
-                      );
-                      started += 1;
-                    }
-                    Err(e) => {
-                      let mut fields = self.log_fields(ser, "start");
-                      fields.insert("branch".into(), key);
-                      fields.insert("error".into(), e.to_string());
-                      log.log(
-                        LogLevel::Error,
-                        "service-runtime",
-                        "failed to start branched service instance",
-                        fields,
-                      );
-                    }
-                  }
                 }
-                continue;
-              }
-            }
 
-            self.start_service(ser, log, sm_shared.as_ref(), dispatch, vh.as_ref());
-          }
-        }
+                self.start_service(ser, log, Some(sm), dispatch, Some(vh));
+              }
+              Ok(())
+            },
+          )?;
       }
       "start" => {
         let name = payload.get::<String>("name")?;
         let only_user = payload.get::<String>("only_user").ok();
-        let service = ctx
+        ctx
           .registry
-          .instantiate_one::<Service>("units", &name, |x| Ok(Service::new(x)))?;
-        let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
-        let vh = ctx.scope.get::<VariableHeapShared>().cloned();
-        if let Some(user) = only_user {
-          let launch_ctx = ServiceBranchContext {
-            key: None,
-            payload: None,
-            forced_user: Some(user),
-          };
+          .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
+            (StateMachine::KEY.to_string(), VariableHeap::KEY.to_string()),
+            |registry, (sm, vh)| {
+              let service =
+                registry.instantiate_one::<Service>("units", &name, |x| Ok(Service::new(x)))?;
+              if let Some(user) = only_user.clone() {
+                let launch_ctx = ServiceBranchContext {
+                  key: None,
+                  payload: None,
+                  forced_user: Some(user),
+                };
 
-          match self.spawn_all(
-            service,
-            log,
-            Some(&launch_ctx),
-            sm_shared.as_ref(),
-            vh.as_ref(),
-          ) {
-            Ok(instances) => {
-              service.instances.extend(instances);
-              self.register_stdio_transport(service, dispatch);
-              if let Some(inst) = service.instances.as_one_mut() {
-                inst.state = ServiceState::Active;
-                self.run_triggers(service.metadata.on_start.as_ref(), dispatch);
+                match self.spawn_all(service, log, Some(&launch_ctx), Some(sm), Some(vh)) {
+                  Ok(instances) => {
+                    service.instances.extend(instances);
+                    self.register_stdio_transport(service, dispatch);
+                    if let Some(inst) = service.instances.as_one_mut() {
+                      inst.state = ServiceState::Active;
+                      self.run_triggers(service.metadata.on_start.as_ref(), dispatch);
+                    }
+                    let _ = dispatch.dispatch(
+                      "services",
+                      "reconcile_stacks",
+                      json!({
+                        "service": service.metadata.name,
+                        "id": service.id.0,
+                        "action": ServiceEventKind::Started
+                      })
+                      .into(),
+                    );
+                  }
+                  Err(e) => {
+                    let err = format!("Failed to start service \"{}\": {e}", service.metadata.name);
+                    let mut fields = self.log_fields(service, "start");
+                    fields.insert("error".into(), e.to_string());
+                    log.log(
+                      LogLevel::Error,
+                      "service-runtime",
+                      "failed to start service",
+                      fields,
+                    );
+                    if let Some(inst) = service.instances.as_one_mut() {
+                      inst.state = ServiceState::Error(err);
+                    }
+                  }
+                }
+              } else {
+                self.start_service(service, log, Some(sm), dispatch, Some(vh));
               }
-              let _ = dispatch.dispatch(
-                "services",
-                "reconcile_stacks",
-                json!({
-                  "service": service.metadata.name,
-                  "id": service.id.0,
-                  "action": ServiceEventKind::Started
-                })
-                .into(),
-              );
-            }
-            Err(e) => {
-              let err = format!("Failed to start service \"{}\": {e}", service.metadata.name);
-              let mut fields = self.log_fields(service, "start");
-              fields.insert("error".into(), e.to_string());
-              log.log(
-                LogLevel::Error,
-                "service-runtime",
-                "failed to start service",
-                fields,
-              );
-              if let Some(inst) = service.instances.as_one_mut() {
-                inst.state = ServiceState::Error(err);
+              if service
+                .metadata
+                .transport
+                .as_ref()
+                .map(is_stdio_transport)
+                .unwrap_or(false)
+              {
+                let _ = dispatch.dispatch(
+                  "transport",
+                  "register_stdio",
+                  serde_json::json!({ "endpoint": name }).into(),
+                );
               }
-            }
-          }
-        } else {
-          self.start_service(service, log, sm_shared.as_ref(), dispatch, vh.as_ref());
-        }
-        if service
-          .metadata
-          .transport
-          .as_ref()
-          .map(is_stdio_transport)
-          .unwrap_or(false)
-        {
-          let _ = dispatch.dispatch(
-            "transport",
-            "register_stdio",
-            serde_json::json!({ "endpoint": name }).into(),
-          );
-        }
+              Ok(())
+            },
+          )?;
       }
       "stop" => {
         let name = payload.get::<String>("name")?;
@@ -1657,43 +1646,45 @@ impl Runtime for ServiceRuntime {
 
         let mut started: HashSet<String> = HashSet::new();
         let mut pending: Vec<(String, Vec<String>, Arc<ServiceMetadata>)> = Vec::new();
-
-        let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
-        let vh = ctx.scope.get::<VariableHeapShared>().cloned();
-
-        for (full_name, svc_meta) in &all_services {
-          if let Some(afters) = &svc_meta.after {
-            pending.push((full_name.clone(), afters.clone(), svc_meta.clone()));
-          } else {
-            let service = ctx
-              .registry
-              .instantiate_one::<Service>("units", &full_name, |x| Ok(Service::new(x)))?;
-            self.start_service(service, log, sm_shared.as_ref(), dispatch, vh.as_ref());
-            started.insert(full_name.clone());
-          }
-        }
-
-        loop {
-          let mut progress = false;
-          pending.retain(|(name, afters, _meta)| {
-            if afters.iter().all(|a| started.contains(a)) {
-              if let Ok(service) = ctx
-                .registry
-                .instantiate_one::<Service>("units", name, |x| Ok(Service::new(x)))
-              {
-                self.start_service(service, log, sm_shared.as_ref(), dispatch, vh.as_ref());
-                started.insert(name.clone());
-                progress = true;
+        ctx
+          .registry
+          .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
+            (StateMachine::KEY.to_string(), VariableHeap::KEY.to_string()),
+            |registry, (sm, vh)| {
+              for (full_name, svc_meta) in &all_services {
+                if let Some(afters) = &svc_meta.after {
+                  pending.push((full_name.clone(), afters.clone(), svc_meta.clone()));
+                } else {
+                  let service = registry
+                    .instantiate_one::<Service>("units", &full_name, |x| Ok(Service::new(x)))?;
+                  self.start_service(service, log, Some(sm), dispatch, Some(vh));
+                  started.insert(full_name.clone());
+                }
               }
-              false
-            } else {
-              true
-            }
-          });
-          if !progress {
-            break;
-          }
-        }
+
+              loop {
+                let mut progress = false;
+                pending.retain(|(name, afters, _meta)| {
+                  if afters.iter().all(|a| started.contains(a)) {
+                    if let Ok(service) =
+                      registry.instantiate_one::<Service>("units", name, |x| Ok(Service::new(x)))
+                    {
+                      self.start_service(service, log, Some(sm), dispatch, Some(vh));
+                      started.insert(name.clone());
+                      progress = true;
+                    }
+                    false
+                  } else {
+                    true
+                  }
+                });
+                if !progress {
+                  break;
+                }
+              }
+              Ok(())
+            },
+          )?;
 
         if !pending.is_empty() {
           let mut fields = HashMap::new();
@@ -1716,8 +1707,6 @@ impl Runtime for ServiceRuntime {
           .metadata
           .metadata("units")
           .ok_or_else(|| CoreError::MetadataNotFound("units".to_string()))?;
-        let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
-        let vh = ctx.scope.get::<VariableHeapShared>().cloned();
 
         let mut dependents: Vec<(String, Arc<ServiceMetadata>)> = Vec::new();
         for group in metadata.groups() {
@@ -1748,29 +1737,37 @@ impl Runtime for ServiceRuntime {
             }
           }
           ServiceEventKind::Started => {
-            for (dependent, svc) in dependents {
-              let should_start = svc.after.as_ref().unwrap().iter().any(|a| {
-                if let Ok(ref svc) = ctx.registry.as_one::<Service>("units", a) {
-                  !svc.instances.is_empty()
-                    && !svc.instances.iter().any(|x| {
-                      x.state == ServiceState::Inactive
-                        || x.state == ServiceState::Stopping
-                        || matches!(x.state, ServiceState::Exited(_))
-                        || matches!(x.state, ServiceState::Error(_))
-                    })
-                } else {
-                  false
-                }
-              });
+            ctx
+              .registry
+              .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
+                (StateMachine::KEY.to_string(), VariableHeap::KEY.to_string()),
+                |registry, (sm, vh)| {
+                  for (dependent, svc) in dependents {
+                    let should_start = svc.after.as_ref().unwrap().iter().any(|a| {
+                      if let Ok(ref svc) = registry.as_one::<Service>("units", a) {
+                        !svc.instances.is_empty()
+                          && !svc.instances.iter().any(|x| {
+                            x.state == ServiceState::Inactive
+                              || x.state == ServiceState::Stopping
+                              || matches!(x.state, ServiceState::Exited(_))
+                              || matches!(x.state, ServiceState::Error(_))
+                          })
+                      } else {
+                        false
+                      }
+                    });
 
-              if should_start {
-                let service =
-                  ctx
-                    .registry
-                    .instantiate_one::<Service>("units", &dependent, |x| Ok(Service::new(x)))?;
-                self.start_service(service, log, sm_shared.as_ref(), dispatch, vh.as_ref());
-              }
-            }
+                    if should_start {
+                      let service =
+                        registry.instantiate_one::<Service>("units", &dependent, |x| {
+                          Ok(Service::new(x))
+                        })?;
+                      self.start_service(service, log, Some(sm), dispatch, Some(vh));
+                    }
+                  }
+                  Ok(())
+                },
+              )?;
           }
         }
       }
@@ -1787,36 +1784,43 @@ impl Runtime for ServiceRuntime {
           .cloned()
           .collect();
 
-        for key in keys {
-          if let Some(instances) = ctx.registry.instances.get_mut(&key) {
-            for instance in instances.iter_mut() {
-              if let Some(service) = instance.downcast_mut::<Service>() {
-                if let Some(exit_action) = self.handle_child_exit(service, pid, code, log, dispatch)
-                {
-                  match exit_action {
-                    ServiceExitAction::Restart => {
-                      let sm_shared = ctx.scope.get::<StateMachineShared>().cloned();
-                      let vh = ctx.scope.get::<VariableHeapShared>().cloned();
-                      self.start_service(service, log, sm_shared.as_ref(), dispatch, vh.as_ref());
-                    }
-                    ServiceExitAction::StopDependents => {
-                      let _ = dispatch.dispatch(
-                        "services",
-                        "reconcile_stacks",
-                        json!({
-                          "service": service.metadata.name,
-                          "id": service.id.0,
-                          "action": ServiceEventKind::Exited { code }
-                        })
-                        .into(),
-                      );
+        ctx
+          .registry
+          .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
+            (StateMachine::KEY.to_string(), VariableHeap::KEY.to_string()),
+            |registry, (sm, vh)| {
+              for key in keys {
+                if let Some(instances) = registry.instances.get_mut(&key) {
+                  for instance in instances.iter_mut() {
+                    if let Some(service) = instance.downcast_mut::<Service>() {
+                      if let Some(exit_action) =
+                        self.handle_child_exit(service, pid, code, log, dispatch)
+                      {
+                        match exit_action {
+                          ServiceExitAction::Restart => {
+                            self.start_service(service, log, Some(sm), dispatch, Some(vh));
+                          }
+                          ServiceExitAction::StopDependents => {
+                            let _ = dispatch.dispatch(
+                              "services",
+                              "reconcile_stacks",
+                              json!({
+                                "service": service.metadata.name,
+                                "id": service.id.0,
+                                "action": ServiceEventKind::Exited { code }
+                              })
+                              .into(),
+                            );
+                          }
+                        }
+                      }
                     }
                   }
                 }
               }
-            }
-          }
-        }
+              Ok(())
+            },
+          )?;
       }
       "timeout_sweep" => {
         // TODO: Move to newer instancing impl

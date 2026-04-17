@@ -11,6 +11,7 @@ pub enum CoreError {
   DependencyCycle { cycle: Vec<String> },
   RuntimeStopped,
   PermissionDenied,
+  DoubleKey,
   AuthFailed(String),
   MetadataNotFound(String),
   MissingInstances(String),
@@ -27,6 +28,7 @@ impl Display for CoreError {
     match self {
       CoreError::PamError(x) => x.fmt(f),
       CoreError::ParseToml(x) => write!(f, "parse error: {x}"),
+      CoreError::DoubleKey => write!(f, "Double key"),
       CoreError::MissingField { path } => write!(f, "missing field `{path}`"),
       CoreError::TypeMismatch { path, expected } => {
         write!(f, "type mismatch for `{path}`, expected {expected}")
@@ -77,3 +79,5 @@ impl From<PamError> for CoreError {
 }
 
 impl std::error::Error for CoreError {}
+
+pub type CoreResult<T = ()> = std::result::Result<T, CoreError>;

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use rind_core::prelude::*;
 
@@ -254,16 +255,26 @@ pub struct Signal {
   pub permissions: Option<Vec<u16>>,
 }
 
-#[derive(Default)]
+#[derive(Clone)]
 pub struct StateMachine {
   pub states: HashMap<String, Vec<FlowInstance>>,
+  persistence: StatePersistence,
 }
 
-pub type StateMachineShared = Arc<RwLock<StateMachine>>;
-
 impl StateMachine {
-  pub fn load_from_persistence(&mut self, persistence: StateSnapshot) {
-    self.states = persistence
+  pub const KEY: &str = "runtime@state_machine";
+
+  pub fn from_persistence(persistence: StatePersistence) -> Self {
+    Self {
+      persistence: persistence,
+      states: Default::default(),
+    }
+  }
+
+  pub fn load_from_persistence(&mut self) -> Result<(), CoreError> {
+    self.states = self
+      .persistence
+      .load()?
       .into_iter()
       .map(|(name, i)| {
         (
@@ -275,6 +286,7 @@ impl StateMachine {
         )
       })
       .collect();
+    Ok(())
   }
 
   pub fn snapshot_for_persistence(&self) -> StateSnapshot {
@@ -382,18 +394,9 @@ impl FlowRuntime {
       .and_then(|(_, d)| d.subscribers.as_deref())
   }
 
-  fn save_state_machine(
-    sm: &StateMachine,
-    persistence: Option<&Arc<RwLock<StatePersistence>>>,
-  ) -> Result<(), CoreError> {
-    let Some(persistence) = persistence else {
-      return Ok(());
-    };
+  fn save_state_machine(sm: &StateMachine) -> Result<(), CoreError> {
     let snapshot = sm.snapshot_for_persistence();
-    persistence
-      .write()
-      .map_err(CoreError::custom)?
-      .save(snapshot);
+    sm.persistence.save(snapshot);
     Ok(())
   }
 
@@ -820,15 +823,6 @@ impl Runtime for FlowRuntime {
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
   ) -> Result<Option<serde_json::Value>, CoreError> {
-    let sm_shared = ctx
-      .scope
-      .get::<StateMachineShared>()
-      .cloned()
-      .ok_or_else(|| CoreError::InvalidState("state machine not found in scope".into()))?;
-    let persistence = ctx.scope.get::<Arc<RwLock<StatePersistence>>>().cloned();
-
-    let event_bus = ctx.scope.get::<EventBus>().cloned().unwrap_or_default();
-
     let (state_defs, signal_defs) = Self::collect_defs(ctx.registry.metadata);
 
     match action {
@@ -836,21 +830,25 @@ impl Runtime for FlowRuntime {
         let name = payload.get::<String>("name")?;
         let flow_payload = FlowPayload::from_json(payload.0.get("payload").cloned());
 
-        let mut sm = sm_shared
-          .write()
-          .map_err(|e| CoreError::InvalidState(format!("state machine lock failed: {e}")))?;
+        let sm = ctx
+          .registry
+          .singleton_mut::<StateMachine>(StateMachine::KEY)
+          .ok_or(CoreError::InvalidState(
+            "state machine store not found".into(),
+          ))?;
+
         let mut guard = HashSet::new();
         Self::set_state(
-          &mut sm,
+          sm,
           name.clone(),
           Some(flow_payload.clone()),
           &state_defs,
           &signal_defs,
           &mut guard,
-          &event_bus,
+          ctx.event_bus,
           dispatch,
         )?;
-        Self::save_state_machine(&sm, persistence.as_ref())?;
+        Self::save_state_machine(sm)?;
 
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), name);
@@ -862,21 +860,24 @@ impl Runtime for FlowRuntime {
         let filter_json: Option<serde_json::Value> = payload.0.get("filter").cloned();
         let filter = filter_json.and_then(|v| serde_json::from_value(v).ok());
 
-        let mut sm = sm_shared
-          .write()
-          .map_err(|e| CoreError::InvalidState(format!("state machine lock failed: {e}")))?;
+        let sm = ctx
+          .registry
+          .singleton_mut::<StateMachine>(StateMachine::KEY)
+          .ok_or(CoreError::InvalidState(
+            "state machine store not found".into(),
+          ))?;
         let mut guard = HashSet::new();
         Self::remove_state(
-          &mut sm,
+          sm,
           &name,
           filter.clone(),
           &state_defs,
           &signal_defs,
           &mut guard,
-          &event_bus,
+          ctx.event_bus,
           dispatch,
         );
-        Self::save_state_machine(&sm, persistence.as_ref())?;
+        Self::save_state_machine(sm)?;
 
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), name);
@@ -890,7 +891,7 @@ impl Runtime for FlowRuntime {
           name.clone(),
           Some(flow_payload.clone()),
           &signal_defs,
-          &event_bus,
+          ctx.event_bus,
         )?;
         let source = FlowInstance {
           name,
@@ -898,15 +899,29 @@ impl Runtime for FlowRuntime {
           r#type: FlowType::Signal,
         };
         let mut emitted = HashSet::new();
-        let sm = sm_shared.read().map_err(CoreError::custom)?;
-        Self::reconcile_signal_transcendence(&sm, &source, &signal_defs, &event_bus, &mut emitted);
+        let sm = ctx
+          .registry
+          .singleton_mut::<StateMachine>(StateMachine::KEY)
+          .ok_or(CoreError::InvalidState(
+            "state machine store not found".into(),
+          ))?;
+        Self::reconcile_signal_transcendence(
+          sm,
+          &source,
+          &signal_defs,
+          ctx.event_bus,
+          &mut emitted,
+        );
       }
       "bootstrap" => {
         Self::setup_all_state_subscribers(dispatch, &state_defs);
 
-        let mut sm = sm_shared
-          .write()
-          .map_err(|e| CoreError::InvalidState(format!("state machine lock failed: {e}")))?;
+        let sm = ctx
+          .registry
+          .singleton_mut::<StateMachine>(StateMachine::KEY)
+          .ok_or(CoreError::InvalidState(
+            "state machine store not found".into(),
+          ))?;
         let mut guard = HashSet::new();
 
         let existing_states = sm
@@ -917,31 +932,39 @@ impl Runtime for FlowRuntime {
 
         for state in &existing_states {
           Self::reconcile_transcendence(
-            &mut sm,
+            sm,
             state,
             FlowAction::Apply,
             &state_defs,
             &signal_defs,
             &mut guard,
-            &event_bus,
+            ctx.event_bus,
             dispatch,
           );
         }
 
         Self::reconcile_activate_on_none(
-          &mut sm,
+          sm,
           &state_defs,
           &signal_defs,
           &mut guard,
-          &event_bus,
+          ctx.event_bus,
           dispatch,
         );
-        Self::save_state_machine(&sm, persistence.as_ref())?;
+        Self::save_state_machine(sm)?;
       }
       _ => {}
     }
 
     Ok(None)
+  }
+}
+
+pub fn state_path() -> PathBuf {
+  if let Ok(path) = std::env::var("RIND_STATE_PATH") {
+    PathBuf::from(path)
+  } else {
+    PathBuf::from("/var/lib/system-state")
   }
 }
 

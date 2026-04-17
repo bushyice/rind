@@ -16,7 +16,7 @@ use rind_ipc::{
   payloads::{LoginPayload, LogoutPayload, Run0AuthPayload},
 };
 
-use crate::{flow::StateMachineShared, permissions::PERM_RUN0};
+use crate::{flow::StateMachine, permissions::PERM_RUN0};
 
 pub type Run0QueueState = Arc<Mutex<HashMap<i32, bool>>>;
 
@@ -42,8 +42,8 @@ pub fn handle_ipc_run0(
   _log: &LogHandle,
 ) -> Result<Message, CoreError> {
   let pm = ctx
-    .scope
-    .get::<PermissionStore>()
+    .registry
+    .singleton::<PermissionStore>(PermissionStore::KEY)
     .cloned()
     .unwrap_or_default();
 
@@ -79,9 +79,10 @@ pub fn handle_ipc_run0(
     .map_err(|x| CoreError::Custom(x))?;
 
   let pam = ctx
-    .scope
-    .get::<Arc<rind_core::user::PamHandle>>()
-    .expect("PamHandle not in scope");
+    .registry
+    .singleton::<Arc<PamHandle>>(PamHandle::KEY)
+    .cloned()
+    .ok_or_else(|| CoreError::InvalidState("pam handle not found".into()))?;
 
   let user = pam
     .store()
@@ -115,9 +116,10 @@ pub fn handle_ipc_login(
     .map_err(|x| CoreError::Custom(x))?;
 
   let pam = ctx
-    .scope
-    .get::<Arc<rind_core::user::PamHandle>>()
-    .expect("PamHandle not in scope");
+    .registry
+    .singleton::<Arc<PamHandle>>(PamHandle::KEY)
+    .cloned()
+    .ok_or_else(|| CoreError::InvalidState("pam handle not found".into()))?;
 
   let Some(_) = pam.store().lookup_by_name(&payload.username) else {
     return Err(CoreError::PermissionDenied);
@@ -169,9 +171,10 @@ pub fn handle_ipc_logout(
   }
 
   let pam = ctx
-    .scope
-    .get::<Arc<rind_core::user::PamHandle>>()
-    .expect("PamHandle not in scope");
+    .registry
+    .singleton::<Arc<PamHandle>>(PamHandle::KEY)
+    .cloned()
+    .ok_or_else(|| CoreError::InvalidState("pam handle not found".into()))?;
 
   let Some(user) = pam.store().lookup_by_name(&payload.username) else {
     return Err(CoreError::PermissionDenied);
@@ -256,11 +259,10 @@ impl Runtime for UserRuntime {
     _log: &LogHandle,
   ) -> Result<Option<serde_json::Value>, CoreError> {
     let pam = ctx
-      .scope
-      .get::<Arc<PamHandle>>()
-      .expect("PamHandle not in scope");
-
-    let event_bus = ctx.scope.get::<EventBus>().cloned().unwrap_or_default();
+      .registry
+      .singleton::<Arc<PamHandle>>(PamHandle::KEY)
+      .cloned()
+      .ok_or_else(|| CoreError::InvalidState("pam handle not found".into()))?;
 
     match action {
       "login" => {
@@ -287,7 +289,7 @@ impl Runtime for UserRuntime {
           .into(),
         );
 
-        event_bus.emit(LoginEvent {
+        ctx.event_bus.emit(LoginEvent {
           action: LoginAction::Login,
           session_id: session_id,
           uid: user.uid,
@@ -315,22 +317,19 @@ impl Runtime for UserRuntime {
           .into(),
         );
 
-        event_bus.emit(LoginEvent {
+        ctx.event_bus.emit(LoginEvent {
           action: LoginAction::Logout,
           session_id: session_id,
           uid: user.uid,
         });
 
-        self.remove_runtime_dir(user, pam)?;
+        self.remove_runtime_dir(user, &pam)?;
       }
       "create_sessions" => {
-        let sm_shared = ctx
-          .scope
-          .get::<StateMachineShared>()
-          .cloned()
-          .ok_or_else(|| CoreError::InvalidState("state machine not found in scope".into()))?;
-
-        let mut sm = sm_shared.write().map_err(CoreError::custom)?;
+        let sm = ctx
+          .registry
+          .singleton_mut::<StateMachine>(StateMachine::KEY)
+          .ok_or_else(|| CoreError::InvalidState("state machine store not found".into()))?;
         if let Some(users) = sm.states.get_mut("rind@user_session") {
           for user in users {
             let username = user.payload.get_json_field_as::<String>("username").ok_or(
@@ -366,7 +365,6 @@ impl Runtime for UserRuntime {
             self.create_runtime_dir(user)?;
           }
         }
-        drop(sm);
       }
       _ => {}
     }

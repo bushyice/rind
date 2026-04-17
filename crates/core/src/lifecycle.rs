@@ -1,5 +1,6 @@
+use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LifecycleAction {
@@ -11,17 +12,15 @@ pub enum LifecycleAction {
 
 #[derive(Clone, Default)]
 pub struct LifecycleQueue {
-  inner: Arc<Mutex<VecDeque<LifecycleAction>>>,
+  inner: Rc<RefCell<VecDeque<LifecycleAction>>>,
 }
 
 impl LifecycleQueue {
   pub fn request(&self, action: LifecycleAction) {
-    if let Ok(mut queue) = self.inner.lock() {
-      queue.push_back(action);
-    }
+    self.inner.borrow_mut().push_back(action);
   }
 
   pub fn next(&self) -> Option<LifecycleAction> {
-    self.inner.lock().ok()?.pop_front()
+    self.inner.borrow_mut().pop_front()
   }
 }

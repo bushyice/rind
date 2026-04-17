@@ -1,7 +1,8 @@
 use std::any::{Any, TypeId};
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -73,7 +74,7 @@ struct ErasedChannel {
 
 #[derive(Default, Clone)]
 pub struct EventBus {
-  inner: Arc<Mutex<EventBusInner>>,
+  inner: Rc<RefCell<EventBusInner>>,
 }
 
 #[derive(Default)]
@@ -110,7 +111,7 @@ impl EventBus {
 
   pub fn subscribe<T: Clone + Send + 'static>(&self) -> Subscription<T> {
     let (tx, rx) = mpsc::channel();
-    let mut inner = self.inner.lock().expect("event bus lock");
+    let mut inner = self.inner.borrow_mut();
     let type_id = TypeId::of::<T>();
     inner
       .channels
@@ -123,7 +124,7 @@ impl EventBus {
   }
 
   pub fn emit<T: Clone + Send + 'static>(&self, event: T) {
-    let mut inner = self.inner.lock().expect("event bus lock");
+    let mut inner = self.inner.borrow_mut();
     let type_id = TypeId::of::<T>();
     if let Some(senders) = inner.channels.get_mut(&type_id) {
       senders.retain(|erased| {

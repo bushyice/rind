@@ -1,13 +1,13 @@
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
-use crate::flow::{Signal, State, StateMachine, StateMachineShared};
+use crate::flow::{Signal, State, StateMachine, state_path};
 use crate::mount::Mount;
 use crate::networking::NetworkConfig;
 use crate::permissions::{PERM_LOGIN, PERM_RUN0, PERM_SYSTEM_SERVICES, Permission};
 use crate::services::Service;
 use crate::user::Run0QueueState;
-use crate::variables::{Variable, VariableHeap, VariableHeapShared, variables_path};
+use crate::variables::{Variable, VariableHeap, variables_path};
 use rind_core::prelude::*;
 use rind_core::user::{PamHandle, UserStore};
 use rind_ipc::recv::IpcSourcemap;
@@ -49,30 +49,16 @@ pub type UnitExtension = fn(UnitExtensionAction) -> UnitExtensionAction;
 
 pub struct UnitsOrchestrator {
   units_dir: PathBuf,
-  state_machine: StateMachineShared,
-  state_persistence: Arc<RwLock<StatePersistence>>,
-  lifecycle: LifecycleQueue,
-  event_bus: EventBus,
   users: UserStoreShared,
-  permissions: PermissionStore,
-  variable_heap: VariableHeapShared,
   extensions: Vec<UnitExtension>,
 }
 
 impl UnitsOrchestrator {
   pub fn new(units_dir: impl Into<PathBuf>) -> Self {
     let users = Arc::new(UserStore::load_system().unwrap_or_default());
-    let mut heap = VariableHeap::new(variables_path());
-    let _ = heap.load();
     Self {
       units_dir: units_dir.into(),
-      state_machine: Arc::new(RwLock::new(StateMachine::default())),
-      state_persistence: Arc::new(RwLock::new(StatePersistence::new(state_path()))),
-      lifecycle: LifecycleQueue::default(),
-      event_bus: EventBus::new(),
-      permissions: PermissionStore::new(users.clone()),
       users,
-      variable_heap: Arc::new(RwLock::new(heap)),
       extensions: Default::default(),
     }
   }
@@ -81,13 +67,8 @@ impl UnitsOrchestrator {
     self.extensions.push(ext);
   }
 
-  pub fn lifecycle_queue(&self) -> LifecycleQueue {
-    self.lifecycle.clone()
-  }
-
-  fn load_permissions(&self) -> Result<(), CoreError> {
-    self
-      .permissions
+  fn load_permissions(&self, permissions: &PermissionStore) -> Result<(), CoreError> {
+    permissions
       .reg_perm(PERM_LOGIN, "Login")?
       .reg_perm(PERM_SYSTEM_SERVICES, "SystemServices")?
       .reg_perm(PERM_RUN0, "Run0")?;
@@ -95,7 +76,11 @@ impl UnitsOrchestrator {
     Ok(())
   }
 
-  fn load_all_units(&self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
+  fn load_all_units(
+    &self,
+    ctx: &mut OrchestratorContext<'_>,
+    permissions: &PermissionStore,
+  ) -> Result<(), CoreError> {
     let mut metadata = Metadata::new(UNITS_META)
       .of::<Service>("service")
       .of::<Mount>("mount")
@@ -191,9 +176,7 @@ impl UnitsOrchestrator {
       if content.contains("permission") {
         if let Some(group) = metadata.get_in_group::<Permission>(&group) {
           for perm in group {
-            self
-              .permissions
-              .reg_perm(PermissionId(perm.id), perm.name.clone())?;
+            permissions.reg_perm(PermissionId(perm.id), perm.name.clone())?;
           }
         }
       }
@@ -203,16 +186,6 @@ impl UnitsOrchestrator {
 
     for ext in self.extensions.iter() {
       metadata = ext(UnitExtensionAction::BuiltIn(metadata)).as_metadata();
-    }
-
-    if let Ok(mut heap) = self.variable_heap.write() {
-      for group in metadata.groups() {
-        if let Some(vars) = metadata.get_in_group::<Variable>(group) {
-          for var in vars {
-            heap.register(&var.name, var.default.clone());
-          }
-        }
-      }
     }
 
     for ext in self.extensions.iter() {
@@ -312,80 +285,74 @@ impl Orchestrator for UnitsOrchestrator {
   }
 
   fn preload(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
-    if ctx.metadata.metadata(UNITS_META).is_none() {
-      let mut vars = self.variable_heap.write().unwrap();
-      vars.load()?;
-      drop(vars);
-      self.load_all_units(ctx)?;
-      self.load_permissions()?;
-    }
-    let loaded = self
-      .state_persistence
-      .write()
-      .map_err(CoreError::custom)?
-      .load()?;
+    let metadata = &*ctx.metadata;
+    let users = self.users.clone();
+    let permissions = ctx.runtime.with_instances(|instances| {
+      let mut registry = InstanceRegistry::new(metadata, instances);
+      registry
+        .singleton_or_insert_with::<PermissionStore>(PermissionStore::KEY, || {
+          PermissionStore::new(users.clone())
+        })
+        .clone()
+    })?;
 
-    self
-      .state_machine
-      .write()
-      .map_err(CoreError::custom)?
-      .load_from_persistence(loaded);
+    if ctx.metadata.metadata(UNITS_META).is_none() {
+      self.load_all_units(ctx, &permissions)?;
+      self.load_permissions(&permissions)?;
+    }
+
+    let metadata = &*ctx.metadata;
+    let users = self.users.clone();
+    ctx
+      .runtime
+      .with_instances(|instances| -> std::result::Result<(), CoreError> {
+        let mut registry = InstanceRegistry::new(metadata, instances);
+
+        let _ = registry.singleton_or_insert_with::<StateMachine>(StateMachine::KEY, || {
+          let mut state = StateMachine::from_persistence(StatePersistence::new(state_path()));
+          let _ = state.load_from_persistence();
+          state
+        });
+
+        let _ = registry.singleton_or_insert_with::<Arc<PamHandle>>(PamHandle::KEY, || {
+          Arc::new(PamHandle::new(users.clone()))
+        });
+
+        let variable_heap =
+          registry.singleton_or_insert_with::<VariableHeap>(VariableHeap::KEY, || {
+            let mut heap = VariableHeap::new(variables_path());
+            let _ = heap.load();
+            heap
+          });
+
+        if let Some(units) = ctx.metadata.metadata(UNITS_META) {
+          for group in units.groups() {
+            if let Some(vars) = units.get_in_group::<Variable>(group) {
+              for var in vars {
+                variable_heap.register(&var.name, var.default.clone());
+              }
+            }
+          }
+        }
+
+        Ok(())
+      })??;
 
     Ok(())
   }
 
   fn build_scope(&mut self, builder: &mut ScopeBuilder) -> Result<(), CoreError> {
-    let pam_handle = Arc::new(PamHandle::new(self.users.clone()));
-
-    let persistence = self.state_persistence.clone();
-    builder.insert_scope("flow", move || {
-      let mut scope = RuntimeScope::default();
-      scope.insert::<Arc<RwLock<StatePersistence>>>(persistence.clone());
-      scope
-    });
-
-    let pam = pam_handle.clone();
-    builder.insert_scope("services", move || {
-      let mut scope = RuntimeScope::default();
-      scope.insert::<Arc<PamHandle>>(pam.clone());
-      scope
-    });
-
-    let pam = pam_handle.clone();
-    builder.insert_scope("ipc", move || {
-      let mut scope = RuntimeScope::default();
-      scope.insert::<Arc<PamHandle>>(pam.clone());
-      scope
-    });
-
-    let pam = pam_handle.clone();
-    builder.insert_scope("user", move || {
-      let mut scope = RuntimeScope::default();
-      scope.insert::<Arc<PamHandle>>(pam.clone());
-      scope
-    });
-
     // Why do all the monsters come out at night?
     // Why do we sleep where we want to hide?
     // Why do I run back to you like I don't mind if you fuck up my life?
     // Why am I a sucker for all your lies?
     // Strung out like laundry on every line.
     // Why do I run back to you like I don't mind if you fuck up my life?
-    let eb = self.event_bus.clone();
-    let permissions = self.permissions.clone();
-    let sm = self.state_machine.clone();
     let ipcmap = IpcSourcemap::default();
     let run0_queue: Run0QueueState = Arc::new(std::sync::Mutex::new(Default::default()));
-    let variable_heap = self.variable_heap.clone();
-    let lifecycle = self.lifecycle.clone();
     builder.globals(move |scope| {
       scope.insert::<IpcSourcemap>(ipcmap.clone());
-      scope.insert::<EventBus>(eb.clone());
-      scope.insert::<StateMachineShared>(sm.clone());
-      scope.insert::<PermissionStore>(permissions.clone());
       scope.insert::<Run0QueueState>(run0_queue.clone());
-      scope.insert::<VariableHeapShared>(variable_heap.clone());
-      scope.insert::<LifecycleQueue>(lifecycle.clone());
     });
 
     Ok(())
@@ -393,13 +360,5 @@ impl Orchestrator for UnitsOrchestrator {
 
   fn run(&mut self, _ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
     Ok(())
-  }
-}
-
-fn state_path() -> PathBuf {
-  if let Ok(path) = std::env::var("RIND_STATE_PATH") {
-    PathBuf::from(path)
-  } else {
-    PathBuf::from("/var/lib/system-state")
   }
 }

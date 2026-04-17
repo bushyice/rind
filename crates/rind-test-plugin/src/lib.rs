@@ -63,13 +63,11 @@ impl Runtime for MyRuntime {
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
   ) -> Result<Option<serde_json::Value>, CoreError> {
-    let sm_shared = ctx
-      .scope
-      .get::<StateMachineShared>()
-      .cloned()
-      .ok_or_else(|| CoreError::InvalidState("state machine not found in scope".into()))?;
-
-    let sm = &sm_shared.read().unwrap().states;
+    let sm = &ctx
+      .registry
+      .singleton::<StateMachine>(StateMachine::KEY)
+      .ok_or_else(|| CoreError::InvalidState("state machine store not found".into()))?
+      .states;
 
     // println!(
     //   "{:?}",

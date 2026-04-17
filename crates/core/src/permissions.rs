@@ -80,6 +80,8 @@ pub struct PermissionStore {
 }
 
 impl PermissionStore {
+  pub const KEY: &str = "runtime@permission_store";
+
   pub fn new(users: UserStoreShared) -> Self {
     Self {
       users,

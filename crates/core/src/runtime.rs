@@ -8,6 +8,8 @@ use serde::de::DeserializeOwned;
 
 use crate::context::{RuntimeContext, RuntimeScopes};
 use crate::error::CoreError;
+use crate::events::EventBus;
+use crate::lifecycle::{LifecycleAction, LifecycleQueue};
 use crate::logging::{LogHandle, LogLevel};
 use crate::registry::{InstanceMap, InstanceRegistry, MetadataRegistry};
 
@@ -107,10 +109,16 @@ pub struct RuntimeHandle {
 struct RuntimeEngine {
   log: LogHandle,
   runtimes: HashMap<String, Box<dyn Runtime>>,
-  contexts: HashMap<usize, RuntimeScopes>,
+  contexts: HashMap<usize, RuntimeContextState>,
   queue: VecDeque<RuntimeCommand>,
   instances: InstanceMap,
   stopped: bool,
+}
+
+struct RuntimeContextState {
+  scopes: RuntimeScopes,
+  event_bus: EventBus,
+  lifecycle: LifecycleQueue,
 }
 
 impl RuntimeHandle {
@@ -122,7 +130,14 @@ impl RuntimeHandle {
 
     match command {
       RuntimeCommand::RegisterScopes { context_id, scopes } => {
-        inner.contexts.insert(context_id, scopes);
+        inner.contexts.insert(
+          context_id,
+          RuntimeContextState {
+            scopes,
+            event_bus: EventBus::new(),
+            lifecycle: LifecycleQueue::default(),
+          },
+        );
       }
       RuntimeCommand::Stop => {
         inner.stopped = true;
@@ -171,6 +186,22 @@ impl RuntimeHandle {
     self.send(RuntimeCommand::RegisterScopes { context_id, scopes })
   }
 
+  pub fn next_lifecycle_action(&self, context_id: usize) -> Option<LifecycleAction> {
+    let mut inner = self.inner.borrow_mut();
+    inner
+      .contexts
+      .get_mut(&context_id)
+      .and_then(|ctx| ctx.lifecycle.next())
+  }
+
+  pub fn with_instances<R>(&self, f: impl FnOnce(&mut InstanceMap) -> R) -> Result<R, CoreError> {
+    let mut inner = self.inner.borrow_mut();
+    if inner.stopped {
+      return Err(CoreError::RuntimeStopped);
+    }
+    Ok(f(&mut inner.instances))
+  }
+
   pub fn flush_context(
     &self,
     context_id: usize,
@@ -202,7 +233,7 @@ impl RuntimeHandle {
       };
       // println!("Gotten {action} for {runtime_id}");
 
-      let (mut runtime, mut scope, mut instances, log) = {
+      let (mut runtime, mut scope, mut event_bus, mut lifecycle, mut instances, log) = {
         let mut inner = self.inner.borrow_mut();
         if inner.stopped {
           return Err(CoreError::RuntimeStopped);
@@ -223,20 +254,28 @@ impl RuntimeHandle {
           }
         };
 
-        let scope = inner
-          .contexts
-          .get_mut(&cid)
-          .map(|scopes| scopes.take_or_build_scope(runtime_id.as_str()))
-          .unwrap_or_default();
+        let context = inner.contexts.get_mut(&cid).ok_or_else(|| {
+          CoreError::InvalidState(format!("runtime context {cid} not registered"))
+        })?;
+
+        let scope = context.scopes.take_or_build_scope(runtime_id.as_str());
+        let event_bus = std::mem::take(&mut context.event_bus);
+        let lifecycle = std::mem::take(&mut context.lifecycle);
 
         // CHECK
         let instances = std::mem::take(&mut inner.instances);
         let log = inner.log.clone();
-        (runtime, scope, instances, log)
+        (runtime, scope, event_bus, lifecycle, instances, log)
       };
 
       let registry = InstanceRegistry::new(metadata, &mut instances);
-      let mut ctx = RuntimeContext::new(runtime_id.as_str(), &mut scope, registry);
+      let mut ctx = RuntimeContext::new(
+        runtime_id.as_str(),
+        &mut scope,
+        registry,
+        &mut event_bus,
+        &mut lifecycle,
+      );
       let dispatch = RuntimeDispatcher::new(self.clone(), cid);
 
       // println!("Calling runtime: {action}");
@@ -268,8 +307,10 @@ impl RuntimeHandle {
         let mut inner = self.inner.borrow_mut();
         inner.runtimes.insert(runtime_id.clone(), runtime);
         inner.instances = instances;
-        if let Some(scopes) = inner.contexts.get_mut(&cid) {
-          scopes.put_scope(runtime_id, scope);
+        if let Some(context) = inner.contexts.get_mut(&cid) {
+          context.scopes.put_scope(runtime_id, scope);
+          context.event_bus = event_bus;
+          context.lifecycle = lifecycle;
         }
       }
     }

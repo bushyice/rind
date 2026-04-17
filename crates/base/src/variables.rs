@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 use rind_core::error::CoreError;
 
+#[derive(Clone)]
 pub struct VariableHeap {
   values: HashMap<String, toml::Value>,
   defaults: HashMap<String, toml::Value>,
@@ -19,6 +20,8 @@ pub struct VariableHeap {
 }
 
 impl VariableHeap {
+  pub const KEY: &str = "runtime@variable_heap";
+
   pub fn new(path: impl Into<PathBuf>) -> Self {
     Self {
       values: HashMap::new(),
@@ -97,8 +100,6 @@ impl VariableHeap {
     self.defaults.contains_key(id)
   }
 }
-
-pub type VariableHeapShared = std::sync::Arc<std::sync::RwLock<VariableHeap>>;
 
 pub fn variables_path() -> PathBuf {
   if let Ok(path) = std::env::var("RIND_VARIABLES_PATH") {

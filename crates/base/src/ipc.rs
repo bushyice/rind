@@ -13,13 +13,13 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crate::flow::{State, StateMachineShared};
+use crate::flow::{State, StateMachine};
 use crate::mount::{Mount, is_mounted};
 use crate::networking::{get_ports, handle_ipc_network};
 use crate::permissions::{PERM_LOGIN, PERM_NETWORK};
 use crate::services::{Service, handle_ipc_start, handle_ipc_stop};
 use crate::user::{handle_ipc_login, handle_ipc_logout, handle_ipc_run0};
-use crate::variables::VariableHeapShared;
+use crate::variables::VariableHeap;
 use rind_core::prelude::*;
 use rind_ipc::ser::{
   MountSerialized, ServiceSerialized, UnitItemsSerialized, UnitSerialized, serialize_many,
@@ -61,11 +61,10 @@ fn build_ipc_list_response(
   payload: ListPayload,
   ctx: &mut RuntimeContext<'_>,
 ) -> Result<Message, CoreError> {
-  let sm_shared = ctx
-    .scope
-    .get::<StateMachineShared>()
-    .cloned()
-    .ok_or_else(|| CoreError::InvalidState("state machine not found in scope".into()))?;
+  let sm = ctx
+    .registry
+    .singleton::<StateMachine>(StateMachine::KEY)
+    .ok_or_else(|| CoreError::InvalidState("state machine store not found".into()))?;
 
   Ok(if payload.unit_type == "unit" {
     let services = if let Some(services) = ctx
@@ -158,8 +157,7 @@ fn build_ipc_list_response(
       .stringify(),
     )
   } else if payload.unit_type == "state" && !payload.name.is_empty() {
-    let states = &sm_shared.read().unwrap();
-    let Some(instances) = states.states.get(&payload.name) else {
+    let Some(instances) = sm.states.get(&payload.name) else {
       return Err(CoreError::MetadataNotFound(format!(
         "State not found: {}",
         payload.name
@@ -186,7 +184,7 @@ fn build_ipc_list_response(
       .stringify(),
     )
   } else if payload.unit_type == "state" {
-    let states = &sm_shared.read().unwrap().states;
+    let states = &sm.states;
 
     Message::from_type(MessageType::Ok).with(
       serde_json::to_string(
@@ -207,7 +205,6 @@ fn build_ipc_list_response(
     )
   } else if payload.unit_type == "netiface" {
     let mut statuses = Vec::new();
-    let sm = sm_shared.read().unwrap();
     if let Some(groups) = ctx.registry.metadata.groups("units") {
       for group in groups {
         if let Some(cfgs) = ctx
@@ -329,8 +326,8 @@ pub fn handle_ipc_set(
   _log: &LogHandle,
 ) -> Result<Message, CoreError> {
   let _ = ctx
-    .scope
-    .get::<VariableHeapShared>()
+    .registry
+    .singleton::<VariableHeap>(VariableHeap::KEY)
     .ok_or(CoreError::Custom("Failed to get variable heap".into()))?;
 
   Ok(Message::default())
@@ -355,12 +352,7 @@ fn queue_lifecycle_action(
     return Err(CoreError::PermissionDenied);
   }
 
-  let queue = ctx
-    .scope
-    .get::<LifecycleQueue>()
-    .cloned()
-    .ok_or_else(|| CoreError::InvalidState("lifecycle queue not found in scope".into()))?;
-  queue.request(action);
+  ctx.lifecycle.request(action);
   Ok(Message::ok(response))
 }
 
@@ -569,8 +561,8 @@ fn handle_ipc_message(
   log: &LogHandle,
 ) -> Message {
   let pm = ctx
-    .scope
-    .get::<PermissionStore>()
+    .registry
+    .singleton::<PermissionStore>(PermissionStore::KEY)
     .cloned()
     .unwrap_or_default();
 

@@ -7,6 +7,8 @@ use std::{
 
 use crate::user::UserRecord;
 
+use crate::events::EventBus;
+use crate::lifecycle::LifecycleQueue;
 use crate::registry::InstanceRegistry;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -191,6 +193,8 @@ pub struct RuntimeContext<'a> {
   pub runtime_id: &'a str,
   pub scope: &'a mut RuntimeScope,
   pub registry: InstanceRegistry<'a>,
+  pub event_bus: &'a mut EventBus,
+  pub lifecycle: &'a mut LifecycleQueue,
 }
 
 impl<'a> RuntimeContext<'a> {
@@ -198,11 +202,15 @@ impl<'a> RuntimeContext<'a> {
     runtime_id: &'a str,
     scope: &'a mut RuntimeScope,
     registry: InstanceRegistry<'a>,
+    event_bus: &'a mut EventBus,
+    lifecycle: &'a mut LifecycleQueue,
   ) -> Self {
     Self {
       runtime_id,
       scope,
       registry,
+      event_bus,
+      lifecycle,
     }
   }
 }

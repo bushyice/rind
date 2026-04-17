@@ -31,6 +31,8 @@ pub struct StatePersistence {
 }
 
 impl StatePersistence {
+  pub const KEY: &str = "runtime@state_persistence";
+
   pub fn new(path: impl Into<PathBuf>) -> Self {
     let path = path.into();
     let (tx, rx) = mpsc::channel();
