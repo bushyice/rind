@@ -1,0 +1,77 @@
+name: Deploy Quartz Docs
+
+on:
+  push:
+    paths:
+      - "docs/**"
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Clone Quartz
+        run: git clone https://github.com/jackyzha0/quartz.git quartz-repo
+
+      - name: Install dependencies
+        run: |
+          cd quartz-repo
+          npm install
+
+      - name: Prepare Content
+        run: |
+          rm -rf quartz-repo/content/*
+
+          cp -ra docs/. quartz-repo/content/
+
+          if [ -f "quartz-repo/content/Project.md" ]; then
+            mv "quartz-repo/content/Project.md" "quartz-repo/content/index.md"
+          fi
+
+          rm -rf quartz-repo/content/.quartz
+
+          cp -ra docs/.quartz/. quartz-repo/
+
+          cp -ra docs/assets/logo.png quartz-repo/quartz/static/icon.png
+          cp -ra docs/assets/splash.png quartz-repo/quartz/static/og-image.png
+
+      - name: Build Quartz
+        run: |
+          cd quartz-repo
+          npx quartz build
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: quartz-repo/public
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
