@@ -1,11 +1,11 @@
 ---
 title: Welcome to rind
 ---
-> [!IMPORTANT]
-> **Experimental Status:** Rind is a proof-of-concept system orchestrator. The codebase is in a state of rapid flux; expect frequent breaking changes and "it-works-sometimes" reliability as we refine the core architecture and paradigms.
+> [!CAUTION]
+> **Experimental Status:** Rind is currently a proof of concept. The codebase is under active development and in a state of rapid flux. Expect architectural shifts, breaking changes, and occasional instability as we refine the core engine.
 
 ## Overview
-**[[Rind]]** (Rust Init Daemon) is a reactive system runtime and orchestrator built on a logic-driven **Flow** engine. Rather than relying on static dependency chains, Rind drives the system through a dynamic tree of persistent **[[States]]** and ephemeral **[[Signals]]**. This enables a truly fluid environment where services are actors that respond to real-time system facts, branching conditions, and structured data payloads.
+**[[Rind]]** (Rust Init Daemon) is an init system and system runtime that provides the building primitives for reactive systems with persistent machine state, where services are drawn via dynamic state trees as opposed to static dependency threads. Built on a logic-driven **Flow** engine, Rind drives the system through a dynamic tree of persistent **[[States]]** and ephemeral **[[Signals]]**. This enables a truly fluid environment where services are actors that respond to real-time system facts, branching conditions, and structured data payloads.
 
 ---
 ## Features

@@ -2,6 +2,7 @@
 name = "rind-base"
 version.workspace = true
 edition.workspace = true
+license = "MPL-2.0"
 
 [lib]
 path = "src/base.rs"

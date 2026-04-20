@@ -621,9 +621,7 @@ export default ((opts?: Options) => {
 
         <p className="text-center max-w-10/12">
           <strong>
-            A state-based init system with state dependency graph and
-            plugins(wip).
-          </strong>
+            An init system and system runtime that provides the building primitives for reactive systems with persistent machine state, where services are drawn via dynamic state trees as opposed to static dependency threads.          </strong>
         </p>
         <p className="w-full flex justify-center gap-4">
           <a href="https://github.com/bushyice/rind/stargazers">

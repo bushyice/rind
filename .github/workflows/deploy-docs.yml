@@ -48,6 +48,10 @@ jobs:
             mv "quartz-repo/content/Project.md" "quartz-repo/content/index.md"
           fi
 
+          if [ -f "quartz-repo/content/Todo.md" ]; then
+            rm "quartz-repo/content/Todo.md"
+          fi
+
           rm -rf quartz-repo/content/.quartz
 
           cp -ra docs/.quartz/. quartz-repo/

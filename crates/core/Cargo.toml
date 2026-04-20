@@ -2,6 +2,7 @@
 name = "rind-core"
 version.workspace = true
 edition.workspace = true
+license = "MPL-2.0"
 
 [lib]
 path = "src/core.rs"
