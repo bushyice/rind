@@ -517,3 +517,13 @@ groups = ["wheel", "network"]
 env = [
   "PATH", "/usr/bin"
 ]
+
+[[profile.main.user]]
+username = "root"
+uid = 0
+gid = 0
+home = "/root"
+shell = "/bin/sh"
+env = [
+  "TEST", "1"
+]

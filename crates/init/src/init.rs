@@ -224,10 +224,17 @@ fn process_lifecycle_action(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+  if PathBuf::from("/etc/.env").exists() {
+    unsafe {
+      for (key, value) in read_env_file("/etc/.env") {
+        std::env::set_var(&key, &value);
+      }
+    }
+  }
+
   let units_dir = if let Ok(path) = std::env::var("RIND_UNITS_DIR") {
     PathBuf::from(path)
   } else {
-    // will be from config later
     PathBuf::from("/etc/units")
   };
 

@@ -529,17 +529,17 @@ fn prepare_rootfs(profile: &Profile, rootfs: &Path) {
  * Copyright (c) 2026 rind contributors
  *
  * This header is provided under the MIT License.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the \"Software\"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in all
  * copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -728,9 +728,7 @@ fn builder_i(profile: &Profile, rootfs: &Path) {
 fn builder_u(profile: &Profile, rootfs: &Path) {
   let etc_dir = rootfs.join("etc");
   fs::create_dir_all(&etc_dir).unwrap();
-  let rind_env_dir = etc_dir.join("env");
-  let users_env_dir = rind_env_dir.join("users");
-  fs::create_dir_all(&users_env_dir).unwrap();
+  fs::create_dir_all(&rootfs.join("root")).unwrap();
 
   let mut passwd = String::new();
   let mut shadow = String::new();
@@ -743,19 +741,28 @@ fn builder_u(profile: &Profile, rootfs: &Path) {
 
   if let Some(root_env) = &profile.root_env {
     let root_env_map = root_env.to_map();
-    fs::write(
-      rind_env_dir.join("root.env"),
-      render_env_lines(&root_env_map),
-    )
-    .unwrap();
+    fs::write(etc_dir.join(".env"), render_env_lines(&root_env_map)).unwrap();
   }
 
   if let Some(users) = &profile.user {
     println!("[*] Generating user databases...");
 
     for user in users {
-      let home_path = rootfs.join(user.home.trim_start_matches('/'));
+      let home_path = if user.username == "root" {
+        rootfs.join("root")
+      } else {
+        rootfs.join(user.home.trim_start_matches('/'))
+      };
       fs::create_dir_all(&home_path).unwrap();
+
+      if let Some(env) = &user.env {
+        let env_map = env.to_map();
+        fs::write(home_path.join(".env"), render_env_lines(&env_map)).unwrap();
+      }
+
+      if user.username == "root" {
+        continue;
+      }
 
       unsafe {
         use std::ffi::CString;
@@ -797,15 +804,6 @@ fn builder_u(profile: &Profile, rootfs: &Path) {
             .1
             .push(user.username.clone());
         }
-      }
-
-      if let Some(env) = &user.env {
-        let env_map = env.to_map();
-        fs::write(
-          users_env_dir.join(format!("{}.env", user.username)),
-          render_env_lines(&env_map),
-        )
-        .unwrap();
       }
     }
   }

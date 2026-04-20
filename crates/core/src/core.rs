@@ -11,6 +11,7 @@ pub mod persistence;
 pub mod registry;
 pub mod runtime;
 pub mod user;
+pub mod utils;
 
 pub mod prelude {
   pub use super::*;
@@ -28,6 +29,7 @@ pub mod prelude {
   pub use registry::*;
   pub use runtime::*;
   pub use user::*;
+  pub use utils::*;
 
   pub use rind_macros::*;
 }

@@ -634,6 +634,8 @@ impl ServiceRuntime {
           cmd.current_dir(format!("{}{}", home, &dir[1..]));
         }
 
+        envs.extend(read_env_file(&format!("{home}/.env")));
+
         envs.insert("HOME".to_string(), home);
         envs.insert("USER".to_string(), username);
       }

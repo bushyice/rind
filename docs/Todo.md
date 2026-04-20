@@ -4,50 +4,61 @@ kanban-plugin: board
 
 ---
 
-## Minor
+## Todos
 
-- [ ] rind.env
-- [ ] plguin index
-
-
-## Major
-
+- [ ] **Permission Inheritance**: If user has PermissionA and PermissionB inherits PermissionA, then user has PermissionB.
 - [ ] **eBPF Loader**: (maybe?) Loading eBPF at system startup.
 
 
-## Testing
+## Doing
 
-- [ ] **Permissions**: Entity-based(users, groups, executables) access control for `Actions` and `ActionGroups`.
-- [ ] **Plugins**: Cycle-based internal programs with access to `rind`'s internal state.
-- [ ] **Userspace Isolation**: Isolate units for user and system.
-- [ ] **Advanced Triggering**: More complex state based service triggers.
+- [ ] **Service Cleanup**: Clean service instances with `Exited` states.
 - [ ] **Piping**: Piping and payloads into other states/signals.
 	- [x] Simple circumstantial piping
 	- [ ] General piping
-- [x] **State Transcendence**: Auto-activation of states based on dependencies (e.g. `SwayActive` on `UserLoggedIn`).
 - [ ] **Daemon & CLI**: The cli.
 	- [x] Listing stuff.
 	- [x] Start/Stop.
 	- [ ] States and Signal control(maybe with permissions if those happen).
-- [x] **Detached Transports/Subscribers**: Independent messaging access for external programs.
-- [x] **State Persistence**: Continuity of state across restarts.
-- [x] **Service Branching**: Service per state branching.
-- [x] **State Branching**: Many state payloads at once.
-- [x] **Service Management**:
-	- [x] Process spawning and killing stuff.
-	- [ ] Dependency based startup (`after`).
-	- [ ] Restart polcies.
-- [x] **Payloads**: Typed support for JSON, String, and Binary data.
+	- [x] Run0
+	- [x] Logger
+	- [ ] Permissions
+	- [x] Invoke-IPC
 - [ ] **Transport Protocols**: Transport protocols.
 	- [x] `stdio`.
 	- [x] `uds`.
 	- [x] `env`.
 	- [x] `args`.
+	- [ ] `memory`
+- [ ] **Plugins**: Cycle-based internal programs with access to `rind`'s internal state.
+	- [x] Plugin loader
+	- [x] Plugin base
+	- [ ] Plugin regisry
+	- [ ] Plugin index
+	- [ ] Plugin caps
+
+
+## Testing
+
+- [ ] **Envs**: Loading `.env` files as user profile and as `rind` config source.
+- [ ] **Reaper**: Zombie process terminator.
+- [ ] **Userspace Services**: Isolate services for user and system.
+- [ ] **Advanced Triggering**: More complex state based service triggers.
+- [x] **State Transcendence**: Auto-activation of states based on dependencies (e.g. `SwayActive` on `UserLoggedIn`).
+- [x] **Detached Transports/Subscribers**: Independent messaging access for external programs.
+- [x] **Service Branching**: Service per state branching.
+- [x] **State Branching**: Many state payloads at once.
+- [x] **Payloads**: Typed support for JSON, String, and Binary data.
+
+
+## Finished
+
+- [ ] **Permissions**: Entity-based(users, groups) access control for internal actions.
+- [x] **State Persistence**: Continuity of state across restarts.
 - [x] **Flow System**: Signal/State definitions and broadcasting.
 - [x] **Base Components**: Main unit components
 	- [x] Models for units, services, mounts, states and signals 
-	- [ ] Reaper
-	- [ ] Auto service stopping
+	- [x] Auto service stopping
 - [x] **Core Architecture**: Core system architecture
 	- [x] Metadata and Models 
 	- [x] Logger
@@ -60,10 +71,10 @@ kanban-plugin: board
 	    - [x] Dispatch 
 	- [x] Orchestrators 
 	- [x] Boot Cycles
-
-
-## Finished
-
+- [x] **Service Management**:
+	- [x] Process spawning and killing stuff.
+	- [x] Dependency based startup (`after`).
+	- [x] Restart polcies.
 
 
 

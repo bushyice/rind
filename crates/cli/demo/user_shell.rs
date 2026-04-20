@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rind_core::utils::read_env_file;
 use std::fs::OpenOptions;
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::os::unix::process::CommandExt;
@@ -17,25 +17,6 @@ fn get_user_info(username: &str) -> Option<(u32, u32, String, String)> {
     }
   }
   None
-}
-
-fn read_env_file(path: &str) -> HashMap<String, String> {
-  let mut out = HashMap::new();
-  let Ok(content) = std::fs::read_to_string(path) else {
-    return out;
-  };
-
-  for raw in content.lines() {
-    let line = raw.trim();
-    if line.is_empty() || line.starts_with('#') {
-      continue;
-    }
-    if let Some((k, v)) = line.split_once('=') {
-      out.insert(k.trim().to_string(), v.trim().to_string());
-    }
-  }
-
-  out
 }
 
 fn resolve_params() -> (String, String, u64) {
@@ -112,12 +93,9 @@ fn main() {
   }
 
   let mut extra_env = if uid == 0 && user == "root" {
-    read_env_file("/etc/env/root.env")
+    read_env_file("/root/.env")
   } else {
-    let mut user_env = read_env_file(&format!("/etc/env/users/{user}.env"));
-    user_env.extend(read_env_file("/etc/env/root.env"));
-    println!("{user_env:?}");
-    user_env
+    read_env_file(&format!("{home}/.env"))
   };
 
   let mut cmd = Command::new(&shell);
