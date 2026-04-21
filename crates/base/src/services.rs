@@ -429,7 +429,7 @@ impl ServiceRuntime {
       .map(|run| {
         let resolved = self.resolve_run_option(run, variable_heap);
         let run_ref = resolved.as_ref().unwrap_or(run);
-        self.spawn_process(service, run_ref, log, branch_ctx, sm)
+        self.spawn_process(service, run_ref, log, branch_ctx, sm, variable_heap)
       })
       .collect()
   }
@@ -507,6 +507,7 @@ impl ServiceRuntime {
     log: &LogHandle,
     branch_ctx: Option<&ServiceBranchContext>,
     sm: Option<&StateMachine>,
+    variables: Option<&VariableHeap>,
   ) -> anyhow::Result<ChildInstance> {
     let mut args = run.args.clone();
     let mut envs = run.env.clone().unwrap_or_default();
@@ -561,6 +562,12 @@ impl ServiceRuntime {
                 if let Some(val) = resolve_state(state_name) {
                   envs.insert(key.to_string(), val);
                 }
+              } else if let (Some(variables), Some(variable)) =
+                (variables, value.strip_prefix("var:"))
+              {
+                if let Some(val) = variables.get(variable) {
+                  envs.insert(key.to_string(), val.to_string());
+                }
               } else {
                 envs.insert(key.to_string(), value.to_string());
               }
@@ -576,6 +583,12 @@ impl ServiceRuntime {
                 let payload = resolve_state(state_name).unwrap_or_default();
                 if !payload.is_empty() {
                   args.push(payload);
+                }
+              } else if let (Some(variables), Some(variable)) =
+                (variables, option.strip_prefix("var:"))
+              {
+                if let Some(val) = variables.get(variable) {
+                  args.push(val.to_string());
                 }
               } else {
                 args.push(option.clone());

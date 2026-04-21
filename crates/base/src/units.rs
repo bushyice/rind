@@ -329,7 +329,7 @@ impl Orchestrator for UnitsOrchestrator {
           for group in units.groups() {
             if let Some(vars) = units.get_in_group::<Variable>(group) {
               for var in vars {
-                variable_heap.register(&var.name, var.default.clone());
+                variable_heap.register(&var.name, var.default.clone(), var.env.clone());
               }
             }
           }

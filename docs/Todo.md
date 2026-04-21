@@ -8,14 +8,18 @@ kanban-plugin: board
 
 - [ ] **Permission Inheritance**: If user has PermissionA and PermissionB inherits PermissionA, then user has PermissionB.
 - [ ] **eBPF Loader**: (maybe?) Loading eBPF at system startup.
+- [ ] **cgroups**: Using linux cgroups for service resource management.
 
 
 ## Doing
 
-- [ ] **Service Cleanup**: Clean service instances with `Exited` states.
+- [ ] **Service Optimization**: 
+	- [ ] Clean service instances with `Exited` states.
+	- [ ] PID-Service mapping for handling service instance checks (e.g. service quits).
 - [ ] **Piping**: Piping and payloads into other states/signals.
 	- [x] Simple circumstantial piping
 	- [ ] General piping
+	- [ ] Signal-to-state merging
 - [ ] **Daemon & CLI**: The cli.
 	- [x] Listing stuff.
 	- [x] Start/Stop.
@@ -24,6 +28,7 @@ kanban-plugin: board
 	- [x] Logger
 	- [ ] Permissions
 	- [x] Invoke-IPC
+	- [ ] State-tree diagram
 - [ ] **Transport Protocols**: Transport protocols.
 	- [x] `stdio`.
 	- [x] `uds`.
@@ -49,6 +54,9 @@ kanban-plugin: board
 - [x] **Service Branching**: Service per state branching.
 - [x] **State Branching**: Many state payloads at once.
 - [x] **Payloads**: Typed support for JSON, String, and Binary data.
+- [ ] **Variables**: Dynamic definition values.
+	- [x] As service run options
+	- [x] As service pipes
 
 
 ## Finished

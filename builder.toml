@@ -500,7 +500,8 @@ disk_permissions = [
 # root_envs = ["RIND", "v0"] # legacy alias
 root_envs = [
   "RIND", "v0",
-  "CPATH", "/usr/include"
+  "CPATH", "/usr/include",
+  "TEST", "some-test"
 ]
 
 [[profile.main.user]]

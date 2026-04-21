@@ -1,9 +1,10 @@
 use rind_core::prelude::*;
 
-#[model(meta_name = name, meta_fields(name, schema, default), derive_metadata(Debug, Clone))]
+#[model(meta_name = name, meta_fields(name, env, default), derive_metadata(Debug, Clone))]
 pub struct Variable {
   pub name: String,
   pub default: Option<toml::Value>,
+  pub env: Option<String>,
 }
 
 use std::collections::HashMap;
@@ -16,6 +17,7 @@ use rind_core::error::CoreError;
 pub struct VariableHeap {
   values: HashMap<String, toml::Value>,
   defaults: HashMap<String, toml::Value>,
+  env_mappings: HashMap<String, String>,
   path: PathBuf,
 }
 
@@ -26,6 +28,7 @@ impl VariableHeap {
     Self {
       values: HashMap::new(),
       defaults: HashMap::new(),
+      env_mappings: HashMap::new(),
       path: path.into(),
     }
   }
@@ -81,19 +84,32 @@ impl VariableHeap {
     Ok(())
   }
 
-  pub fn register(&mut self, id: &str, default: Option<toml::Value>) {
+  pub fn register(&mut self, id: &str, default: Option<toml::Value>, env: Option<String>) {
     self.defaults.insert(
       id.to_string(),
       default.unwrap_or(toml::Value::Boolean(false)),
     );
+    if let Some(env_name) = env {
+      self.env_mappings.insert(id.to_string(), env_name);
+    }
   }
 
   pub fn set(&mut self, id: &str, value: toml::Value) {
     self.values.insert(id.to_string(), value);
   }
 
-  pub fn get(&self, id: &str) -> Option<&toml::Value> {
-    self.values.get(id).or_else(|| self.defaults.get(id))
+  pub fn get(&self, id: &str) -> Option<toml::Value> {
+    if let Some(val) = self.values.get(id) {
+      return Some(val.clone());
+    }
+
+    if let Some(env_name) = self.env_mappings.get(id) {
+      if let Ok(val) = std::env::var(env_name) {
+        return Some(toml::Value::String(val));
+      }
+    }
+
+    self.defaults.get(id).cloned()
   }
 
   pub fn contains(&self, id: &str) -> bool {

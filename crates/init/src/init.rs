@@ -181,6 +181,14 @@ fn terminate_all_processes() {
   }
 }
 
+fn load_env() {
+  unsafe {
+    for (key, value) in rind_core::utils::read_env_file("/etc/.env") {
+      std::env::set_var(&key, &value);
+    }
+  }
+}
+
 fn process_lifecycle_action(
   action: LifecycleAction,
   boot: &mut BootEngine,
@@ -190,6 +198,7 @@ fn process_lifecycle_action(
 ) -> bool {
   match action {
     LifecycleAction::ReloadUnits => {
+      load_env();
       let _ = boot.reload_units_collection(metadata, instances, runtime);
       true
     }
@@ -224,13 +233,7 @@ fn process_lifecycle_action(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-  if PathBuf::from("/etc/.env").exists() {
-    unsafe {
-      for (key, value) in read_env_file("/etc/.env") {
-        std::env::set_var(&key, &value);
-      }
-    }
-  }
+  load_env();
 
   let units_dir = if let Ok(path) = std::env::var("RIND_UNITS_DIR") {
     PathBuf::from(path)
