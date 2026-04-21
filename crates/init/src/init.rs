@@ -41,8 +41,6 @@ impl Orchestrator for BootOrchestrator {
 
     ctx.dispatch("services", "watch_events", json!({}))?;
 
-    // ctx.dispatch("services", "start_all", json!({}))?;
-
     ctx.dispatch("ipc", "init_actions", json!({}))?;
     ctx.dispatch("ipc", "start_server", json!({}))?;
 
@@ -53,6 +51,7 @@ impl Orchestrator for BootOrchestrator {
     ctx.dispatch("networking", "scan", json!({}))?;
     ctx.dispatch("networking", "configure", json!({}))?;
 
+    ctx.dispatch("services", "start_all", json!({}))?;
     ctx.dispatch("services", "evaluate_triggers", json!({}))?;
 
     Ok(())

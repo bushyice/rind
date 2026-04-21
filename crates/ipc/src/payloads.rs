@@ -7,7 +7,10 @@ pub struct ListPayload {
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct ServicePayload {
   pub name: String,
-  pub force: Option<bool>,
+  #[serde(default)]
+  pub force: bool,
+  #[serde(default)]
+  pub persist: bool,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]

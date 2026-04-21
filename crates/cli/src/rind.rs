@@ -111,6 +111,9 @@ enum Commands {
 
     #[arg(short = 't', long, default_value = "service")]
     r#type: String,
+
+    #[arg(short = 'p', long)]
+    persist: bool,
   },
 
   Stop {
@@ -122,6 +125,9 @@ enum Commands {
 
     #[arg(short = 'f', long)]
     force: bool,
+
+    #[arg(short = 'p', long)]
+    persist: bool,
   },
 
   Invoke {
@@ -529,19 +535,32 @@ fn main() {
     Commands::Shutdown => {
       handle_send_raw!("shutdown", "{}".to_string());
     }
-    Commands::Start { name, r#type: _ } => {
-      handle_send!("start_service", &ServicePayload { force: None, name });
+    Commands::Start {
+      name,
+      r#type: _,
+      persist,
+    } => {
+      handle_send!(
+        "start_service",
+        &ServicePayload {
+          force: false,
+          name,
+          persist
+        }
+      );
     }
     Commands::Stop {
       name,
       r#type: _,
       force,
+      persist,
     } => {
       handle_send!(
-        "start_service",
+        "stop_service",
         &ServicePayload {
-          force: Some(force),
-          name
+          force: force,
+          name,
+          persist
         }
       );
     }
