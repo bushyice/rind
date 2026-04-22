@@ -16,17 +16,17 @@ pub const FLOW_RUNTIME_ID: &str = "flow";
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum FlowItem {
-  Simple(String),
+  Simple(Ustr),
   Detailed {
-    state: Option<String>,
-    signal: Option<String>,
+    state: Option<Ustr>,
+    signal: Option<Ustr>,
     target: Option<FlowMatchOperation>,
     branch: Option<FlowMatchOperation>,
   },
 }
 
 impl FlowItem {
-  pub fn name(&self) -> &String {
+  pub fn name(&self) -> &Ustr {
     match self {
       FlowItem::Simple(s) => s,
       FlowItem::Detailed {
@@ -48,21 +48,21 @@ impl FlowItem {
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum FlowMatchOperation {
-  Eq(String),
+  Eq(Ustr),
   Options {
     binary: Option<bool>,
-    contains: Option<String>,
+    contains: Option<Ustr>,
     r#as: Option<serde_json::Value>,
   },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Trigger {
-  pub script: Option<String>,
-  pub exec: Option<String>,
-  pub args: Option<Vec<String>>,
-  pub state: Option<String>,
-  pub signal: Option<String>,
+  pub script: Option<Ustr>,
+  pub exec: Option<Ustr>,
+  pub args: Option<Vec<Ustr>>,
+  pub state: Option<Ustr>,
+  pub signal: Option<Ustr>,
   pub payload: Option<serde_json::Value>,
 }
 
@@ -166,7 +166,7 @@ impl FlowPayload {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FlowInstance {
-  pub name: String,
+  pub name: Ustr,
   pub payload: FlowPayload,
   pub r#type: FlowType,
 }
@@ -180,7 +180,7 @@ impl From<StateEntry> for FlowInstance {
       return instance;
     }
     FlowInstance {
-      name: String::new(),
+      name: Ustr::from(""),
       payload: FlowPayload::None(false),
       r#type: FlowType::State,
     }
@@ -227,16 +227,16 @@ pub struct AutoPayloadConfig {
   derive_metadata(Debug, Clone)
 )]
 pub struct State {
-  pub name: String,
+  pub name: Ustr,
   pub payload: FlowPayloadType,
   #[serde(rename = "activate-on-none")]
-  pub activate_on_none: Option<Vec<String>>,
+  pub activate_on_none: Option<Vec<Ustr>>,
   pub after: Option<Vec<FlowItem>>,
-  pub branch: Option<Vec<String>>,
+  pub branch: Option<Vec<Ustr>>,
   #[serde(rename = "auto-payload")]
   pub auto_payload: Option<AutoPayloadConfig>,
   pub subscribers: Option<Vec<TransportMethod>>,
-  pub broadcast: Option<Vec<String>>,
+  pub broadcast: Option<Vec<Ustr>>,
   pub permissions: Option<Vec<u16>>,
 }
 
@@ -246,18 +246,18 @@ pub struct State {
   derive_metadata(Debug, Clone)
 )]
 pub struct Signal {
-  pub name: String,
+  pub name: Ustr,
   pub payload: FlowPayloadType,
   pub after: Option<Vec<FlowItem>>,
-  pub branch: Option<Vec<String>>,
+  pub branch: Option<Vec<Ustr>>,
   pub subscribers: Option<Vec<TransportMethod>>,
-  pub broadcast: Option<Vec<String>>,
+  pub broadcast: Option<Vec<Ustr>>,
   pub permissions: Option<Vec<u16>>,
 }
 
 #[derive(Clone)]
 pub struct StateMachine {
-  pub states: HashMap<String, Vec<FlowInstance>>,
+  pub states: HashMap<Ustr, Vec<FlowInstance>>,
   persistence: StatePersistence,
 }
 
@@ -278,10 +278,10 @@ impl StateMachine {
       .into_iter()
       .map(|(name, i)| {
         (
-          name.clone(),
+          Ustr::from(name),
           i.into_iter()
             .map(FlowInstance::from)
-            .filter(|x| !x.name.is_empty())
+            .filter(|x| !x.name.as_str().is_empty())
             .collect(),
         )
       })
@@ -295,11 +295,11 @@ impl StateMachine {
       .iter()
       .filter_map(|(name, states)| {
         // State impermanence
-        if name.contains("@_") {
+        if name.as_str().contains("@_") {
           return None;
         }
         Some((
-          name.clone(),
+          name.to_string(),
           states.iter().map(StateEntry::from).collect::<Vec<_>>(),
         ))
       })
@@ -330,7 +330,7 @@ impl FlowRuntime {
         "transport",
         "setup_uds",
         RuntimePayload::default()
-          .insert("endpoint", endpoint.to_string())
+          .insert("endpoint", endpoint.to_ustr())
           .insert("permissions", subscriber.get_permissions()),
       );
     }
@@ -357,10 +357,10 @@ impl FlowRuntime {
         "transport",
         "send",
         RuntimePayload::default()
-          .insert("endpoint", endpoint.to_string())
+          .insert("endpoint", endpoint.to_ustr())
           .insert("type", "state".to_string())
-          .insert("name", endpoint.to_string())
-          .insert("action", action)
+          .insert("name", endpoint.to_ustr())
+          .insert("action", action.to_string())
           .insert("payload", payload.to_json()),
       );
     }
@@ -368,7 +368,7 @@ impl FlowRuntime {
 
   fn setup_all_state_subscribers(
     dispatch: &RuntimeDispatcher,
-    state_defs: &[(String, Arc<StateMetadata>)],
+    state_defs: &[(Ustr, Arc<StateMetadata>)],
   ) {
     for (name, def) in state_defs {
       if let Some(subscribers) = def.subscribers.as_deref() {
@@ -381,14 +381,16 @@ impl FlowRuntime {
 
   fn state_subscribers_for<'a>(
     name: &str,
-    state_defs: &'a [(String, Arc<StateMetadata>)],
+    state_defs: &'a [(Ustr, Arc<StateMetadata>)],
   ) -> Option<&'a [TransportMethod]> {
     state_defs
       .iter()
-      .find(|(full_name, _)| full_name == name)
+      .find(|(full_name, _)| full_name.as_str() == name)
       .or_else(|| {
         let item_name = name.split_once('@').map(|(_, n)| n).unwrap_or(name);
-        state_defs.iter().find(|(_, d)| d.name == item_name)
+        state_defs
+          .iter()
+          .find(|(_, d)| d.name.as_str() == item_name)
       })
       .and_then(|(_, d)| d.subscribers.as_deref())
   }
@@ -410,16 +412,17 @@ impl FlowRuntime {
 
   fn set_state(
     sm: &mut StateMachine,
-    name: String,
+    name: impl Into<Ustr>,
     payload: Option<FlowPayload>,
-    state_defs: &[(String, Arc<StateMetadata>)],
-    signal_defs: &[(String, Arc<SignalMetadata>)],
-    guard: &mut HashSet<String>,
+    state_defs: &[(Ustr, Arc<StateMetadata>)],
+    signal_defs: &[(Ustr, Arc<SignalMetadata>)],
+    guard: &mut HashSet<Ustr>,
     event_bus: &EventBus,
     dispatch: &RuntimeDispatcher,
   ) -> Result<(), CoreError> {
+    let name = name.into();
     let branch_sig = payload_signature(&payload);
-    let guard_key = format!("apply::{name}::{branch_sig}");
+    let guard_key = Ustr::from(format!("apply::{name}::{branch_sig}"));
     if guard.contains(&guard_key) {
       return Ok(());
     }
@@ -429,8 +432,14 @@ impl FlowRuntime {
       .iter()
       .find(|(full_name, _)| *full_name == name)
       .or_else(|| {
-        let item_name = name.split_once('@').map(|(_, n)| n).unwrap_or(&name);
-        state_defs.iter().find(|(_, d)| d.name == item_name)
+        let item_name = name
+          .as_str()
+          .split_once('@')
+          .map(|(_, n)| n)
+          .unwrap_or(name.as_str());
+        state_defs
+          .iter()
+          .find(|(_, d)| d.name.as_str() == item_name)
       })
       .map(|(_, d)| d.clone())
       .ok_or_else(|| CoreError::InvalidState(format!("state not found: {name}")))?;
@@ -465,7 +474,7 @@ impl FlowRuntime {
       def.subscribers.as_deref(),
     );
 
-    let entry = sm.states.entry(name.clone()).or_default();
+    let entry = sm.states.entry(name).or_default();
     match &instance.payload {
       FlowPayload::String(_) | FlowPayload::Bytes(_) | FlowPayload::None(_) => {
         entry.clear();
@@ -476,10 +485,10 @@ impl FlowRuntime {
           .as_ref()
           .map(|b| {
             b.iter()
-              .map(|key| branch_target_key(key.as_str()).to_string())
-              .collect::<Vec<String>>()
+              .map(|key| Ustr::from(branch_target_key(key.as_str())))
+              .collect::<Vec<Ustr>>()
           })
-          .unwrap_or_else(|| vec!["id".to_string()]);
+          .unwrap_or_else(|| vec!["id".into()]);
 
         let new_key = json_branch_key(&new_json.into_json(), &branch_keys).ok_or_else(|| {
           guard.remove(&guard_key);
@@ -526,9 +535,9 @@ impl FlowRuntime {
     sm: &mut StateMachine,
     name: &str,
     filter: Option<FlowMatchOperation>,
-    state_defs: &[(String, Arc<StateMetadata>)],
-    signal_defs: &[(String, Arc<SignalMetadata>)],
-    guard: &mut HashSet<String>,
+    state_defs: &[(Ustr, Arc<StateMetadata>)],
+    signal_defs: &[(Ustr, Arc<SignalMetadata>)],
+    guard: &mut HashSet<Ustr>,
     event_bus: &EventBus,
     dispatch: &RuntimeDispatcher,
   ) {
@@ -543,11 +552,11 @@ impl FlowRuntime {
 
       for mut branch in to_remove {
         branch.r#type = FlowType::State;
-        let guard_key = format!(
+        let guard_key = Ustr::from(format!(
           "revert::{}::{}",
           branch.name,
           payload_signature(&Some(branch.payload.clone()))
-        );
+        ));
         if guard.contains(&guard_key) {
           continue;
         }
@@ -583,23 +592,30 @@ impl FlowRuntime {
       }
 
       if !to_keep.is_empty() {
-        sm.states.insert(name.to_string(), to_keep);
+        sm.states.insert(Ustr::from(name.to_string()), to_keep);
       }
     }
   }
 
   fn emit_signal(
-    name: String,
+    name: impl Into<Ustr>,
     payload: Option<FlowPayload>,
-    signal_defs: &[(String, Arc<SignalMetadata>)],
+    signal_defs: &[(Ustr, Arc<SignalMetadata>)],
     event_bus: &EventBus,
   ) -> Result<(), CoreError> {
+    let name = name.into();
     let def = signal_defs
       .iter()
       .find(|(full_name, _)| *full_name == name)
       .or_else(|| {
-        let item_name = name.split_once('@').map(|(_, n)| n).unwrap_or(&name);
-        signal_defs.iter().find(|(_, d)| d.name == item_name)
+        let item_name = name
+          .as_str()
+          .split_once('@')
+          .map(|(_, n)| n)
+          .unwrap_or(name.as_str());
+        signal_defs
+          .iter()
+          .find(|(_, d)| d.name.as_str() == item_name)
       })
       .map(|(_, d)| d.clone())
       .ok_or_else(|| CoreError::InvalidState(format!("signal not found: {name}")))?;
@@ -624,11 +640,11 @@ impl FlowRuntime {
   fn reconcile_signal_transcendence(
     sm: &StateMachine,
     source: &FlowInstance,
-    signal_defs: &[(String, Arc<SignalMetadata>)],
+    signal_defs: &[(Ustr, Arc<SignalMetadata>)],
     event_bus: &EventBus,
-    emitted: &mut HashSet<String>,
+    emitted: &mut HashSet<Ustr>,
   ) {
-    let dependents: Vec<(String, FlowPayload)> = signal_defs
+    let dependents: Vec<(Ustr, FlowPayload)> = signal_defs
       .iter()
       .filter_map(|(full_name, def)| {
         let after = def.after.as_ref()?;
@@ -651,7 +667,7 @@ impl FlowRuntime {
       .collect();
 
     for (signal_name, payload) in dependents {
-      let sig = format!("{signal_name}|{}", payload.to_string_payload());
+      let sig = Ustr::from(format!("{signal_name}|{}", payload.to_string_payload()));
       if emitted.contains(&sig) {
         continue;
       }
@@ -664,13 +680,13 @@ impl FlowRuntime {
     sm: &mut StateMachine,
     source: &FlowInstance,
     action: FlowAction,
-    state_defs: &[(String, Arc<StateMetadata>)],
-    signal_defs: &[(String, Arc<SignalMetadata>)],
-    guard: &mut HashSet<String>,
+    state_defs: &[(Ustr, Arc<StateMetadata>)],
+    signal_defs: &[(Ustr, Arc<SignalMetadata>)],
+    guard: &mut HashSet<Ustr>,
     event_bus: &EventBus,
     dispatch: &RuntimeDispatcher,
   ) {
-    let dependents: Vec<(String, FlowPayload)> = state_defs
+    let dependents: Vec<(Ustr, FlowPayload)> = state_defs
       .iter()
       .filter_map(|(full_name, def)| {
         let after = def.after.as_ref()?;
@@ -731,13 +747,13 @@ impl FlowRuntime {
 
   fn reconcile_activate_on_none(
     sm: &mut StateMachine,
-    state_defs: &[(String, Arc<StateMetadata>)],
-    signal_defs: &[(String, Arc<SignalMetadata>)],
-    guard: &mut HashSet<String>,
+    state_defs: &[(Ustr, Arc<StateMetadata>)],
+    signal_defs: &[(Ustr, Arc<SignalMetadata>)],
+    guard: &mut HashSet<Ustr>,
     event_bus: &EventBus,
     dispatch: &RuntimeDispatcher,
   ) {
-    let targets: Vec<(String, bool, FlowPayload)> = state_defs
+    let targets: Vec<(Ustr, bool, FlowPayload)> = state_defs
       .iter()
       .filter_map(|(full_name, def)| {
         let deps = def.activate_on_none.as_ref()?;
@@ -784,22 +800,22 @@ impl FlowRuntime {
   fn collect_defs(
     metadata: &MetadataRegistry,
   ) -> (
-    Vec<(String, Arc<StateMetadata>)>,
-    Vec<(String, Arc<SignalMetadata>)>,
+    Vec<(Ustr, Arc<StateMetadata>)>,
+    Vec<(Ustr, Arc<SignalMetadata>)>,
   ) {
     let mut state_defs = Vec::new();
     let mut signal_defs = Vec::new();
 
     if let Some(m) = metadata.metadata("units") {
       for group in m.groups() {
-        if let Some(states) = metadata.group_items::<State>("units", group) {
+        if let Some(states) = metadata.group_items::<State>("units", group.clone()) {
           for s in states {
-            state_defs.push((format!("{group}@{}", s.name), s));
+            state_defs.push((Ustr::from(format!("{group}@{}", s.name)), s));
           }
         }
-        if let Some(signals) = metadata.group_items::<Signal>("units", group) {
+        if let Some(signals) = metadata.group_items::<Signal>("units", group.clone()) {
           for s in signals {
-            signal_defs.push((format!("{group}@{}", s.name), s));
+            signal_defs.push((Ustr::from(format!("{group}@{}", s.name)), s));
           }
         }
       }
@@ -826,7 +842,7 @@ impl Runtime for FlowRuntime {
 
     match action {
       "set_state" => {
-        let name = payload.get::<String>("name")?;
+        let name = payload.get::<Ustr>("name")?;
         let flow_payload = FlowPayload::from_json(payload.get::<serde_json::Value>("payload").ok());
 
         let sm = ctx
@@ -850,12 +866,12 @@ impl Runtime for FlowRuntime {
         Self::save_state_machine(sm)?;
 
         let mut fields = HashMap::new();
-        fields.insert("name".to_string(), name);
+        fields.insert("name".to_string(), name.to_string());
         fields.insert("payload".into(), flow_payload.to_string_payload());
         log.log(LogLevel::Trace, "flow-runtime", "setting state", fields);
       }
       "remove_state" => {
-        let name = payload.get::<String>("name")?;
+        let name = payload.get::<Ustr>("name")?;
         let filter_json: Option<serde_json::Value> = payload.get("filter").ok();
         let filter = filter_json.and_then(|v| serde_json::from_value(v).ok());
 
@@ -868,7 +884,7 @@ impl Runtime for FlowRuntime {
         let mut guard = HashSet::new();
         Self::remove_state(
           sm,
-          &name,
+          name.as_str(),
           filter.clone(),
           &state_defs,
           &signal_defs,
@@ -879,12 +895,12 @@ impl Runtime for FlowRuntime {
         Self::save_state_machine(sm)?;
 
         let mut fields = HashMap::new();
-        fields.insert("name".to_string(), name);
+        fields.insert("name".to_string(), name.to_string());
         fields.insert("payload".into(), format!("{filter:?}"));
         log.log(LogLevel::Trace, "flow-runtime", "removing state", fields);
       }
       "emit_signal" => {
-        let name = payload.get::<String>("name")?;
+        let name = payload.get::<Ustr>("name")?;
         let flow_payload = FlowPayload::from_json(payload.get("payload").ok());
         Self::emit_signal(
           name.clone(),
@@ -1126,7 +1142,7 @@ impl<'a> FlowRuntimePayload<'a> {
 
 impl<'a> Into<RuntimePayload> for FlowRuntimePayload<'a> {
   fn into(self) -> RuntimePayload {
-    let mut p = RuntimePayload::default().insert("name", self.name.to_string());
+    let mut p = RuntimePayload::default().insert::<Ustr>("name", self.name.into());
 
     if let Some(p1) = self.payload {
       p = p.insert("payload", p1);

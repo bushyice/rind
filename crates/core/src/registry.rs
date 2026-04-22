@@ -9,23 +9,26 @@ use crate::{
   metadata::{Metadata, Model, NamedItem},
 };
 
+use crate::types::Ustr;
+
 #[derive(Default)]
 pub struct MetadataRegistry {
-  metadata: HashMap<String, Arc<Metadata>>,
-  pub indexes: HashMap<TypeId, HashMap<String, usize>>,
+  metadata: HashMap<Ustr, Arc<Metadata>>,
+  pub indexes: HashMap<TypeId, HashMap<Ustr, usize>>,
 }
 
 impl MetadataRegistry {
   pub fn insert_metadata(&mut self, metadata: Metadata) {
+    let name = metadata.name.clone();
     self
       .metadata
-      .insert(metadata.name.clone(), Arc::new(metadata));
+      .insert(name, Arc::new(metadata));
   }
 
   pub fn load_group_from_toml(
     &mut self,
     metadata: &mut Metadata,
-    group: &str,
+    group: impl Into<Ustr>,
     source: &str,
   ) -> anyhow::Result<()> {
     metadata.from_toml(source, group)?;
@@ -35,41 +38,49 @@ impl MetadataRegistry {
 
   pub fn group_items<T: Model + 'static>(
     &self,
-    metadata: &str,
-    group: &str,
+    metadata: impl Into<Ustr>,
+    group: impl Into<Ustr>,
   ) -> Option<Vec<Arc<T::M>>> {
+    let metadata = metadata.into();
+    let group = group.into();
     self
       .metadata
-      .get(metadata)?
+      .get(&metadata)?
       .get_in_group::<T>(group)
       .map(|x| x.iter().map(|x| x.clone()).collect())
   }
 
-  pub fn items<T: Model + 'static>(&self, metadata: &str) -> Option<Vec<(String, Arc<T::M>)>> {
-    let m = self.metadata.get(metadata)?;
+  pub fn items<T: Model + 'static>(
+    &self,
+    metadata: impl Into<Ustr>,
+  ) -> Option<Vec<(Ustr, Arc<T::M>)>> {
+    let metadata = metadata.into();
+    let m = self.metadata.get(&metadata)?;
 
     Some(
       m.groups()
         .flat_map(|group| {
-          m.get_in_group::<T>(group)
+          m.get_in_group::<T>(group.clone())
             .into_iter()
             .flatten()
-            .map(move |item| (group.to_string(), item.clone()))
+            .map(move |item| (group.clone(), item.clone()))
         })
         .collect(),
     )
   }
 
-  pub fn groups(&self, metadata: &str) -> Option<Vec<&str>> {
-    let m = self.metadata.get(metadata)?;
+  pub fn groups(&self, metadata: impl Into<Ustr>) -> Option<Vec<Ustr>> {
+    let metadata = metadata.into();
+    let m = self.metadata.get(&metadata)?;
 
     Some(m.groups().collect())
   }
 
-  pub fn ensure_index_for_type<T>(&mut self, metadata: &str) -> anyhow::Result<()>
+  pub fn ensure_index_for_type<T>(&mut self, metadata: impl Into<Ustr>) -> anyhow::Result<()>
   where
     T: Model + 'static,
   {
+    let metadata = metadata.into();
     let type_id = TypeId::of::<T>();
     if self.indexes.contains_key(&type_id) {
       return Ok(());
@@ -77,14 +88,14 @@ impl MetadataRegistry {
 
     let m = self
       .metadata
-      .get_mut(metadata)
+      .get_mut(&metadata)
       .ok_or(CoreError::MetadataNotFound(metadata.to_string()))?;
 
     let mut map = HashMap::new();
     for group in m.groups() {
-      if let Some(items) = m.get_in_group::<T>(group) {
+      if let Some(items) = m.get_in_group::<T>(group.clone()) {
         for (idx, item) in items.iter().enumerate() {
-          map.insert(format!("{group}@{}", item.name()), idx);
+          map.insert(Ustr::from(format!("{group}@{}", item.name())), idx);
         }
       }
     }
@@ -94,24 +105,28 @@ impl MetadataRegistry {
     Ok(())
   }
 
-  pub fn find<T>(&self, metadata: &str, full_name: &str) -> Option<Arc<T::M>>
+  pub fn find<T>(&self, metadata: impl Into<Ustr>, full_name: impl Into<Ustr>) -> Option<Arc<T::M>>
   where
     T: Model + 'static,
   {
-    let (group, _) = full_name.split_once('@')?;
+    let metadata = metadata.into();
+    let full_name = full_name.into();
+    let (group, _) = full_name.as_str().split_once('@')?;
 
-    let idx = *self.indexes.get(&TypeId::of::<T>())?.get(full_name)?;
+    let idx = *self.indexes.get(&TypeId::of::<T>())?.get(&full_name)?;
     self
       .group_items::<T>(metadata, group)?
       .get(idx)
       .map(|x| x.clone())
   }
 
-  pub fn lookup<T>(&self, metadata: &str, full_name: &str) -> Option<Arc<T::M>>
+  pub fn lookup<T>(&self, metadata: impl Into<Ustr>, full_name: impl Into<Ustr>) -> Option<Arc<T::M>>
   where
     T: Model + 'static,
   {
-    let (group, item_name) = full_name.split_once('@')?;
+    let metadata = metadata.into();
+    let full_name = full_name.into();
+    let (group, item_name) = full_name.as_str().split_once('@')?;
     self
       .group_items::<T>(metadata, group)?
       .iter()
@@ -119,26 +134,28 @@ impl MetadataRegistry {
       .map(|x| x.clone())
   }
 
-  pub fn lookup_in_any_group<T>(&self, metadata: &str, item_name: &str) -> Option<Arc<T::M>>
+  pub fn lookup_in_any_group<T>(&self, metadata: impl Into<Ustr>, item_name: &str) -> Option<Arc<T::M>>
   where
     T: Model + 'static,
   {
-    let m = self.metadata.get(metadata)?;
+    let metadata = metadata.into();
+    let m = self.metadata.get(&metadata)?;
     for group in m.groups() {
       let full = format!("{group}@{item_name}");
-      if let Some(found) = self.lookup::<T>(metadata, full.as_str()) {
+      if let Some(found) = self.lookup::<T>(metadata.clone(), full.as_str()) {
         return Some(found);
       }
     }
     None
   }
 
-  pub fn metadata(&self, metadata: &str) -> Option<Arc<Metadata>> {
-    self.metadata.get(metadata).map(|x| x.clone())
+  pub fn metadata(&self, metadata: impl Into<Ustr>) -> Option<Arc<Metadata>> {
+    self.metadata.get(&metadata.into()).map(|x| x.clone())
   }
 
-  pub fn remove_metadata(&mut self, metadata: &str) -> bool {
-    let removed = self.metadata.remove(metadata).is_some();
+  pub fn remove_metadata(&mut self, metadata: impl Into<Ustr>) -> bool {
+    let metadata = metadata.into();
+    let removed = self.metadata.remove(&metadata).is_some();
     if removed {
       self.indexes.clear();
     }
@@ -146,7 +163,7 @@ impl MetadataRegistry {
   }
 }
 
-pub type InstanceMap = HashMap<String, Vec<Box<dyn Any>>>;
+pub type InstanceMap = HashMap<Ustr, Vec<Box<dyn Any>>>;
 
 pub struct InstanceRegistry<'a> {
   pub metadata: &'a MetadataRegistry,
@@ -173,18 +190,20 @@ impl<'a> InstanceRegistry<'a> {
 
   pub fn instantiate<T>(
     &mut self,
-    metadata: &str,
-    name: &str,
+    metadata: impl Into<Ustr>,
+    name: impl Into<Ustr>,
     instantiate: impl Fn(Arc<T::M>) -> anyhow::Result<T>,
   ) -> anyhow::Result<&mut T>
   where
     T: Model + 'static,
   {
-    let full_name = format!("{metadata}@{name}");
-    let metadata_item = if name.contains('@') {
-      self.metadata.lookup::<T>(metadata, name)
+    let metadata = metadata.into();
+    let name = name.into();
+    let full_name = Ustr::from(format!("{metadata}@{name}"));
+    let metadata_item = if name.as_str().contains('@') {
+      self.metadata.lookup::<T>(metadata.clone(), name.clone())
     } else {
-      self.metadata.lookup_in_any_group::<T>(metadata, name)
+      self.metadata.lookup_in_any_group::<T>(metadata.clone(), name.as_str())
     }
     .ok_or(CoreError::MetadataNotFound(metadata.to_string()))?;
 
@@ -203,14 +222,16 @@ impl<'a> InstanceRegistry<'a> {
 
   pub fn instantiate_one<T>(
     &mut self,
-    metadata: &str,
-    name: &str,
+    metadata: impl Into<Ustr>,
+    name: impl Into<Ustr>,
     instantiate: impl Fn(Arc<T::M>) -> anyhow::Result<T>,
   ) -> anyhow::Result<&mut T>
   where
     T: Model + 'static,
   {
-    let full_name = format!("{metadata}@{name}");
+    let metadata = metadata.into();
+    let name = name.into();
+    let full_name = Ustr::from(format!("{metadata}@{name}"));
     let insts = self.instances.get(&full_name);
     if let None = insts {
       self.instantiate(metadata, name, instantiate)
@@ -230,27 +251,31 @@ impl<'a> InstanceRegistry<'a> {
     }
   }
 
-  pub fn instances<T>(&self, metadata: &str, name: &str) -> anyhow::Result<Vec<&T>>
+  pub fn instances<T>(&self, metadata: impl Into<Ustr>, name: impl Into<Ustr>) -> anyhow::Result<Vec<&T>>
   where
     T: Model + 'static,
   {
-    let full_name = format!("{metadata}@{name}");
+    let metadata = metadata.into();
+    let name = name.into();
+    let full_name = Ustr::from(format!("{metadata}@{name}"));
     Ok(
       self
         .instances
         .get(&full_name)
-        .ok_or(CoreError::MissingInstances(full_name))?
+        .ok_or(CoreError::MissingInstances(full_name.to_string()))?
         .iter()
         .map(|x| x.downcast_ref::<T>().expect("instance type mismatch"))
         .collect(),
     )
   }
 
-  pub fn instances_mut<T>(&mut self, metadata: &str, name: &str) -> anyhow::Result<Vec<&mut T>>
+  pub fn instances_mut<T>(&mut self, metadata: impl Into<Ustr>, name: impl Into<Ustr>) -> anyhow::Result<Vec<&mut T>>
   where
     T: Model + 'static,
   {
-    let full_name = format!("{metadata}@{name}");
+    let metadata = metadata.into();
+    let name = name.into();
+    let full_name = Ustr::from(format!("{metadata}@{name}"));
     Ok(
       self
         .instances
@@ -262,15 +287,17 @@ impl<'a> InstanceRegistry<'a> {
     )
   }
 
-  pub fn as_one<T>(&self, metadata: &str, name: &str) -> anyhow::Result<&T>
+  pub fn as_one<T>(&self, metadata: impl Into<Ustr>, name: impl Into<Ustr>) -> anyhow::Result<&T>
   where
     T: Model + 'static,
   {
-    let full_name = format!("{metadata}@{name}");
+    let metadata = metadata.into();
+    let name = name.into();
+    let full_name = Ustr::from(format!("{metadata}@{name}"));
     let instances = self
       .instances
       .get(&full_name)
-      .ok_or(CoreError::MissingInstances(full_name))?;
+      .ok_or(CoreError::MissingInstances(full_name.to_string()))?;
 
     Ok(
       instances
@@ -281,15 +308,17 @@ impl<'a> InstanceRegistry<'a> {
     )
   }
 
-  pub fn as_one_mut<T>(&mut self, metadata: &str, name: &str) -> anyhow::Result<&mut T>
+  pub fn as_one_mut<T>(&mut self, metadata: impl Into<Ustr>, name: impl Into<Ustr>) -> anyhow::Result<&mut T>
   where
     T: Model + 'static,
   {
-    let full_name = format!("{metadata}@{name}");
+    let metadata = metadata.into();
+    let name = name.into();
+    let full_name = Ustr::from(format!("{metadata}@{name}"));
     let instances = self
       .instances
       .get_mut(&full_name)
-      .ok_or(CoreError::MissingInstances(full_name))?;
+      .ok_or(CoreError::MissingInstances(full_name.to_string()))?;
 
     Ok(
       instances
@@ -300,21 +329,21 @@ impl<'a> InstanceRegistry<'a> {
     )
   }
 
-  pub fn singleton<T: 'static>(&self, key: &str) -> Option<&T> {
-    self.instances.get(key)?.first()?.downcast_ref::<T>()
+  pub fn singleton<T: 'static>(&self, key: impl Into<Ustr>) -> Option<&T> {
+    self.instances.get(&key.into())?.first()?.downcast_ref::<T>()
   }
 
-  pub fn singleton_mut<T: 'static>(&mut self, key: &str) -> Option<&mut T> {
+  pub fn singleton_mut<T: 'static>(&mut self, key: impl Into<Ustr>) -> Option<&mut T> {
     self
       .instances
-      .get_mut(key)?
+      .get_mut(&key.into())?
       .first_mut()?
       .downcast_mut::<T>()
   }
 
   pub fn singleton_or_insert_with<T: 'static>(
     &mut self,
-    key: impl Into<String>,
+    key: impl Into<Ustr>,
     init: impl FnOnce() -> T,
   ) -> &mut T {
     let key = key.into();
@@ -343,7 +372,7 @@ impl<'a> InstanceRegistry<'a> {
 }
 
 macro_rules! impl_handle_tuple {
-  (@string $T:ident) => { String };
+  (@string $T:ident) => { $crate::types::Ustr };
   ($($T:ident),+) => {
     impl_handle_tuple!($($T : $T),+);
   };
@@ -375,7 +404,7 @@ macro_rules! impl_handle_tuple {
           let mut $k = {
             let val = store.instances
               .remove(&$k)
-              .ok_or(CoreError::MissingField { path: $k.clone() })?;
+              .ok_or(CoreError::MissingField { path: $k.to_string() })?;
             ($k, val)
           };
         )+
@@ -386,12 +415,12 @@ macro_rules! impl_handle_tuple {
               {
                 let val = $k.1
                   .first_mut()
-                  .ok_or(CoreError::MissingField { path: $k.0.clone() })?;
+                  .ok_or(CoreError::MissingField { path: $k.0.to_string() })?;
 
                 let downcasted = val
                   .downcast_mut::<$T>()
                   .ok_or(CoreError::TypeMismatch {
-                    path: $k.0.clone(),
+                    path: $k.0.to_string(),
                     expected: stringify!($T).into(),
                   })?;
 
@@ -428,13 +457,13 @@ mod tests {
 
   #[model(meta_name = name, meta_fields(name, run))]
   struct Service {
-    name: String,
-    run: Option<String>,
+    name: Ustr,
+    run: Option<Ustr>,
   }
 
   #[model(meta_name = target, meta_fields(target))]
   struct Mount {
-    target: String,
+    target: Ustr,
   }
 
   #[test]
@@ -465,8 +494,8 @@ name = "api"
     let web = registry
       .find::<Service>("units", "demo@web")
       .expect("service should be indexed by unit@item");
-    assert_eq!(web.name, "web");
-    assert_eq!(web.run.as_deref(), Some("/bin/webd"));
+    assert_eq!(web.name.as_str(), "web");
+    assert_eq!(web.run.as_ref().map(|x| x.as_str()), Some("/bin/webd"));
 
     assert!(registry.find::<Service>("units", "demo@missing").is_none());
     assert!(registry.find::<Service>("units", "missing@web").is_none());

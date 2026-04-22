@@ -83,6 +83,7 @@ pub fn print_unit(unit_name: &String, unit: &UnitItemsSerialized) {
         s.last_state.green(),
         s.after
           .clone()
+          .map(|x| x.iter().map(|x| x.to_string()).collect::<Vec<_>>())
           .unwrap_or(vec!["-".to_string()])
           .join(", ")
           .yellow(),
@@ -98,8 +99,8 @@ pub fn print_unit(unit_name: &String, unit: &UnitItemsSerialized) {
       println!(
         "  {:<20} {:<20} {:<10} {:<}",
         m.target.bold().white(),
-        m.source.clone().unwrap_or("-".to_string()).yellow(),
-        m.fstype.clone().unwrap_or("-".to_string()).cyan(),
+        m.source.clone().unwrap_or("-".into()).yellow(),
+        m.fstype.clone().unwrap_or("-".into()).cyan(),
         if m.mounted {
           "✓".green().to_string()
         } else {
@@ -134,7 +135,7 @@ pub fn print_state(st: &StateSerialized) {
     };
 
     let key = obj
-      .get(pk)
+      .get(&pk.to_string())
       .map(|v| v.to_string())
       .unwrap_or_else(|| "<none>".to_string());
 
@@ -151,7 +152,7 @@ pub fn print_state(st: &StateSerialized) {
 
     for obj in items {
       for (k, v) in obj {
-        if k == pk {
+        if k == pk.as_str() {
           continue;
         }
 

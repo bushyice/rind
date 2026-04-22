@@ -44,12 +44,12 @@ pub struct NetworkRoute {
   derive_metadata(Debug, Clone)
 )]
 pub struct NetworkConfig {
-  pub name: String,
+  pub name: Ustr,
   #[serde(default)]
   pub method: NetworkMethod,
-  pub address: Option<String>,
-  pub gateway: Option<String>,
-  pub dns: Option<Vec<String>>,
+  pub address: Option<Ustr>,
+  pub gateway: Option<Ustr>,
+  pub dns: Option<Vec<Ustr>>,
   pub route: Option<Vec<NetworkRoute>>,
 
   // runtime
@@ -67,7 +67,7 @@ impl NetworkConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct WiredInterfaceState {
-  name: String,
+  name: Ustr,
   kind: String,
   operstate: String,
   carrier: bool,
@@ -131,16 +131,16 @@ impl Default for InterfaceRuntimeState {
 #[derive(Debug)]
 pub struct NetworkingRuntime {
   // scans
-  last_interfaces: HashMap<String, WiredInterfaceState>,
+  last_interfaces: HashMap<Ustr, WiredInterfaceState>,
   online: bool,
   sys_class_net: PathBuf,
   last_scan: Option<Instant>,
   scan_interval: Duration,
 
   // config
-  interface_states: HashMap<String, InterfaceRuntimeState>,
+  interface_states: HashMap<Ustr, InterfaceRuntimeState>,
   dns_written: bool,
-  configured_interfaces: Vec<String>,
+  configured_interfaces: Vec<Ustr>,
   bootstrapped: bool,
 }
 
@@ -238,15 +238,15 @@ impl NetworkingRuntime {
     let configs = Self::load_network_configs(ctx);
     for (_unit, cfg) in &configs {
       let iface = &cfg.name;
-      let sysfs_path = self.sys_class_net.join(iface);
+      let sysfs_path = self.sys_class_net.join(iface.as_str());
       if sysfs_path.exists() {
         bring_interface_up(iface);
         let mut fields = HashMap::new();
-        fields.insert("interface".to_string(), iface.clone());
+        fields.insert("interface".to_string(), iface.to_string());
         log.log(LogLevel::Info, "networking", "brought interface up", fields);
       } else {
         let mut fields = HashMap::new();
-        fields.insert("interface".to_string(), iface.clone());
+        fields.insert("interface".to_string(), iface.to_string());
         log.log(
           LogLevel::Warn,
           "networking",
@@ -274,7 +274,7 @@ impl NetworkingRuntime {
         continue;
       }
 
-      let sysfs_path = self.sys_class_net.join(&iface_name);
+      let sysfs_path = self.sys_class_net.join(iface_name.as_str());
       if !sysfs_path.exists() {
         continue;
       }
@@ -291,8 +291,8 @@ impl NetworkingRuntime {
       state.last_configure_attempt = Some(Instant::now());
 
       let mut fields = HashMap::new();
-      fields.insert("interface".to_string(), iface_name.clone());
-      fields.insert("unit".to_string(), unit.clone());
+      fields.insert("interface".to_string(), iface_name.to_string());
+      fields.insert("unit".to_string(), unit.to_string());
       fields.insert("method".to_string(), format!("{:?}", cfg.method));
 
       log.log(
@@ -326,7 +326,7 @@ impl NetworkingRuntime {
       if let Some(cfgs) = ctx
         .registry
         .metadata
-        .group_items::<NetworkConfig>("units", group)
+        .group_items::<NetworkConfig>("units", group.clone())
       {
         for c in cfgs {
           out.push((group.to_string(), c));
@@ -338,7 +338,7 @@ impl NetworkingRuntime {
 
   fn configure_dhcp(
     &mut self,
-    iface: &str,
+    iface: &Ustr,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
   ) -> Result<(), CoreError> {
@@ -362,7 +362,7 @@ impl NetworkingRuntime {
 
         self.apply_lease(iface, &lease, dispatch, log)?;
 
-        let state = self.interface_states.entry(iface.to_string()).or_default();
+        let state = self.interface_states.entry(iface.clone()).or_default();
         state.ip = Some(lease.ip);
         state.gateway = lease.gateway;
         state.dns_servers = lease.dns_servers.clone();
@@ -380,7 +380,7 @@ impl NetworkingRuntime {
 
   fn configure_static(
     &mut self,
-    iface: &str,
+    iface: &Ustr,
     cfg: &NetworkConfigMetadata,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
@@ -462,13 +462,13 @@ impl NetworkingRuntime {
         .into(),
     )?;
 
-    let state = self.interface_states.entry(iface.to_string()).or_default();
+    let state = self.interface_states.entry(iface.clone()).or_default();
     state.ip = Some(ip);
     state.gateway = gateway;
     state.dns_servers = dns_servers;
 
-    if !self.configured_interfaces.contains(&iface.to_string()) {
-      self.configured_interfaces.push(iface.to_string());
+    if !self.configured_interfaces.contains(iface) {
+      self.configured_interfaces.push(iface.clone());
     }
 
     let mut fields = HashMap::new();
@@ -486,7 +486,7 @@ impl NetworkingRuntime {
 
   fn apply_lease(
     &mut self,
-    iface: &str,
+    iface: &Ustr,
     lease: &DhcpLease,
     dispatch: &RuntimeDispatcher,
     _log: &LogHandle,
@@ -520,8 +520,8 @@ impl NetworkingRuntime {
         .into(),
     )?;
 
-    if !self.configured_interfaces.contains(&iface.to_string()) {
-      self.configured_interfaces.push(iface.to_string());
+    if !self.configured_interfaces.contains(iface) {
+      self.configured_interfaces.push(iface.clone());
     }
 
     Ok(())
@@ -538,7 +538,7 @@ impl NetworkingRuntime {
       return Ok(());
     }
 
-    let ifaces_needing_renewal: Vec<String> = self
+    let ifaces_needing_renewal: Vec<Ustr> = self
       .interface_states
       .iter()
       .filter_map(|(iface, state)| {
@@ -552,7 +552,7 @@ impl NetworkingRuntime {
 
     for iface in ifaces_needing_renewal {
       let mut fields = HashMap::new();
-      fields.insert("interface".to_string(), iface.clone());
+      fields.insert("interface".to_string(), iface.to_string());
       log.log(LogLevel::Info, "networking", "DHCP lease renewal", fields);
       self.configure_dhcp(&iface, dispatch, log)?;
     }
@@ -1156,14 +1156,14 @@ fn parse_dhcp_response(data: &[u8], expected_xid: u32) -> Result<DhcpResponse, C
   })
 }
 
-fn collect_wired_interfaces(root: &Path) -> HashMap<String, WiredInterfaceState> {
+fn collect_wired_interfaces(root: &Path) -> HashMap<Ustr, WiredInterfaceState> {
   let mut interfaces = HashMap::new();
   let Ok(entries) = std::fs::read_dir(root) else {
     return interfaces;
   };
 
   for entry in entries.flatten() {
-    let name = entry.file_name().to_string_lossy().to_string();
+    let name = Ustr::from(entry.file_name().to_string_lossy().as_ref());
     let path = entry.path();
     if !is_wired_interface(name.as_str(), path.as_path()) {
       continue;

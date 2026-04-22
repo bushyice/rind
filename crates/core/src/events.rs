@@ -1,4 +1,5 @@
 use crate::notifier::Notifier;
+use crate::types::Ustr;
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -16,7 +17,7 @@ pub enum FlowAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlowEvent {
-  pub name: String,
+  pub name: Ustr,
   pub payload: serde_json::Value,
   pub action: FlowAction,
   pub flow_type: FlowEventType,
@@ -44,7 +45,7 @@ pub enum FlowEventType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceEvent {
-  pub name: String,
+  pub name: Ustr,
   pub state: ServiceEventKind,
 }
 
@@ -58,8 +59,8 @@ pub enum ServiceEventKind {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserEvent {
-  pub username: String,
-  pub tty: String,
+  pub username: Ustr,
+  pub tty: Ustr,
   pub kind: UserEventKind,
 }
 
@@ -168,8 +169,8 @@ mod tests {
       flow_type: FlowEventType::State,
     });
 
-    let event = sub.try_recv().expect("should receive event");
-    assert_eq!(event.name, "test@state");
+    let event: FlowEvent = sub.try_recv().expect("should receive event");
+    assert_eq!(event.name.as_str(), "test@state");
     assert_eq!(event.action, FlowAction::Apply);
   }
 
@@ -224,7 +225,7 @@ mod tests {
 
     for i in 0..5 {
       bus.emit(ServiceEvent {
-        name: format!("svc{i}"),
+        name: format!("svc{i}").into(),
         state: ServiceEventKind::Started,
       });
     }

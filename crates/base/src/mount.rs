@@ -9,15 +9,15 @@ use std::{
 use nix::mount::{MsFlags, mount, umount};
 use rind_core::prelude::*;
 
-#[model(meta_name = target, meta_fields(target, source, fstype, flags, data, create, after))]
+#[model(meta_name = target, meta_fields(target, source, fstype, flags, data, create, after), derive_metadata(Debug))]
 pub struct Mount {
-  pub source: Option<String>,
-  pub target: String,
-  pub fstype: Option<String>,
+  pub source: Option<Ustr>,
+  pub target: Ustr,
+  pub fstype: Option<Ustr>,
   pub flags: Option<Vec<String>>,
   pub data: Option<String>,
   pub create: Option<bool>,
-  pub after: Option<Vec<String>>,
+  pub after: Option<Vec<Ustr>>,
   pub is_mounted: bool,
 }
 
@@ -31,28 +31,33 @@ impl MountRuntime {
 
   pub fn mount_target(&self, target: Arc<MountMetadata>, log: &LogHandle) {
     if let Some(true) = target.create {
-      std::fs::create_dir_all(target.target.clone()).ok();
+      std::fs::create_dir_all(target.target.as_str()).ok();
     }
 
     let mut fields = HashMap::new();
-    fields.insert("target".to_string(), target.target.clone());
+    fields.insert("target".to_string(), target.target.to_string());
     fields.insert(
       "source".to_string(),
-      target.source.clone().unwrap_or_default(),
+      target
+        .source
+        .as_ref()
+        .map(|x| x.to_string())
+        .unwrap_or_default(),
     );
     log.log(LogLevel::Info, "mount-runtime", "Mounting target", fields);
 
     let flags = parse_mount_flags(target.flags.as_deref());
+    println!("{target:?}");
 
     if let Err(e) = mount(
-      target.source.as_deref(),
+      target.source.as_ref().map(|x| x.as_str()),
       target.target.as_str(),
-      target.fstype.as_deref(),
+      target.fstype.as_ref().map(|x| x.as_str()),
       flags,
       target.data.as_deref(),
     ) {
       let mut fields = HashMap::new();
-      fields.insert("target".to_string(), target.target.clone());
+      fields.insert("target".to_string(), target.target.to_string());
       fields.insert("error".to_string(), e.to_string());
       log.log(
         LogLevel::Error,
@@ -73,7 +78,7 @@ impl MountRuntime {
         pending.push((format!("{}@{}", unit_name, mnt.target), afters.clone(), idx));
       } else {
         self.mount_target(mnt.clone(), log);
-        mounted.insert(id);
+        mounted.insert(id.to_string());
       }
     }
 
@@ -81,7 +86,7 @@ impl MountRuntime {
       let mut progress = false;
 
       pending.retain(|(mount_name, afters, idx)| {
-        if afters.iter().all(|a| mounted.contains(a)) {
+        if afters.iter().all(|a| mounted.contains(a.as_str())) {
           if let Some((_, mnt)) = mounts.get(*idx) {
             self.mount_target(mnt.clone(), log);
             mounted.insert(mount_name.clone());
@@ -191,7 +196,11 @@ impl Runtime for MountRuntime {
 
         let mut all_mounts: Vec<(String, Arc<MountMetadata>)> = Vec::new();
         for group in m.groups() {
-          if let Some(mounts) = ctx.registry.metadata.group_items::<Mount>("units", group) {
+          if let Some(mounts) = ctx
+            .registry
+            .metadata
+            .group_items::<Mount>("units", group.clone())
+          {
             for mnt in mounts {
               all_mounts.push((group.to_string(), mnt));
             }

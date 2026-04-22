@@ -59,7 +59,8 @@ impl Into<TransportMessage> for &MessageContainer {
           unsafe { CStr::from_ptr(self.name) }
             .to_str()
             .unwrap()
-            .to_string(),
+            .to_string()
+            .into(),
         )
       },
       payload: if self.payload.is_null() {
@@ -200,7 +201,7 @@ pub extern "C" fn listen_tp(
         Ok(m) => MessageContainer {
           name: match m.name {
             Some(s) => {
-              let str = CString::new(s).unwrap();
+              let str = CString::new(&**s).unwrap();
               str.into_raw()
             }
             None => null_mut(),

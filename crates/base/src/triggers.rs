@@ -1,6 +1,7 @@
 use crate::flow::{
   FlowInstance, FlowItem, FlowMatchOperation, FlowPayload, FlowPayloadType, FlowType,
 };
+use rind_core::prelude::*;
 
 pub fn check_condition(cond: &FlowItem, trigger: &FlowInstance) -> bool {
   match cond {
@@ -50,7 +51,7 @@ pub fn check_condition(cond: &FlowItem, trigger: &FlowInstance) -> bool {
 
 pub fn match_operation(matcher: &FlowMatchOperation, payload: &FlowPayload) -> bool {
   match matcher {
-    FlowMatchOperation::Eq(v) => payload.to_string_payload() == *v,
+    FlowMatchOperation::Eq(v) => payload.to_string_payload() == v.as_str(),
     FlowMatchOperation::Options {
       binary,
       contains,
@@ -59,7 +60,7 @@ pub fn match_operation(matcher: &FlowMatchOperation, payload: &FlowPayload) -> b
       if let Some(true) = binary {
         matches!(payload, FlowPayload::Bytes(_))
       } else if let Some(needle) = contains {
-        payload.to_string_payload().contains(needle)
+        payload.to_string_payload().contains(needle.as_str())
       } else if let Some(filter) = r#as {
         subset_match(filter, &payload.to_json())
       } else {
@@ -94,11 +95,11 @@ pub fn subset_match(filter: &serde_json::Value, payload: &serde_json::Value) -> 
   }
 }
 
-pub fn json_branch_key(value: &serde_json::Value, keys: &[String]) -> Option<Vec<String>> {
+pub fn json_branch_key(value: &serde_json::Value, keys: &[Ustr]) -> Option<Vec<String>> {
   let obj = value.as_object()?;
   let mut out = Vec::new();
   for k in keys {
-    let v = obj.get(k)?;
+    let v = obj.get(k.as_str())?;
     out.push(v.to_string());
   }
   Some(out)
@@ -143,7 +144,7 @@ pub fn payload_to_filter(payload: &FlowPayload) -> Option<FlowMatchOperation> {
       contains: None,
       r#as: Some(i.into_json()),
     }),
-    FlowPayload::String(i) => Some(FlowMatchOperation::Eq(i.clone())),
+    FlowPayload::String(i) => Some(FlowMatchOperation::Eq(Ustr::from(i.as_str()))),
     FlowPayload::Bytes(_) | FlowPayload::None(_) => None,
   }
 }
@@ -181,7 +182,7 @@ pub fn branch_source_key(spec: &str) -> &str {
     .unwrap_or(spec)
 }
 
-pub fn map_json_payload(branch_specs: &[String], source: &FlowPayload) -> Option<FlowPayload> {
+pub fn map_json_payload(branch_specs: &[Ustr], source: &FlowPayload) -> Option<FlowPayload> {
   let FlowPayload::Json(source_json) = source else {
     return None;
   };
@@ -190,10 +191,11 @@ pub fn map_json_payload(branch_specs: &[String], source: &FlowPayload) -> Option
   let mut mapped = serde_json::Map::new();
 
   for spec in branch_specs {
-    let source_key = branch_source_key(spec);
-    let target_key = branch_target_key(spec);
-    let value = source_obj.get(source_key)?.clone();
-    mapped.insert(target_key.to_string(), value);
+    let key = &**spec;
+    let source_key = branch_source_key(key);
+    let target_key = branch_target_key(key);
+    let value = source_obj.get(source_key)?;
+    mapped.insert(target_key.to_string(), value.clone());
   }
 
   Some(FlowPayload::Json(
@@ -254,7 +256,7 @@ mod tests {
   #[test]
   fn match_operation_variants() {
     assert!(match_operation(
-      &FlowMatchOperation::Eq("abc".to_string()),
+      &FlowMatchOperation::Eq(Ustr::from("abc")),
       &FlowPayload::String("abc".to_string()),
     ));
     assert!(match_operation(
@@ -268,7 +270,7 @@ mod tests {
     assert!(match_operation(
       &FlowMatchOperation::Options {
         binary: None,
-        contains: Some("ell".to_string()),
+        contains: Some(Ustr::from("ell")),
         r#as: None,
       },
       &FlowPayload::String("hello".to_string()),
@@ -279,7 +281,7 @@ mod tests {
   fn json_key_extract_and_merge() {
     let mut left = serde_json::json!({"id":1,"a":"old"});
     let right = serde_json::json!({"a":"new","b":true});
-    let key = json_branch_key(&left, &["id".to_string()]);
+    let key = json_branch_key(&left, &[Ustr::from("id")]);
     assert_eq!(key, Some(vec!["1".to_string()]));
     merge_json(&mut left, &right);
     assert_eq!(left["a"], serde_json::json!("new"));
@@ -301,7 +303,7 @@ mod tests {
         .to_string()
         .into(),
     );
-    let specs = vec!["tty:seat".to_string()];
+    let specs = vec![Ustr::from("tty:seat")];
     let mapped = map_json_payload(&specs, &payload).expect("should map");
     let FlowPayload::Json(j) = mapped else {
       panic!("expected json");

@@ -6,8 +6,26 @@ use std::ops::Deref;
 
 use strumbra::UniqueString;
 
-#[derive(Clone, serde::Serialize, serde::Deserialize, Hash, PartialEq, Eq, Debug)]
+#[derive(
+  Clone, serde::Serialize, serde::Deserialize, Hash, PartialEq, Eq, Debug, PartialOrd, Ord,
+)]
 pub struct Ustr(#[serde(serialize_with = "ser_name", deserialize_with = "de_name")] UniqueString);
+
+pub trait ToUstr {
+  fn to_ustr(&self) -> Ustr;
+}
+
+impl ToUstr for str {
+  fn to_ustr(&self) -> Ustr {
+    Ustr::from(self)
+  }
+}
+
+impl ToUstr for String {
+  fn to_ustr(&self) -> Ustr {
+    Ustr::from(self.as_str())
+  }
+}
 
 impl Deref for Ustr {
   type Target = UniqueString;
@@ -47,6 +65,12 @@ impl Borrow<str> for Ustr {
   }
 }
 
+impl AsRef<std::ffi::OsStr> for Ustr {
+  fn as_ref(&self) -> &std::ffi::OsStr {
+    std::ffi::OsStr::new(self.0.as_str())
+  }
+}
+
 impl Default for Ustr {
   fn default() -> Self {
     Ustr(UniqueString::try_from("").unwrap())
@@ -58,6 +82,6 @@ fn ser_name<S: serde::Serializer>(f: &UniqueString, serializer: S) -> Result<S::
 }
 
 fn de_name<'de, D: Deserializer<'de>>(deserializer: D) -> Result<UniqueString, D::Error> {
-  let s: &str = Deserialize::deserialize(deserializer)?;
+  let s: String = Deserialize::deserialize(deserializer)?;
   Ok(UniqueString::try_from(s).unwrap())
 }

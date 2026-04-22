@@ -35,13 +35,13 @@ pub struct TransportMessage {
   pub r#type: TransportMessageType,
   pub payload: Option<FlowPayload>,
   pub branch: Option<FlowMatchOperation>,
-  pub name: Option<String>,
+  pub name: Option<Ustr>,
   #[serde(default)]
   pub action: TransportMessageAction,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
-pub struct TransportProtocolId(pub String);
+pub struct TransportProtocolId(pub Ustr);
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
@@ -49,7 +49,7 @@ pub enum TransportMethod {
   Type(TransportProtocolId),
   Options {
     id: TransportProtocolId,
-    options: Vec<String>,
+    options: Vec<Ustr>,
     permissions: Option<Vec<u16>>,
   },
   Object {
@@ -88,7 +88,7 @@ pub trait TransportProtocol: Send + Sync {
   fn send_message(&self, endpoint: &str, msg: &TransportMessage);
 }
 
-type ClientMap = Arc<Mutex<HashMap<String, Vec<UnixStream>>>>;
+type ClientMap = Arc<Mutex<HashMap<Ustr, Vec<UnixStream>>>>;
 
 fn socket_path(endpoint: &str) -> std::path::PathBuf {
   std::path::PathBuf::from("/run/rind-tp").join(format!("{endpoint}.sock"))
@@ -96,9 +96,9 @@ fn socket_path(endpoint: &str) -> std::path::PathBuf {
 
 pub struct UdsTransport {
   clients: ClientMap,
-  started: std::collections::HashSet<String>,
-  incoming_tx: std::sync::mpsc::Sender<(String, TransportMessage, u32)>,
-  incoming_rx: Arc<Mutex<std::sync::mpsc::Receiver<(String, TransportMessage, u32)>>>,
+  started: std::collections::HashSet<Ustr>,
+  incoming_tx: std::sync::mpsc::Sender<(Ustr, TransportMessage, u32)>,
+  incoming_rx: Arc<Mutex<std::sync::mpsc::Receiver<(Ustr, TransportMessage, u32)>>>,
 }
 
 impl Default for UdsTransport {
@@ -116,7 +116,7 @@ impl Default for UdsTransport {
 impl UdsTransport {
   fn start_listener(
     &self,
-    endpoint: String,
+    endpoint: Ustr,
     permissions: Option<Vec<u16>>,
     pm: Option<PermissionStore>,
     notifier: Option<Notifier>,
@@ -209,11 +209,12 @@ impl TransportProtocol for UdsTransport {
     pm: Option<PermissionStore>,
     notifier: Option<Notifier>,
   ) {
-    if self.started.contains(endpoint) {
+    let endpoint = Ustr::from(endpoint);
+    if self.started.contains(&endpoint) {
       return;
     }
-    self.start_listener(endpoint.to_string(), permissions, pm, notifier);
-    self.started.insert(endpoint.to_string());
+    self.start_listener(endpoint.clone(), permissions, pm, notifier);
+    self.started.insert(endpoint);
   }
 
   fn send_message(&self, endpoint: &str, msg: &TransportMessage) {
@@ -230,9 +231,9 @@ impl TransportProtocol for UdsTransport {
 }
 
 pub fn start_stdout_listener(
-  service_name: String,
+  service_name: Ustr,
   child: &mut std::process::Child,
-  tx: std::sync::mpsc::Sender<(String, TransportMessage)>,
+  tx: std::sync::mpsc::Sender<(Ustr, TransportMessage)>,
   notifier: Option<Notifier>,
 ) {
   if let Some(stdout) = child.stdout.take() {
@@ -252,7 +253,7 @@ pub fn start_stdout_listener(
 
 pub struct TransportRuntime {
   uds: UdsTransport,
-  stdio_endpoints: std::collections::HashSet<String>,
+  stdio_endpoints: std::collections::HashSet<Ustr>,
 }
 
 impl Default for TransportRuntime {
@@ -285,24 +286,27 @@ impl Runtime for TransportRuntime {
 
     match action {
       "setup_uds" => {
-        let endpoint = payload.get::<String>("endpoint")?;
+        let endpoint = payload.get::<Ustr>("endpoint")?;
         let permissions = payload.get::<Vec<u16>>("permissions").ok();
 
-        self
-          .uds
-          .setup(&endpoint, permissions, Some(pm), ctx.notifier.clone());
+        self.uds.setup(
+          endpoint.as_str(),
+          permissions,
+          Some(pm),
+          ctx.notifier.clone(),
+        );
       }
       "register_stdio" => {
-        let endpoint = payload.get::<String>("endpoint")?;
+        let endpoint = payload.get::<Ustr>("endpoint")?;
         self.stdio_endpoints.insert(endpoint);
       }
       "unregister_stdio" => {
-        let endpoint = payload.get::<String>("endpoint")?;
-        self.stdio_endpoints.remove(&endpoint);
+        let endpoint = payload.get::<Ustr>("endpoint")?;
+        self.stdio_endpoints.remove(endpoint.as_str());
       }
       "send" => {
-        let endpoint = payload.get::<String>("endpoint")?;
-        let name: Option<String> = payload.get::<String>("name").ok();
+        let endpoint = payload.get::<Ustr>("endpoint")?;
+        let name = payload.get::<Ustr>("name").ok();
         let branch = payload.get::<FlowMatchOperation>("branch").ok();
         let flow_payload = payload.get::<serde_json::Value>("payload").ok();
         let action_str: String = payload.get::<String>("action").ok().unwrap_or("set".into());
@@ -329,12 +333,12 @@ impl Runtime for TransportRuntime {
             "services",
             "send_stdio",
             rpayload!({
-              "endpoint": endpoint,
+              "endpoint": endpoint.to_string(),
               "message": msg
             }),
           );
         } else {
-          self.uds.send_message(&endpoint, &msg);
+          self.uds.send_message(endpoint.as_str(), &msg);
         }
       }
       "drain_incoming" => {
@@ -345,7 +349,7 @@ impl Runtime for TransportRuntime {
                 if let Some(name) = &msg.name {
                   if uid != 0 {
                     // one-shot user-specific state defs
-                    if let Some((username, _)) = name.split_once("/")
+                    if let Some((username, _)) = name.as_str().split_once("/")
                       && let Some(user) = pm.users.lookup_by_uid(uid)
                       && username != user.username
                     {
@@ -353,7 +357,7 @@ impl Runtime for TransportRuntime {
                     }
 
                     // one-shot perms (is this good?)
-                    if let Some(state) = ctx.registry.metadata.find::<State>("units", name)
+                    if let Some(state) = ctx.registry.metadata.find::<State>("units", name.as_str())
                       && let Some(perms) = &state.permissions
                       && perms.iter().any(|x| !pm.user_has(uid, PermissionId(*x)))
                     {
@@ -381,7 +385,7 @@ impl Runtime for TransportRuntime {
               TransportMessageType::Signal => {
                 if let Some(name) = &msg.name {
                   // same with state perms, one-shot
-                  if let Some(state) = ctx.registry.metadata.find::<Signal>("units", name)
+                  if let Some(state) = ctx.registry.metadata.find::<Signal>("units", name.as_str())
                     && let Some(perms) = &state.permissions
                     && perms.iter().any(|x| !pm.user_has(uid, PermissionId(*x)))
                   {

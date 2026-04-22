@@ -147,8 +147,8 @@ pub fn handle_ipc_login(
     "user",
     "login",
     rpayload!({
-      "username": payload.username.clone(),
-      "tty": payload.tty.clone(),
+      "username": payload.username.to_ustr(),
+      "tty": payload.tty.to_ustr(),
       "session_id": session.id,
     })
     .into(),
@@ -206,7 +206,7 @@ pub fn handle_ipc_logout(
       "logout",
       rpayload!({
         "session_id": session_id,
-        "username": payload.username.clone(),
+        "username": payload.username.to_ustr(),
       })
       .into(),
     );
@@ -271,8 +271,8 @@ impl Runtime for UserRuntime {
     match action {
       "login" => {
         let session_id = payload.get::<u64>("session_id")?;
-        let tty = payload.get::<String>("tty")?;
-        let username = payload.get::<String>("username")?;
+        let tty = payload.get::<Ustr>("tty")?;
+        let username = payload.get::<Ustr>("username")?;
         let user = pam
           .store
           .lookup_by_name(&username)
@@ -284,8 +284,8 @@ impl Runtime for UserRuntime {
           FlowRuntimePayload::new("rind@user_session")
             .payload(json!({
               "session_id": session_id,
-              "username": username,
-              "tty": tty,
+              "username": username.as_str(),
+              "tty": tty.as_str(),
               "runtime_dir": runtime_dir(user.uid).to_string_lossy().to_string()
             }))
             .into(),
@@ -301,7 +301,7 @@ impl Runtime for UserRuntime {
       }
       "logout" => {
         let session_id = payload.get::<u64>("session_id")?;
-        let username = payload.get::<String>("username")?;
+        let username = payload.get::<Ustr>("username")?;
         let user = pam
           .store
           .lookup_by_name(&username)
@@ -330,7 +330,8 @@ impl Runtime for UserRuntime {
           .registry
           .singleton_mut::<StateMachine>(StateMachine::KEY)
           .ok_or_else(|| CoreError::InvalidState("state machine store not found".into()))?;
-        if let Some(users) = sm.states.get_mut("rind@user_session") {
+        let key = Ustr::from("rind@user_session");
+        if let Some(users) = sm.states.get_mut(&key) {
           for user in users {
             let username = user.payload.get_json_field_as::<String>("username").ok_or(
               CoreError::MissingField {

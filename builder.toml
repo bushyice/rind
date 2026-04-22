@@ -35,7 +35,7 @@ symlinks = [
 files = [
   "examples/units:/etc/units",
   "examples/fallback.toml:/etc/fallback.toml",
-  "rind-api/examples/api.c:/home/makano/api.c",
+  "crates/api/examples/api.c:/home/makano/api.c",
   "target/x86_64-unknown-linux-gnu/release/librind_test_plugin.so:/usr/lib/rind/plugins/librind_test_plugin.so",
   "@glibc:usr/bin:/usr/bin",
   "@glibc:var/db:/var/db",

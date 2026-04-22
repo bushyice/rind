@@ -70,7 +70,7 @@ fn build_ipc_list_response(
     let services = if let Some(services) = ctx
       .registry
       .metadata
-      .group_items::<Service>("units", &payload.name)
+      .group_items::<Service>("units", Ustr::from(payload.name.as_str()))
     {
       services
     } else {
@@ -79,21 +79,27 @@ fn build_ipc_list_response(
     let mounts = if let Some(mounts) = ctx
       .registry
       .metadata
-      .group_items::<Mount>("units", &payload.name)
+      .group_items::<Mount>("units", Ustr::from(payload.name.as_str()))
     {
       mounts
     } else {
       Vec::new()
     };
 
-    let ser_instances: HashMap<&String, (String, Vec<u32>)> = services
+    let ser_instances: HashMap<Ustr, (String, Vec<u32>)> = services
       .iter()
       .filter_map(|ser| {
         ctx
           .registry
-          .as_one::<Service>("units", &format!("{}@{}", payload.name, ser.name))
+          .as_one::<Service>(
+            "units",
+            Ustr::from(format!("{}@{}", payload.name, ser.name)),
+          )
           .map_or(None, |x| {
-            Some((&ser.name, (x.instances.last_state(), x.instances.pid())))
+            Some((
+              ser.name.clone(),
+              (x.instances.last_state(), x.instances.pid()),
+            ))
           })
       })
       .collect();
@@ -113,13 +119,13 @@ fn build_ipc_list_response(
           .iter()
           .map(|svc| ServiceSerialized {
             after: svc.after.clone(),
-            run: svc.run.to_string(),
+            run: svc.run.as_many().map(|x| x.exec.clone()).collect(),
             last_state: ser_instances
-              .get(&svc.name)
-              .map_or("Inactive".into(), |x| x.0.clone()),
-            name: svc.name().to_string(),
+              .get(svc.name())
+              .map_or("Inactive".to_string(), |x| x.0.clone()),
+            name: svc.name().into(),
             pid: ser_instances
-              .get(&svc.name)
+              .get(svc.name())
               .map_or(None, |x| if x.1.is_empty() { None } else { Some(x.1[0]) }),
             restart: svc.restart.as_ref().map_or(false, |_| true),
           })
@@ -131,7 +137,7 @@ fn build_ipc_list_response(
     let Some(service_meta) = ctx
       .registry
       .metadata
-      .find::<Service>("units", &payload.name)
+      .find::<Service>("units", payload.name.clone())
     else {
       return Err(CoreError::MetadataNotFound(format!(
         "Service not found: {}",
@@ -139,7 +145,10 @@ fn build_ipc_list_response(
       )));
     };
 
-    let service = if let Ok(s) = ctx.registry.as_one::<Service>("units", &payload.name) {
+    let service = if let Ok(s) = ctx
+      .registry
+      .as_one::<Service>("units", Ustr::from(payload.name.as_str()))
+    {
       s
     } else {
       &Service::new(service_meta)
@@ -152,18 +161,28 @@ fn build_ipc_list_response(
         last_state: service.instances.last_state(),
         pid: service.instances.pid().get(0).cloned(),
         restart: service.metadata.restart.as_ref().map_or(false, |_| true),
-        run: service.metadata.run.to_string(),
+        run: service
+          .metadata
+          .run
+          .as_many()
+          .map(|x| x.exec.clone())
+          .collect(),
       }
       .stringify(),
     )
   } else if payload.unit_type == "state" && !payload.name.is_empty() {
-    let Some(instances) = sm.states.get(&payload.name) else {
+    let name_ustr = Ustr::from(payload.name.as_str());
+    let Some(instances) = sm.states.get(&name_ustr) else {
       return Err(CoreError::MetadataNotFound(format!(
         "State not found: {}",
         payload.name
       )));
     };
-    let Some(def) = ctx.registry.metadata.find::<State>("units", &payload.name) else {
+    let Some(def) = ctx
+      .registry
+      .metadata
+      .find::<State>("units", payload.name.clone())
+    else {
       return Err(CoreError::MetadataNotFound(format!(
         "State not found: {}",
         payload.name
@@ -191,7 +210,10 @@ fn build_ipc_list_response(
         &states
           .iter()
           .filter_map(|(name, inst)| {
-            let def = ctx.registry.metadata.find::<State>("units", name)?;
+            let def = ctx
+              .registry
+              .metadata
+              .find::<State>("units", name.as_str())?;
             let branches = def.branch.as_ref()?;
             Some(StateSerialized {
               name: name.clone(),
@@ -210,14 +232,14 @@ fn build_ipc_list_response(
         if let Some(cfgs) = ctx
           .registry
           .metadata
-          .group_items::<crate::networking::NetworkConfig>("units", &group)
+          .group_items::<crate::networking::NetworkConfig>("units", group)
         {
           for cfg in cfgs {
             let config = {
-              if let Some(instances) = sm.states.get("rind@net-configured") {
+              if let Some(instances) = sm.states.get(&Ustr::from("rind@net-configured")) {
                 instances.iter().find(|i| {
                   if let Some(obj) = i.payload.to_json().as_object() {
-                    obj.get("name").and_then(|v| v.as_str()) == Some(&cfg.name)
+                    obj.get("name").and_then(|v| v.as_str()) == Some(cfg.name.as_str())
                   } else {
                     false
                   }
@@ -233,18 +255,18 @@ fn build_ipc_list_response(
             }
             .to_string();
             statuses.push(NetworkStatusSerialized {
-              interface: cfg.name.clone(),
+              interface: cfg.name.clone().into(),
               method: match cfg.method {
-                crate::networking::NetworkMethod::Dhcp => "dhcp".to_string(),
-                crate::networking::NetworkMethod::Static => "static".to_string(),
+                crate::networking::NetworkMethod::Dhcp => "dhcp".into(),
+                crate::networking::NetworkMethod::Static => "static".into(),
               },
               address: config
-                .map(|x| x.payload.get_json_field_as::<String>("ip"))
+                .map(|x| x.payload.get_json_field_as::<Ustr>("ip"))
                 .unwrap_or_default(),
               gateway: config
-                .map(|x| x.payload.get_json_field_as::<String>("gateway"))
+                .map(|x| x.payload.get_json_field_as::<Ustr>("gateway"))
                 .unwrap_or_default(),
-              state,
+              state: state.into(),
             });
           }
         }
@@ -254,25 +276,28 @@ fn build_ipc_list_response(
   } else if payload.unit_type == "netport" {
     Message::from_type(MessageType::Ok).with_vec(get_ports())
   } else {
-    let mut units_map: HashMap<String, UnitSerialized> = HashMap::new();
+    let mut units_map: HashMap<Ustr, UnitSerialized> = HashMap::new();
 
     if let Some(groups) = ctx.registry.metadata.groups("units") {
       for group in groups {
         let services = if let Some(services) = ctx
           .registry
           .metadata
-          .group_items::<Service>("units", &group)
+          .group_items::<Service>("units", group.clone())
         {
           services
         } else {
           Vec::new()
         };
-        let mounts =
-          if let Some(mounts) = ctx.registry.metadata.group_items::<Mount>("units", &group) {
-            mounts
-          } else {
-            Vec::new()
-          };
+        let mounts = if let Some(mounts) = ctx
+          .registry
+          .metadata
+          .group_items::<Mount>("units", group.clone())
+        {
+          mounts
+        } else {
+          Vec::new()
+        };
 
         let mounted = mounts
           .iter()
@@ -283,18 +308,18 @@ fn build_ipc_list_response(
           .filter(|s| {
             ctx
               .registry
-              .instances::<Service>("units", &format!("{group}@{}", s.name))
+              .instances::<Service>("units", Ustr::from(format!("{group}@{}", s.name)))
               .ok()
               .map_or(false, |x| x.iter().any(|x| x.instances.is_active()))
           })
           .count();
         units_map.insert(
-          group.to_string(),
+          group.clone(),
           UnitSerialized {
             active_services: active,
             mounted: mounted,
             mounts: mounts.len(),
-            name: group.to_string(),
+            name: group.clone(),
             services: services.len(),
           },
         );

@@ -44,8 +44,19 @@ impl RuntimePayload {
     self
       .items
       .remove(&name)
-      .and_then(|v| v.downcast::<T>().ok().map(|b| *b))
-      .ok_or_else(|| CoreError::InvalidState(format!("Missing required field {name} in dispatch")))
+      .and_then(|v| match v.downcast::<T>() {
+        Ok(v) => Some(*v),
+        Err(e) => {
+          self.items.insert(name.clone(), e);
+          None
+        }
+      })
+      .ok_or_else(|| {
+        CoreError::InvalidState(format!(
+          "Missing required field {name} in dispatch. keys: {:?}",
+          self.items.keys()
+        ))
+      })
   }
 }
 

@@ -24,10 +24,10 @@ use crate::variables::VariableHeap;
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RunOption {
   #[serde(default)]
-  pub exec: String,
+  pub exec: Ustr,
   #[serde(default)]
-  pub args: Vec<String>,
-  pub env: Option<HashMap<String, String>>,
+  pub args: Vec<Ustr>,
+  pub env: Option<HashMap<Ustr, Ustr>>,
   pub variable: Option<String>,
 }
 
@@ -56,7 +56,17 @@ impl RunOptions {
   pub fn to_string(&self) -> Vec<String> {
     self
       .as_many()
-      .map(|x| format!("{} {}", x.exec, x.args.join(" ")))
+      .map(|x| {
+        format!(
+          "{} {}",
+          x.exec,
+          x.args
+            .iter()
+            .map(|a| a.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+        )
+      })
       .collect::<Vec<String>>()
   }
 }
@@ -103,8 +113,8 @@ pub enum ServiceState {
 }
 
 pub struct ChildInstance {
-  pub key: String,
-  pub user: Option<String>,
+  pub key: Ustr,
+  pub user: Option<Ustr>,
   pub child: Option<Child>,
   pub state: ServiceState,
   pub retry_count: u32,
@@ -113,9 +123,9 @@ pub struct ChildInstance {
 }
 
 impl ChildInstance {
-  pub fn new(key: String, user: Option<String>, child: Option<Child>) -> Self {
+  pub fn new(key: impl Into<Ustr>, user: Option<Ustr>, child: Option<Child>) -> Self {
     Self {
-      key,
+      key: key.into(),
       user,
       child,
       state: ServiceState::Active,
@@ -183,7 +193,7 @@ pub struct BranchingConfig {
   #[serde(default)]
   pub enabled: bool,
   #[serde(rename = "source-state")]
-  pub source_state: String,
+  pub source_state: Ustr,
   #[serde(default)]
   pub key: Option<String>,
   #[serde(rename = "max-instances", default)]
@@ -196,7 +206,7 @@ fn default_username_field() -> String {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ServiceUserSource {
-  pub state: String,
+  pub state: Ustr,
   #[serde(rename = "username-field", default = "default_username_field")]
   pub username_field: String,
   #[serde(rename = "match-branch-key")]
@@ -210,7 +220,7 @@ pub enum ServiceSpace {
   System,
   User,
   UserSelective {
-    user: String,
+    user: Ustr,
   },
 }
 
@@ -224,9 +234,9 @@ pub enum ServiceSpace {
 )]
 pub struct Service {
   // Metadata
-  pub name: String,
+  pub name: Ustr,
   pub run: RunOptions,
-  pub after: Option<Vec<String>>,
+  pub after: Option<Vec<Ustr>>,
   #[serde(rename = "start-on")]
   pub start_on: Option<Vec<FlowItem>>,
   #[serde(rename = "stop-on")]
@@ -236,7 +246,7 @@ pub struct Service {
   #[serde(rename = "on-stop")]
   pub on_stop: Option<Vec<Trigger>>,
   #[serde(rename = "working-dir")]
-  pub working_dir: Option<String>,
+  pub working_dir: Option<Ustr>,
   #[serde(default, rename = "space")]
   pub space: ServiceSpace,
   #[serde(rename = "user-source")]
@@ -264,12 +274,12 @@ impl Service {
 
 pub struct ServiceRuntime {
   event_rx: Option<rind_core::events::Subscription<rind_core::prelude::FlowEvent>>,
-  stdio_tx: Sender<(String, TransportMessage)>,
-  stdio_rx: Receiver<(String, TransportMessage)>,
-  stdio_writers: Mutex<HashMap<String, Vec<Sender<TransportMessage>>>>,
-  pid_map: HashMap<u32, String>,
+  stdio_tx: Sender<(Ustr, TransportMessage)>,
+  stdio_rx: Receiver<(Ustr, TransportMessage)>,
+  stdio_writers: Mutex<HashMap<Ustr, Vec<Sender<TransportMessage>>>>,
+  pid_map: HashMap<u32, Ustr>,
   stopping_map: HashMap<u32, Instant>,
-  trigger_index: HashMap<String, HashSet<String>>,
+  trigger_index: HashMap<Ustr, HashSet<Ustr>>,
 }
 
 impl Default for ServiceRuntime {
@@ -288,22 +298,26 @@ impl Default for ServiceRuntime {
 }
 
 impl ServiceRuntime {
-  fn payload_field_as_key(payload: &FlowPayload, field: &str) -> Option<String> {
+  fn payload_field_as_key(payload: &FlowPayload, field: &str) -> Option<Ustr> {
     payload.get_json_field(field).map(|v| {
       if let Some(s) = v.as_str() {
-        s.to_string()
+        Ustr::from(s)
       } else {
-        v.to_string()
+        Ustr::from(v.to_string())
       }
     })
   }
 
-  fn branch_key_from_payload(payload: &FlowPayload, key_name: Option<&str>) -> Option<String> {
+  fn branch_key_from_payload(payload: &FlowPayload, key_name: Option<&str>) -> Option<Ustr> {
     if let Some(key_name) = key_name {
-      return Self::payload_field_as_key(payload, key_name).filter(|v| !v.is_empty());
+      return Self::payload_field_as_key(payload, key_name).filter(|v| !v.as_str().is_empty());
     }
     let value = payload.to_string_payload();
-    if value.is_empty() { None } else { Some(value) }
+    if value.is_empty() {
+      None
+    } else {
+      Some(Ustr::from(value))
+    }
   }
 
   fn resolve_user_from_source(
@@ -311,7 +325,7 @@ impl ServiceRuntime {
     source: &ServiceUserSource,
     branch_ctx: Option<&ServiceBranchContext>,
     sm: Option<&StateMachine>,
-  ) -> anyhow::Result<Option<String>> {
+  ) -> anyhow::Result<Option<Ustr>> {
     let Some(sm) = sm else {
       return Ok(None);
     };
@@ -320,7 +334,7 @@ impl ServiceRuntime {
     };
 
     if let Some(field) = &source.match_branch_key {
-      let Some(expected) = branch_ctx.and_then(|ctx| ctx.key.as_deref()) else {
+      let Some(expected) = branch_ctx.and_then(|ctx| ctx.key.as_ref()) else {
         return Ok(None);
       };
       let mut matches = HashSet::new();
@@ -328,7 +342,7 @@ impl ServiceRuntime {
         let Some(found) = Self::payload_field_as_key(&branch.payload, field) else {
           continue;
         };
-        if found != expected {
+        if found != *expected {
           continue;
         }
         if let Some(user) = Self::payload_field_as_key(&branch.payload, &source.username_field) {
@@ -377,7 +391,7 @@ impl ServiceRuntime {
     service: &Service,
     branch_ctx: Option<&ServiceBranchContext>,
     sm: Option<&StateMachine>,
-  ) -> anyhow::Result<Option<String>> {
+  ) -> anyhow::Result<Option<Ustr>> {
     if let Some(user) = branch_ctx.and_then(|ctx| ctx.forced_user.as_ref()) {
       return Ok(Some(user.clone()));
     }
@@ -426,24 +440,24 @@ impl ServiceRuntime {
     let services = metadata.items::<Service>("units").unwrap_or_default();
 
     for (group, meta) in services {
-      let key = format!("{}@{}", group, meta.name);
+      let key = Ustr::from(format!("{}@{}", group, meta.name));
 
       let mut interests = HashSet::new();
       if let Some(start_on) = &meta.start_on {
         for item in start_on {
-          interests.insert(item.name().clone());
+          interests.insert(item.name());
         }
       }
       if let Some(stop_on) = &meta.stop_on {
         for item in stop_on {
-          interests.insert(item.name().clone());
+          interests.insert(item.name());
         }
       }
 
       for interest in interests {
         self
           .trigger_index
-          .entry(interest)
+          .entry(interest.clone())
           .or_default()
           .insert(key.clone());
       }
@@ -457,7 +471,7 @@ impl ServiceRuntime {
     branch_ctx: Option<&ServiceBranchContext>,
     sm: Option<&StateMachine>,
     variable_heap: Option<&VariableHeap>,
-    registry_key: String,
+    registry_key: Ustr,
     notifier: Option<Notifier>,
   ) -> anyhow::Result<Vec<ChildInstance>> {
     let mut instances = Vec::new();
@@ -492,26 +506,25 @@ impl ServiceRuntime {
     let exec = table
       .get("exec")
       .and_then(|v| v.as_str())
-      .unwrap_or_default()
-      .to_string();
+      .unwrap_or_default();
     let args = table
       .get("args")
       .and_then(|v| v.as_array())
       .map(|arr| {
         arr
           .iter()
-          .filter_map(|v| v.as_str().map(|s| s.to_string()))
+          .filter_map(|v| v.as_str().map(|s| Ustr::from(s)))
           .collect()
       })
       .unwrap_or_default();
     let env = table.get("env").and_then(|v| v.as_table()).map(|t| {
       t.iter()
-        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+        .filter_map(|(k, v)| v.as_str().map(|s| (Ustr::from(k.as_str()), Ustr::from(s))))
         .collect()
     });
 
     Some(RunOption {
-      exec,
+      exec: Ustr::from(exec),
       args,
       env,
       variable: None,
@@ -524,7 +537,7 @@ impl ServiceRuntime {
     log: &LogHandle,
     sm: Option<&StateMachine>,
     variable_heap: Option<&VariableHeap>,
-    registry_key: String,
+    registry_key: Ustr,
     notifier: Option<Notifier>,
   ) -> anyhow::Result<()> {
     log.log(
@@ -547,9 +560,9 @@ impl ServiceRuntime {
     Ok(())
   }
 
-  fn log_fields(&self, service: &Service, action: impl Into<String>) -> HashMap<String, String> {
+  fn log_fields(&self, service: &Service, action: impl Into<Ustr>) -> HashMap<String, String> {
     let mut fields = HashMap::new();
-    fields.insert("action".to_string(), action.into());
+    fields.insert("action".to_string(), action.into().to_string());
     fields.insert("service".to_string(), service.metadata.name.to_string());
     fields
   }
@@ -562,12 +575,12 @@ impl ServiceRuntime {
     branch_ctx: Option<&ServiceBranchContext>,
     sm: Option<&StateMachine>,
     variables: Option<&VariableHeap>,
-    registry_key: String,
+    registry_key: Ustr,
     notifier: Option<Notifier>,
   ) -> anyhow::Result<ChildInstance> {
     let mut args = run.args.clone();
     let mut envs = run.env.clone().unwrap_or_default();
-    let branch_key = branch_ctx.and_then(|ctx| ctx.key.as_deref());
+    let branch_key = branch_ctx.and_then(|ctx| ctx.key.as_ref());
     let resolved_user = self.resolve_service_user(service, branch_ctx, sm)?;
 
     if let Some(transport) = &service.metadata.transport {
@@ -609,23 +622,23 @@ impl ServiceRuntime {
             id,
             options,
             permissions: _,
-          } if id.0 == "env" => {
+          } if id.0.as_str() == "env" => {
             for option in options {
               let Some((key, value)) = option.split_once('=') else {
                 continue;
               };
               if let Some(state_name) = value.strip_prefix("state:") {
                 if let Some(val) = resolve_state(state_name) {
-                  envs.insert(key.to_string(), val);
+                  envs.insert(Ustr::from(key), Ustr::from(val));
                 }
               } else if let (Some(variables), Some(variable)) =
                 (variables, value.strip_prefix("var:"))
               {
                 if let Some(val) = variables.get(variable) {
-                  envs.insert(key.to_string(), val.to_string());
+                  envs.insert(Ustr::from(key), Ustr::from(val.to_string()));
                 }
               } else {
-                envs.insert(key.to_string(), value.to_string());
+                envs.insert(Ustr::from(key), Ustr::from(value));
               }
             }
           }
@@ -633,18 +646,18 @@ impl ServiceRuntime {
             id,
             options,
             permissions: _,
-          } if id.0 == "args" => {
+          } if id.0.as_str() == "args" => {
             for option in options {
               if let Some(state_name) = option.strip_prefix("state:") {
                 let payload = resolve_state(state_name).unwrap_or_default();
                 if !payload.is_empty() {
-                  args.push(payload);
+                  args.push(payload.into());
                 }
               } else if let (Some(variables), Some(variable)) =
                 (variables, option.strip_prefix("var:"))
               {
                 if let Some(val) = variables.get(variable) {
-                  args.push(val.to_string());
+                  args.push(Ustr::from(val.to_string()));
                 }
               } else {
                 args.push(option.clone());
@@ -657,9 +670,9 @@ impl ServiceRuntime {
     }
 
     let child = unsafe {
-      let mut cmd = Command::new(&run.exec);
+      let mut cmd = Command::new(run.exec.as_str());
       cmd
-        .args(&args)
+        .args(args.iter().map(|a| a.as_str()))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -667,23 +680,23 @@ impl ServiceRuntime {
           libc::setsid();
           Ok(())
         });
-      let user_info = if let Some(username) = resolved_user.as_deref() {
+      let user_info = if let Some(username) = resolved_user.as_ref() {
         let store = rind_core::user::UserStore::load_system()
           .map_err(|e| anyhow::anyhow!("failed to load user store: {e}"))?;
-        let Some(user) = store.lookup_by_name(username) else {
+        let Some(user) = store.lookup_by_name(username.as_str()) else {
           return Err(anyhow::anyhow!(
             "user '{}' not found for service '{}'",
             username,
             service.metadata.name
           ));
         };
-        Some((user.uid, user.gid, user.home.clone(), username.to_string()))
+        Some((user.uid, user.gid, user.home.clone(), username.clone()))
       } else {
         None
       };
 
       if let Some(dir) = &service.metadata.working_dir {
-        cmd.current_dir(dir);
+        cmd.current_dir(dir.as_str());
       }
 
       if matches!(service.metadata.space, ServiceSpace::User) && user_info.is_none() {
@@ -698,22 +711,26 @@ impl ServiceRuntime {
         cmd.gid(gid);
 
         if let Some(dir) = &service.metadata.working_dir
-          && dir.starts_with("~")
+          && dir.as_str().starts_with("~")
         {
-          cmd.current_dir(format!("{}{}", home, &dir[1..]));
+          cmd.current_dir(format!("{}{}", home, &dir.as_str()[1..]));
         }
 
-        envs.extend(read_env_file(&format!("{home}/.env")));
+        envs.extend(
+          read_env_file(&format!("{home}/.env"))
+            .into_iter()
+            .map(|(k, v)| (Ustr::from(k), Ustr::from(v))),
+        );
 
-        envs.insert("HOME".to_string(), home);
-        envs.insert("USER".to_string(), username);
+        envs.insert(Ustr::from("HOME"), Ustr::from(home));
+        envs.insert(Ustr::from("USER"), username);
       }
 
       if let Some(key) = branch_key {
-        cmd.env("RIND_BRANCH_KEY", key);
+        cmd.env("RIND_BRANCH_KEY", key.as_str());
       }
       if !envs.is_empty() {
-        cmd.envs(&envs);
+        cmd.envs(envs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
       }
       cmd.spawn()?
     };
@@ -748,7 +765,7 @@ impl ServiceRuntime {
     }
 
     Ok(ChildInstance::new(
-      branch_key.map(|x| x.to_string()).unwrap_or_default(),
+      branch_key.cloned().unwrap_or_default(),
       resolved_user,
       Some(child),
     ))
@@ -761,7 +778,7 @@ impl ServiceRuntime {
     sm: Option<&StateMachine>,
     dispatch: &RuntimeDispatcher,
     variable_heap: Option<&VariableHeap>,
-    registry_key: String,
+    registry_key: Ustr,
     notifier: Option<Notifier>,
   ) {
     if let Some(inst) = service.instances.as_one() {
@@ -782,7 +799,7 @@ impl ServiceRuntime {
           "services",
           "reconcile_stacks",
           rpayload!({
-            "service": service.metadata.name.to_string(),
+            "service": service.metadata.name.clone(),
             "id": service.id.0,
             "action": ServiceEventKind::Started
           }),
@@ -811,18 +828,22 @@ impl ServiceRuntime {
     mode: StopMode,
     log: &LogHandle,
     dispatch: &RuntimeDispatcher,
-    key: Option<String>,
-    user: Option<String>,
+    key: Option<Ustr>,
+    user: Option<Ustr>,
   ) {
     for inst in service.instances.iter_mut() {
       if let Some(ref key) = key {
-        if &inst.key != key {
+        if inst.key.as_str() != key.as_str() {
           continue;
         }
       };
       if let Some(ref user) = user {
-        let matches_owner = inst.user.as_ref().map(|u| u == user).unwrap_or(false)
-          || (inst.user.is_none() && &inst.key == user);
+        let matches_owner = inst
+          .user
+          .as_ref()
+          .map(|u| u.as_str() == user.as_str())
+          .unwrap_or(false)
+          || (inst.user.is_none() && inst.key.as_str() == user.as_str());
         if !matches_owner {
           continue;
         }
@@ -855,7 +876,7 @@ impl ServiceRuntime {
       fields.insert("key".to_string(), format!("{key}"));
     };
     if let Some(ref user) = user {
-      fields.insert("user".to_string(), user.clone());
+      fields.insert("user".to_string(), user.to_string());
     };
     log.log(
       LogLevel::Info,
@@ -867,7 +888,7 @@ impl ServiceRuntime {
       "services",
       "reconcile_stacks",
       rpayload!({
-        "service": service.metadata.name.to_string(),
+        "service": service.metadata.name.clone(),
         "id": service.id.0,
         "action": ServiceEventKind::Stopped
       }),
@@ -1118,9 +1139,9 @@ enum ServiceExitAction {
 
 fn is_stdio_transport(method: &TransportMethod) -> bool {
   match method {
-    TransportMethod::Type(id) => id.0 == "stdio",
-    TransportMethod::Options { id, .. } => id.0 == "stdio",
-    TransportMethod::Object { id, .. } => id.0 == "stdio",
+    TransportMethod::Type(id) => id.0.as_str() == "stdio",
+    TransportMethod::Options { id, .. } => id.0.as_str() == "stdio",
+    TransportMethod::Object { id, .. } => id.0.as_str() == "stdio",
   }
 }
 
@@ -1135,7 +1156,7 @@ fn parse_log_level(input: &str) -> LogLevel {
   }
 }
 
-fn start_service_stream_logs(service_name: String, child: &mut Child, log: LogHandle) {
+fn start_service_stream_logs(service_name: Ustr, child: &mut Child, log: LogHandle) {
   if let Some(stdout) = child.stdout.take() {
     let service_name = service_name.clone();
     let log = log.clone();
@@ -1170,7 +1191,7 @@ fn start_service_stream_logs(service_name: String, child: &mut Child, log: LogHa
 }
 
 fn start_stdin_writer(
-  service_name: String,
+  service_name: Ustr,
   child: &mut Child,
   log: LogHandle,
   rx: Receiver<TransportMessage>,
@@ -1205,8 +1226,8 @@ fn start_stdin_writer(
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct EmitTrigger {
-  pub service: Option<String>,
-  pub state: Option<String>,
+  pub service: Option<Ustr>,
+  pub state: Option<Ustr>,
   pub flow_type: Option<FlowType>,
   pub payload: Option<FlowPayload>,
   pub action: FlowAction,
@@ -1214,9 +1235,9 @@ pub struct EmitTrigger {
 
 #[derive(Debug, Clone, Default)]
 pub struct ServiceBranchContext {
-  pub key: Option<String>,
+  pub key: Option<Ustr>,
   pub payload: Option<FlowPayload>,
-  pub forced_user: Option<String>,
+  pub forced_user: Option<Ustr>,
 }
 
 impl Into<serde_json::Value> for EmitTrigger {
@@ -1255,7 +1276,7 @@ pub fn handle_ipc_start(
   } else if let (Some(caller), Some(svc)) = (caller, svc.as_ref()) {
     match &svc.space {
       ServiceSpace::User => true,
-      ServiceSpace::UserSelective { user } => user == &caller.username,
+      ServiceSpace::UserSelective { user } => user.as_str() == caller.username.as_str(),
       ServiceSpace::System => false,
     }
   } else {
@@ -1319,7 +1340,7 @@ pub fn handle_ipc_stop(
   } else if let (Some(caller), Some(svc)) = (caller, svc.as_ref()) {
     match &svc.space {
       ServiceSpace::User => true,
-      ServiceSpace::UserSelective { user } => user == &caller.username,
+      ServiceSpace::UserSelective { user } => user.as_str() == caller.username.as_str(),
       ServiceSpace::System => false,
     }
   } else {
@@ -1395,7 +1416,7 @@ impl Runtime for ServiceRuntime {
         }
 
         while let Ok((service_name, message)) = self.stdio_rx.try_recv() {
-          if message.name.as_deref() == Some("log") {
+          if message.name.as_ref().map(|x| x.as_str()) == Some("log") {
             let (level, message_text, fields) = self.stdio_log_entry(&service_name, &message);
             log.log(level, "service-transport", message_text, fields);
             continue;
@@ -1420,7 +1441,7 @@ impl Runtime for ServiceRuntime {
         ctx
           .registry
           .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-            (StateMachine::KEY.to_string(), VariableHeap::KEY.to_string()),
+            (StateMachine::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, vh)| {
               let target_keys = if let Some(event_name) = emit_trig.state.as_ref() {
                 self
@@ -1434,8 +1455,8 @@ impl Runtime for ServiceRuntime {
                   .items::<Service>("units")
                   .unwrap_or_default()
                   .into_iter()
-                  .map(|(group, meta)| format!("{}@{}", group, meta.name))
-                  .collect()
+                  .map(|(group, meta)| Ustr::from(format!("{}@{}", group, meta.name)))
+                  .collect::<HashSet<Ustr>>()
               };
 
               let emit_event = match (
@@ -1444,7 +1465,7 @@ impl Runtime for ServiceRuntime {
                 emit_trig.payload.as_ref(),
               ) {
                 (Some(name), Some(flow_type), Some(payload)) => Some(FlowInstance {
-                  name: name.clone(),
+                  name: name.clone().into(),
                   payload: payload.clone(),
                   r#type: flow_type,
                 }),
@@ -1454,7 +1475,10 @@ impl Runtime for ServiceRuntime {
               for service_name in target_keys {
                 let mut is_running = false;
 
-                let Some(meta) = registry.metadata.find::<Service>("units", &service_name) else {
+                let Some(meta) = registry
+                  .metadata
+                  .find::<Service>("units", service_name.as_str())
+                else {
                   continue;
                 };
 
@@ -1462,7 +1486,7 @@ impl Runtime for ServiceRuntime {
                   continue;
                 };
 
-                let service_key = format!("units@{}", service_name);
+                let service_key = Ustr::from(format!("units@{}", service_name));
 
                 if let Some(instances) = registry.instances.get_mut(&service_key) {
                   for instance in instances.iter_mut() {
@@ -1483,7 +1507,7 @@ impl Runtime for ServiceRuntime {
                               branching.key.as_deref(),
                             );
 
-                            let to_stop: Vec<String> = service
+                            let to_stop: Vec<Ustr> = service
                               .instances
                               .iter()
                               .filter_map(|inst| {
@@ -1610,7 +1634,7 @@ impl Runtime for ServiceRuntime {
                         Some(&branch_ctx),
                         Some(sm),
                         Some(vh),
-                        service_key.clone(),
+                        service_key.clone().into(),
                         ctx.notifier.clone(),
                       ) {
                         Ok(instances) => {
@@ -1620,7 +1644,7 @@ impl Runtime for ServiceRuntime {
                         }
                         Err(e) => {
                           let mut fields = self.log_fields(ser, "start");
-                          fields.insert("branch".into(), key);
+                          fields.insert("branch".into(), key.to_string());
                           fields.insert("error".into(), e.to_string());
                           log.log(
                             LogLevel::Error,
@@ -1641,7 +1665,7 @@ impl Runtime for ServiceRuntime {
                   Some(sm),
                   dispatch,
                   Some(vh),
-                  service_key,
+                  service_key.into(),
                   ctx.notifier.clone(),
                 );
               }
@@ -1655,7 +1679,7 @@ impl Runtime for ServiceRuntime {
         ctx
           .registry
           .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-            (StateMachine::KEY.to_string(), VariableHeap::KEY.to_string()),
+            (StateMachine::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, vh)| {
               let service_key = format!("units@{}", name);
               let service =
@@ -1664,7 +1688,7 @@ impl Runtime for ServiceRuntime {
                 let launch_ctx = ServiceBranchContext {
                   key: None,
                   payload: None,
-                  forced_user: Some(user),
+                  forced_user: Some(user.into()),
                 };
 
                 match self.spawn_all(
@@ -1673,7 +1697,7 @@ impl Runtime for ServiceRuntime {
                   Some(&launch_ctx),
                   Some(sm),
                   Some(vh),
-                  service_key,
+                  service_key.into(),
                   ctx.notifier.clone(),
                 ) {
                   Ok(instances) => {
@@ -1715,7 +1739,7 @@ impl Runtime for ServiceRuntime {
                   Some(sm),
                   dispatch,
                   Some(vh),
-                  service_key,
+                  service_key.into(),
                   ctx.notifier.clone(),
                 );
               }
@@ -1748,7 +1772,7 @@ impl Runtime for ServiceRuntime {
         let service = ctx
           .registry
           .instantiate_one::<Service>("units", &name, |x| Ok(Service::new(x)))?;
-        let only_user = payload.get::<String>("only_user").ok();
+        let only_user = payload.get::<Ustr>("only_user").ok();
         self.stop_service(service, mode, log, dispatch, None, only_user);
       }
       "stop_all" => {
@@ -1759,7 +1783,7 @@ impl Runtime for ServiceRuntime {
           StopMode::Graceful
         };
 
-        let keys: Vec<String> = ctx
+        let keys: Vec<Ustr> = ctx
           .registry
           .instances
           .keys()
@@ -1778,32 +1802,38 @@ impl Runtime for ServiceRuntime {
         }
       }
       "start_all" => {
-        let mut started: HashSet<String> = HashSet::new();
-        let mut pending: Vec<(String, Vec<String>, Arc<ServiceMetadata>)> = Vec::new();
+        let mut started: HashSet<Ustr> = HashSet::new();
+        let mut pending: Vec<(Ustr, Vec<Ustr>, Arc<ServiceMetadata>)> = Vec::new();
         ctx
           .registry
           .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-            (StateMachine::KEY.to_string(), VariableHeap::KEY.to_string()),
+            (StateMachine::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, vh)| {
               let Some(active) = sm.states.get("rind@active") else {
                 return Ok(());
               };
 
-              let mut all_services: Vec<(String, Arc<ServiceMetadata>)> = Vec::new();
+              let mut all_services: Vec<(Ustr, Arc<ServiceMetadata>)> = Vec::new();
               for branch in active {
-                let name = branch.payload.to_string_payload();
-                if let Some(svc) = ctx.registry.metadata.find::<Service>("units", &name) {
+                let name = Ustr::from(branch.payload.to_string_payload());
+                if let Some(svc) = ctx
+                  .registry
+                  .metadata
+                  .find::<Service>("units", name.as_str())
+                {
                   all_services.push((name, svc));
                 }
               }
 
               for (full_name, svc_meta) in &all_services {
-                let service_key = format!("units@{}", full_name);
+                let service_key = Ustr::from(format!("units@{}", full_name));
                 if let Some(afters) = &svc_meta.after {
                   pending.push((full_name.clone(), afters.clone(), svc_meta.clone()));
                 } else {
-                  let service = registry
-                    .instantiate_one::<Service>("units", &full_name, |x| Ok(Service::new(x)))?;
+                  let service =
+                    registry.instantiate_one::<Service>("units", full_name.as_str(), |x| {
+                      Ok(Service::new(x))
+                    })?;
                   self.start_service(
                     service,
                     log,
@@ -1821,9 +1851,10 @@ impl Runtime for ServiceRuntime {
                 let mut progress = false;
                 pending.retain(|(name, afters, _meta)| {
                   if afters.iter().all(|a| started.contains(a)) {
-                    let service_key = format!("units@{}", name);
+                    let service_key = Ustr::from(format!("units@{}", name));
                     if let Ok(service) =
-                      registry.instantiate_one::<Service>("units", name, |x| Ok(Service::new(x)))
+                      registry
+                        .instantiate_one::<Service>("units", name.clone(), |x| Ok(Service::new(x)))
                     {
                       self.start_service(
                         service,
@@ -1852,7 +1883,7 @@ impl Runtime for ServiceRuntime {
 
         if !pending.is_empty() {
           let mut fields = HashMap::new();
-          let names: Vec<String> = pending.iter().map(|(n, _, _)| n.clone()).collect();
+          let names: Vec<String> = pending.iter().map(|(n, _, _)| n.to_string()).collect();
           fields.insert("unresolved".to_string(), names.join(", "));
           log.log(
             LogLevel::Error,
@@ -1863,7 +1894,7 @@ impl Runtime for ServiceRuntime {
         }
       }
       "reconcile_stacks" => {
-        let service = payload.get::<String>("service")?;
+        let service = payload.get::<Ustr>("service")?;
         let action = payload.get::<ServiceEventKind>("action")?;
 
         let metadata = ctx
@@ -1872,14 +1903,18 @@ impl Runtime for ServiceRuntime {
           .metadata("units")
           .ok_or_else(|| CoreError::MetadataNotFound("units".to_string()))?;
 
-        let mut dependents: Vec<(String, Arc<ServiceMetadata>)> = Vec::new();
+        let mut dependents: Vec<(Ustr, Arc<ServiceMetadata>)> = Vec::new();
         for group in metadata.groups() {
-          if let Some(svcs) = ctx.registry.metadata.group_items::<Service>("units", group) {
+          if let Some(svcs) = ctx
+            .registry
+            .metadata
+            .group_items::<Service>("units", group.clone())
+          {
             for svc in svcs {
               if let Some(ref dependencies) = svc.after
                 && dependencies.contains(&service)
               {
-                dependents.push((format!("{group}@{}", svc.name), svc));
+                dependents.push((Ustr::from(format!("{group}@{}", svc.name)), svc));
               }
             }
           }
@@ -1895,7 +1930,10 @@ impl Runtime for ServiceRuntime {
           | ServiceEventKind::Stopped
           | ServiceEventKind::Exited { code: _ } => {
             for (dependent, _) in dependents {
-              if let Ok(service) = ctx.registry.as_one_mut::<Service>("units", &dependent) {
+              if let Ok(service) = ctx
+                .registry
+                .as_one_mut::<Service>("units", dependent.as_str())
+              {
                 self.stop_service(service, StopMode::Graceful, log, dispatch, None, None);
               }
             }
@@ -1904,11 +1942,11 @@ impl Runtime for ServiceRuntime {
             ctx
               .registry
               .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-                (StateMachine::KEY.to_string(), VariableHeap::KEY.to_string()),
+                (StateMachine::KEY.into(), VariableHeap::KEY.into()),
                 |registry, (sm, vh)| {
                   for (dependent, svc) in dependents {
                     let should_start = svc.after.as_ref().unwrap().iter().any(|a| {
-                      if let Ok(ref svc) = registry.as_one::<Service>("units", a) {
+                      if let Ok(ref svc) = registry.as_one::<Service>("units", a.as_str()) {
                         !svc.instances.is_empty()
                           && !svc.instances.iter().any(|x| {
                             x.state == ServiceState::Inactive
@@ -1922,9 +1960,9 @@ impl Runtime for ServiceRuntime {
                     });
 
                     if should_start {
-                      let service_key = format!("units@{}", dependent);
+                      let service_key = Ustr::from(format!("units@{}", dependent));
                       let service =
-                        registry.instantiate_one::<Service>("units", &dependent, |x| {
+                        registry.instantiate_one::<Service>("units", dependent.as_str(), |x| {
                           Ok(Service::new(x))
                         })?;
                       self.start_service(
@@ -1933,7 +1971,7 @@ impl Runtime for ServiceRuntime {
                         Some(sm),
                         dispatch,
                         Some(vh),
-                        service_key,
+                        service_key.into(),
                         ctx.notifier.clone(),
                       );
                     }
@@ -1945,8 +1983,8 @@ impl Runtime for ServiceRuntime {
         }
       }
       "child_exited" => {
-        let pid = payload.get::<i64>("pid")? as u32;
-        let code = payload.get::<i64>("code")? as i32;
+        let pid = payload.get::<i32>("pid")? as u32;
+        let code = payload.get::<i32>("code")?;
 
         if let Some(service_key) = self.pid_map.remove(&pid) {
           self.stopping_map.remove(&pid);
@@ -1954,7 +1992,7 @@ impl Runtime for ServiceRuntime {
           ctx
             .registry
             .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-              (StateMachine::KEY.to_string(), VariableHeap::KEY.to_string()),
+              (StateMachine::KEY.into(), VariableHeap::KEY.into()),
               |registry, (sm, vh)| {
                 if let Some(instances) = registry.instances.get_mut(&service_key) {
                   for instance in instances.iter_mut() {

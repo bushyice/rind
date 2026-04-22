@@ -1,7 +1,7 @@
 [[service]]
 name = "three"
 start-on = ["my_state"]
-on-start = [{ signal = "my_signal", payload = "hi" }]
+on-start = [{ signal = "else@my_signal", payload = "hi" }]
 run.exec = "/usr/bin/example-active"
 run.args = ["arg1", "arg2"]
 restart = false
@@ -26,4 +26,4 @@ payload = "string"
 
 [[signal]]
 name = "my_signal"
-payload = "json"
+payload = "string"

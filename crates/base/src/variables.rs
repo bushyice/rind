@@ -2,9 +2,9 @@ use rind_core::prelude::*;
 
 #[model(meta_name = name, meta_fields(name, env, default), derive_metadata(Debug, Clone))]
 pub struct Variable {
-  pub name: String,
+  pub name: Ustr,
   pub default: Option<toml::Value>,
-  pub env: Option<String>,
+  pub env: Option<Ustr>,
 }
 
 use std::collections::HashMap;
@@ -15,9 +15,9 @@ use rind_core::error::CoreError;
 
 #[derive(Clone)]
 pub struct VariableHeap {
-  values: HashMap<String, toml::Value>,
-  defaults: HashMap<String, toml::Value>,
-  env_mappings: HashMap<String, String>,
+  values: HashMap<Ustr, toml::Value>,
+  defaults: HashMap<Ustr, toml::Value>,
+  env_mappings: HashMap<Ustr, Ustr>,
   path: PathBuf,
 }
 
@@ -54,7 +54,7 @@ impl VariableHeap {
 
     if let toml::Value::Table(map) = table {
       for (key, value) in map {
-        self.values.insert(key, value);
+        self.values.insert(Ustr::from(key), value);
       }
     }
 
@@ -69,7 +69,7 @@ impl VariableHeap {
 
     let mut table = toml::map::Map::new();
     for (key, value) in &self.values {
-      table.insert(key.clone(), value.clone());
+      table.insert(key.to_string(), value.clone());
     }
 
     let content = toml::to_string_pretty(&toml::Value::Table(table))
@@ -84,36 +84,37 @@ impl VariableHeap {
     Ok(())
   }
 
-  pub fn register(&mut self, id: &str, default: Option<toml::Value>, env: Option<String>) {
-    self.defaults.insert(
-      id.to_string(),
-      default.unwrap_or(toml::Value::Boolean(false)),
-    );
+  pub fn register(&mut self, id: impl Into<Ustr>, default: Option<toml::Value>, env: Option<Ustr>) {
+    let id = id.into();
+    self
+      .defaults
+      .insert(id.clone(), default.unwrap_or(toml::Value::Boolean(false)));
     if let Some(env_name) = env {
-      self.env_mappings.insert(id.to_string(), env_name);
+      self.env_mappings.insert(id, env_name);
     }
   }
 
-  pub fn set(&mut self, id: &str, value: toml::Value) {
-    self.values.insert(id.to_string(), value);
+  pub fn set(&mut self, id: impl Into<Ustr>, value: toml::Value) {
+    self.values.insert(id.into(), value);
   }
 
   pub fn get(&self, id: &str) -> Option<toml::Value> {
-    if let Some(val) = self.values.get(id) {
+    let id_ustr = Ustr::from(id);
+    if let Some(val) = self.values.get(&id_ustr) {
       return Some(val.clone());
     }
 
-    if let Some(env_name) = self.env_mappings.get(id) {
-      if let Ok(val) = std::env::var(env_name) {
+    if let Some(env_name) = self.env_mappings.get(&id_ustr) {
+      if let Ok(val) = std::env::var(env_name.as_str()) {
         return Some(toml::Value::String(val));
       }
     }
 
-    self.defaults.get(id).cloned()
+    self.defaults.get(&id_ustr).cloned()
   }
 
   pub fn contains(&self, id: &str) -> bool {
-    self.defaults.contains_key(id)
+    self.defaults.contains_key(&Ustr::from(id))
   }
 }
 

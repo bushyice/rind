@@ -1,6 +1,8 @@
+use rind_core::types::Ustr;
+
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct ListPayload {
-  pub name: String,
+  pub name: Ustr,
   pub unit_type: String,
 }
 

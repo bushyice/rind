@@ -456,7 +456,7 @@ fn main() {
       let result = send_msg!(
         "list",
         serde_json::to_string(&ListPayload {
-          name: name.clone(),
+          name: name.clone().into(),
           unit_type: if unit {
             "unit"
           } else if service {

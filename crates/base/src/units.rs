@@ -117,7 +117,7 @@ impl UnitsOrchestrator {
             if sub_path.extension().map_or(true, |ext| ext != "toml") {
               continue;
             }
-            let group = format!(
+            let group = Ustr::from(format!(
               "{}/{}",
               path
                 .file_name()
@@ -127,7 +127,7 @@ impl UnitsOrchestrator {
                 .file_stem()
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown")
-            );
+            ));
             let content = std::fs::read_to_string(&sub_path).map_err(|e| {
               CoreError::Custom(format!(
                 "failed to read unit file {}: {e}",
@@ -136,7 +136,7 @@ impl UnitsOrchestrator {
             })?;
             ctx
               .metadata
-              .load_group_from_toml(&mut metadata, &group, &content)
+              .load_group_from_toml(&mut metadata, group, &content)
               .map_err(|e| {
                 CoreError::Custom(format!(
                   "failed to parse unit file {}: {e}",
@@ -156,11 +156,10 @@ impl UnitsOrchestrator {
         continue;
       }
 
-      let group = path
+      let group = Ustr::from(path
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("unknown")
-        .to_string();
+        .unwrap_or("unknown"));
 
       let content = std::fs::read_to_string(&path).map_err(|e| {
         CoreError::Custom(format!("failed to read unit file {}: {e}", path.display()))
@@ -168,14 +167,14 @@ impl UnitsOrchestrator {
 
       ctx
         .metadata
-        .load_group_from_toml(&mut metadata, &group, &content)
+        .load_group_from_toml(&mut metadata, group.clone(), &content)
         .map_err(|e| {
           CoreError::Custom(format!("failed to parse unit file {}: {e}", path.display()))
         })?;
 
       if content.contains("permission") {
-        if let Some(group) = metadata.get_in_group::<Permission>(&group) {
-          for perm in group {
+        if let Some(items) = metadata.get_in_group::<Permission>(group) {
+          for perm in items {
             permissions.reg_perm(PermissionId(perm.id), perm.name.clone())?;
           }
         }
@@ -329,7 +328,7 @@ impl Orchestrator for UnitsOrchestrator {
           for group in units.groups() {
             if let Some(vars) = units.get_in_group::<Variable>(group) {
               for var in vars {
-                variable_heap.register(&var.name, var.default.clone(), var.env.clone());
+                variable_heap.register(var.name.clone(), var.default.clone(), var.env.clone());
               }
             }
           }
