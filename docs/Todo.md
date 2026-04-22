@@ -13,6 +13,9 @@ kanban-plugin: board
 
 ## Doing
 
+- [ ] **Trigger Optimizations**: Keep an index of flow <-> service relationships.
+- [ ] **Payload Optimizations**: Replace JSON with a faster payload for internal messaging.
+- [ ] **String Optimizations**: Use something like `strumbra` for strings.
 - [ ] **Piping**: Piping and payloads into other states/signals.
 	- [x] Simple circumstantial piping
 	- [ ] General piping
@@ -50,6 +53,7 @@ kanban-plugin: board
 - [x] **Detached Transports/Subscribers**: Independent messaging access for external programs.
 - [x] **Service Branching**: Service per state branching.
 - [x] **State Branching**: Many state payloads at once.
+- [ ] **Daemon Optimizations**: Replace loop with `epoll` to save wasted CPU cycles.
 - [x] **Payloads**: Typed support for JSON, String, and Binary data.
 - [ ] **Variables**: Dynamic definition values.
 	- [x] As service run options

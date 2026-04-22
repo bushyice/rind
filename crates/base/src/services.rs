@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
-use rind_core::prelude::*;
+use rind_core::{notifier::Notifier, prelude::*};
 
 use crate::flow::{FlowInstance, FlowItem, FlowPayload, FlowType, StateMachine, Trigger};
 use crate::permissions::PERM_SYSTEM_SERVICES;
@@ -428,6 +428,7 @@ impl ServiceRuntime {
     sm: Option<&StateMachine>,
     variable_heap: Option<&VariableHeap>,
     registry_key: String,
+    notifier: Option<Notifier>,
   ) -> anyhow::Result<Vec<ChildInstance>> {
     let mut instances = Vec::new();
     for run in service.metadata.run.as_many() {
@@ -441,6 +442,7 @@ impl ServiceRuntime {
         sm,
         variable_heap,
         registry_key.clone(),
+        notifier.clone(),
       )?);
     }
     Ok(instances)
@@ -493,6 +495,7 @@ impl ServiceRuntime {
     sm: Option<&StateMachine>,
     variable_heap: Option<&VariableHeap>,
     registry_key: String,
+    notifier: Option<Notifier>,
   ) -> anyhow::Result<()> {
     log.log(
       LogLevel::Info,
@@ -501,7 +504,15 @@ impl ServiceRuntime {
       self.log_fields(service, "start"),
     );
 
-    let instances = self.spawn_all(service, log, None, sm, variable_heap, registry_key)?;
+    let instances = self.spawn_all(
+      service,
+      log,
+      None,
+      sm,
+      variable_heap,
+      registry_key,
+      notifier,
+    )?;
     service.instances.extend(instances);
     Ok(())
   }
@@ -522,6 +533,7 @@ impl ServiceRuntime {
     sm: Option<&StateMachine>,
     variables: Option<&VariableHeap>,
     registry_key: String,
+    notifier: Option<Notifier>,
   ) -> anyhow::Result<ChildInstance> {
     let mut args = run.args.clone();
     let mut envs = run.env.clone().unwrap_or_default();
@@ -691,6 +703,7 @@ impl ServiceRuntime {
         service.metadata.name.clone(),
         &mut child,
         self.stdio_tx.clone(),
+        notifier,
       );
       let (tx, rx) = mpsc::channel::<TransportMessage>();
       start_stdin_writer(service.metadata.name.clone(), &mut child, log.clone(), rx);
@@ -719,6 +732,7 @@ impl ServiceRuntime {
     dispatch: &RuntimeDispatcher,
     variable_heap: Option<&VariableHeap>,
     registry_key: String,
+    notifier: Option<Notifier>,
   ) {
     if let Some(inst) = service.instances.as_one() {
       if inst.state == ServiceState::Active || inst.state == ServiceState::Starting {
@@ -726,7 +740,7 @@ impl ServiceRuntime {
       }
     }
 
-    match self.spawn_service(service, log, sm, variable_heap, registry_key) {
+    match self.spawn_service(service, log, sm, variable_heap, registry_key, notifier) {
       Ok(_) => {
         self.register_stdio_transport(service, dispatch);
         if let Some(inst) = service.instances.as_one_mut() {
@@ -1550,6 +1564,7 @@ impl Runtime for ServiceRuntime {
                         Some(sm),
                         Some(vh),
                         service_key.clone(),
+                        ctx.notifier.clone(),
                       ) {
                         Ok(instances) => {
                           ser.instances.extend(instances);
@@ -1579,7 +1594,15 @@ impl Runtime for ServiceRuntime {
                   }
                 }
 
-                self.start_service(ser, log, Some(sm), dispatch, Some(vh), service_key);
+                self.start_service(
+                  ser,
+                  log,
+                  Some(sm),
+                  dispatch,
+                  Some(vh),
+                  service_key,
+                  ctx.notifier.clone(),
+                );
               }
               Ok(())
             },
@@ -1610,6 +1633,7 @@ impl Runtime for ServiceRuntime {
                   Some(sm),
                   Some(vh),
                   service_key,
+                  ctx.notifier.clone(),
                 ) {
                   Ok(instances) => {
                     service.instances.extend(instances);
@@ -1645,7 +1669,15 @@ impl Runtime for ServiceRuntime {
                   }
                 }
               } else {
-                self.start_service(service, log, Some(sm), dispatch, Some(vh), service_key);
+                self.start_service(
+                  service,
+                  log,
+                  Some(sm),
+                  dispatch,
+                  Some(vh),
+                  service_key,
+                  ctx.notifier.clone(),
+                );
               }
               if service
                 .metadata
@@ -1732,7 +1764,15 @@ impl Runtime for ServiceRuntime {
                 } else {
                   let service = registry
                     .instantiate_one::<Service>("units", &full_name, |x| Ok(Service::new(x)))?;
-                  self.start_service(service, log, Some(sm), dispatch, Some(vh), service_key);
+                  self.start_service(
+                    service,
+                    log,
+                    Some(sm),
+                    dispatch,
+                    Some(vh),
+                    service_key,
+                    ctx.notifier.clone(),
+                  );
                   started.insert(full_name.clone());
                 }
               }
@@ -1745,7 +1785,15 @@ impl Runtime for ServiceRuntime {
                     if let Ok(service) =
                       registry.instantiate_one::<Service>("units", name, |x| Ok(Service::new(x)))
                     {
-                      self.start_service(service, log, Some(sm), dispatch, Some(vh), service_key);
+                      self.start_service(
+                        service,
+                        log,
+                        Some(sm),
+                        dispatch,
+                        Some(vh),
+                        service_key,
+                        ctx.notifier.clone(),
+                      );
                       started.insert(name.clone());
                       progress = true;
                     }
@@ -1839,7 +1887,15 @@ impl Runtime for ServiceRuntime {
                         registry.instantiate_one::<Service>("units", &dependent, |x| {
                           Ok(Service::new(x))
                         })?;
-                      self.start_service(service, log, Some(sm), dispatch, Some(vh), service_key);
+                      self.start_service(
+                        service,
+                        log,
+                        Some(sm),
+                        dispatch,
+                        Some(vh),
+                        service_key,
+                        ctx.notifier.clone(),
+                      );
                     }
                   }
                   Ok(())
@@ -1875,6 +1931,7 @@ impl Runtime for ServiceRuntime {
                               dispatch,
                               Some(vh),
                               service_key.clone(),
+                              ctx.notifier.clone(),
                             );
                           }
                           ServiceExitAction::StopDependents => {

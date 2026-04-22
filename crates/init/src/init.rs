@@ -1,7 +1,11 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use nix::sys::epoll::{Epoll, EpollCreateFlags, EpollEvent, EpollFlags};
 use nix::sys::signal::{Signal, kill};
+use nix::sys::signalfd::{SfdFlags, SigSet, SignalFd};
+use nix::sys::time::TimeSpec;
+use nix::sys::timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags};
 use nix::unistd::Pid;
 use rind_base::flow::FlowRuntime;
 use rind_base::ipc::IpcRuntime;
@@ -12,9 +16,10 @@ use rind_base::services::ServiceRuntime;
 use rind_base::transport::TransportRuntime;
 use rind_base::units::UnitsOrchestrator;
 use rind_base::user::UserRuntime;
-use rind_core::prelude::*;
+use rind_core::{notifier::Notifier, prelude::*};
 use rind_plugins::{collect_plugins, plugins_path};
 use serde_json::json;
+use std::os::fd::AsFd;
 
 struct BootOrchestrator;
 
@@ -261,7 +266,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   boot.orchestrators.insert(0, units);
   boot.orchestrators.insert(0, RuntimeProviderOrchestrator);
 
-  let runtime = boot.init_runtime(log);
+  let notifier = Notifier::new().expect("failed to create notifier");
+  let runtime = boot.init_runtime(log, Some(notifier.clone()));
 
   boot
     .run(&mut metadata, &mut instances, &runtime)
@@ -271,13 +277,71 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .primary_context_id()
     .ok_or_else(|| "missing runtime context id after boot".to_string())?;
 
+  let mut sigset = SigSet::empty();
+  sigset.add(Signal::SIGCHLD);
+  sigset.thread_block().expect("failed to block SIGCHLD");
+
+  let sfd = SignalFd::with_flags(&sigset, SfdFlags::SFD_NONBLOCK | SfdFlags::SFD_CLOEXEC)
+    .expect("failed to create signalfd");
+
+  let tfd = TimerFd::new(
+    ClockId::CLOCK_MONOTONIC,
+    TimerFlags::TFD_NONBLOCK | TimerFlags::TFD_CLOEXEC,
+  )
+  .expect("failed to create timerfd");
+
+  tfd
+    .set(
+      Expiration::Interval(TimeSpec::from(Duration::from_secs(60))),
+      TimerSetTimeFlags::empty(),
+    )
+    .expect("failed to set timerfd");
+
+  let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).expect("failed to create epoll");
+
+  // 0 = Notifier, 1 = SignalFd, 2 = TimerFd
+  epoll
+    .add(notifier.as_fd(), EpollEvent::new(EpollFlags::EPOLLIN, 0))
+    .expect("failed to add notifier to epoll");
+  epoll
+    .add(sfd.as_fd(), EpollEvent::new(EpollFlags::EPOLLIN, 1))
+    .expect("failed to add signalfd to epoll");
+  epoll
+    .add(tfd.as_fd(), EpollEvent::new(EpollFlags::EPOLLIN, 2))
+    .expect("failed to add timerfd to epoll");
+
+  let mut events = [EpollEvent::empty(); 4];
+
   loop {
     while let Some(action) = runtime.next_lifecycle_action(context_id) {
       if !process_lifecycle_action(action, &mut boot, &mut metadata, &mut instances, &runtime) {
         return Ok(());
       }
     }
+
+    let n = epoll
+      .wait(&mut events, nix::sys::epoll::EpollTimeout::NONE)
+      .expect("epoll_wait failed");
+    // println!("Here");
+
+    for i in 0..n {
+      let event = events[i];
+      match event.data() {
+        0 => {
+          notifier.reset().ok();
+        }
+        1 => {
+          let _ = sfd.read_signal();
+        }
+        2 => {
+          // println!("here");
+          let _ = tfd.wait();
+        }
+        _ => {}
+      }
+    }
+
+    // println!("Pumping");
     let _ = boot.pump_once(&mut metadata, &mut instances, &runtime);
-    std::thread::sleep(std::time::Duration::from_millis(50));
   }
 }

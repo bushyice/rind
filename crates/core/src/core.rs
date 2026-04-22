@@ -5,6 +5,7 @@ pub mod events;
 pub mod lifecycle;
 pub mod logging;
 pub mod metadata;
+pub mod notifier;
 pub mod orchestrator;
 pub mod permissions;
 pub mod persistence;

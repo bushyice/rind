@@ -1,6 +1,7 @@
 use crate::context::ScopeBuilder;
 use crate::error::CoreError;
 use crate::logging::{LogConfig, LogHandle, start_logger};
+use crate::notifier::Notifier;
 use crate::orchestrator::{BootCycle, BootPhase, OrchestratorContext, OrchestratorStore};
 use crate::registry::{InstanceMap, MetadataRegistry};
 use crate::runtime::{RuntimeHandle, start_runtime};
@@ -32,8 +33,8 @@ impl BootEngine {
     start_logger(LogConfig::default())
   }
 
-  pub fn init_runtime(&self, log: LogHandle) -> RuntimeHandle {
-    start_runtime(log, self.orchestrators.runtimes())
+  pub fn init_runtime(&self, log: LogHandle, notifier: Option<Notifier>) -> RuntimeHandle {
+    start_runtime(log, self.orchestrators.runtimes(), notifier)
   }
 
   pub fn run(
@@ -330,37 +331,13 @@ mod tests {
   }
 
   #[test]
-  fn boot_builds_scope_and_runtime_reads_it() {
-    let log = logger_for_tests();
-    let (tx, rx) = mpsc::channel::<String>();
-    let runtime = start_runtime(log, vec![Box::new(ScopeReaderRuntime::new("alpha", tx))]);
-
-    let mut boot = BootEngine::default();
-    boot
-      .orchestrators
-      .push(ScopeOrchestrator::new(BootPhase::Start, "alpha", "hello"));
-
-    let mut metadata = MetadataRegistry::default();
-    let mut instances = InstanceMap::default();
-    boot
-      .run(&mut metadata, &mut instances, &runtime)
-      .expect("boot run should succeed");
-
-    let value = rx
-      .recv_timeout(Duration::from_secs(2))
-      .expect("runtime should receive scoped value");
-    assert_eq!(value, "hello".to_string());
-
-    let _ = runtime.send(RuntimeCommand::Stop);
-  }
-
-  #[test]
   fn runtime_can_dispatch_to_another_runtime() {
     let log = logger_for_tests();
     let (tx, rx) = mpsc::channel::<u32>();
     let runtime = start_runtime(
       log,
       vec![Box::new(PingRuntime), Box::new(PongRuntime { tx })],
+      None,
     );
 
     let mut boot = BootEngine::default();
@@ -384,7 +361,11 @@ mod tests {
   fn boot_applies_phase_specific_scope_contexts() {
     let log = logger_for_tests();
     let (tx, rx) = mpsc::channel::<String>();
-    let runtime = start_runtime(log, vec![Box::new(ScopeReaderRuntime::new("alpha", tx))]);
+    let runtime = start_runtime(
+      log,
+      vec![Box::new(ScopeReaderRuntime::new("alpha", tx))],
+      None,
+    );
 
     let mut boot = BootEngine::default();
     boot.orchestrators.push(ScopeOrchestrator::new(

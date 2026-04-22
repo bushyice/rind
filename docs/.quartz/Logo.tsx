@@ -15,6 +15,7 @@ export default ((opts?: Options) => {
           gao: "10px",
           justifyContent: "center",
           alignItems: "center",
+          textAlign: "center"
         }}
       >
         <svg

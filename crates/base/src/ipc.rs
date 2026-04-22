@@ -439,6 +439,7 @@ impl Runtime for IpcRuntime {
       "start_server" => {
         if self.listener_thread.is_none() {
           let tx = self.incoming_tx.clone();
+          let notifier = ctx.notifier.clone();
           self.listener_thread = Some(thread::spawn(move || {
             let socket_path = "/tmp/rind.sock";
             let _ = std::fs::remove_file(socket_path);
@@ -457,8 +458,9 @@ impl Runtime for IpcRuntime {
             for stream in listener.incoming() {
               if let Ok(stream) = stream {
                 let tx = tx.clone();
+                let notifier = notifier.clone();
                 thread::spawn(move || {
-                  handle_client_connection(stream, tx);
+                  handle_client_connection(stream, tx, notifier);
                 });
               }
             }
@@ -502,7 +504,13 @@ pub fn get_peer_cred(stream: &UnixStream) -> std::io::Result<ucred> {
   Ok(cred)
 }
 
-fn handle_client_connection(mut stream: UnixStream, parent_tx: Sender<IpcRequest>) {
+use rind_core::notifier::Notifier;
+
+fn handle_client_connection(
+  mut stream: UnixStream,
+  parent_tx: Sender<IpcRequest>,
+  notifier: Option<Notifier>,
+) {
   let cred = get_peer_cred(&stream).expect("failed to get cred");
   loop {
     let mut len_buf = [0u8; 4];
@@ -535,6 +543,9 @@ fn handle_client_connection(mut stream: UnixStream, parent_tx: Sender<IpcRequest
     let (reply_tx, reply_rx) = mpsc::channel::<Message>();
     if parent_tx.send((msg, reply_tx)).is_err() {
       break;
+    }
+    if let Some(notif) = &notifier {
+      let _ = notif.notify();
     }
 
     let response: Message = match reply_rx.recv() {

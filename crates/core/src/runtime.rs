@@ -11,6 +11,7 @@ use crate::error::CoreError;
 use crate::events::EventBus;
 use crate::lifecycle::{LifecycleAction, LifecycleQueue};
 use crate::logging::{LogHandle, LogLevel};
+use crate::notifier::Notifier;
 use crate::registry::{InstanceMap, InstanceRegistry, MetadataRegistry};
 
 pub enum RuntimeCommand<T: Serialize + DeserializeOwned = serde_json::Value> {
@@ -112,6 +113,7 @@ struct RuntimeEngine {
   contexts: HashMap<usize, RuntimeContextState>,
   queue: VecDeque<RuntimeCommand>,
   instances: InstanceMap,
+  pub notifier: Option<Notifier>,
   stopped: bool,
 }
 
@@ -130,11 +132,12 @@ impl RuntimeHandle {
 
     match command {
       RuntimeCommand::RegisterScopes { context_id, scopes } => {
+        let notifier = inner.notifier.clone();
         inner.contexts.insert(
           context_id,
           RuntimeContextState {
             scopes,
-            event_bus: EventBus::new(),
+            event_bus: EventBus::new(notifier),
             lifecycle: LifecycleQueue::default(),
           },
         );
@@ -275,6 +278,7 @@ impl RuntimeHandle {
         registry,
         &mut event_bus,
         &mut lifecycle,
+        self.inner.borrow().notifier.clone(),
       );
       let dispatch = RuntimeDispatcher::new(self.clone(), cid);
 
@@ -319,7 +323,11 @@ impl RuntimeHandle {
   }
 }
 
-pub fn start_runtime(log: LogHandle, runtimes: Vec<Box<dyn Runtime>>) -> RuntimeHandle {
+pub fn start_runtime(
+  log: LogHandle,
+  runtimes: Vec<Box<dyn Runtime>>,
+  notifier: Option<Notifier>,
+) -> RuntimeHandle {
   let mut map = HashMap::<String, Box<dyn Runtime>>::new();
   for runtime in runtimes {
     map.insert(runtime.id().to_string(), runtime);
@@ -332,6 +340,7 @@ pub fn start_runtime(log: LogHandle, runtimes: Vec<Box<dyn Runtime>>) -> Runtime
       contexts: HashMap::new(),
       queue: VecDeque::new(),
       instances: InstanceMap::default(),
+      notifier,
       stopped: false,
     })),
   }

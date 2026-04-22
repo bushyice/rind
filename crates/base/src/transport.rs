@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::flow::{FlowMatchOperation, FlowPayload, Signal, State};
 use crate::ipc::get_peer_cred;
+use rind_core::notifier::Notifier;
 
 #[derive(Serialize, Deserialize, Copy, Clone)]
 pub enum TransportMessageType {
@@ -77,7 +78,13 @@ impl TransportMethod {
 }
 
 pub trait TransportProtocol: Send + Sync {
-  fn setup(&mut self, endpoint: &str, permissions: Option<Vec<u16>>, pm: Option<PermissionStore>);
+  fn setup(
+    &mut self,
+    endpoint: &str,
+    permissions: Option<Vec<u16>>,
+    pm: Option<PermissionStore>,
+    notifier: Option<Notifier>,
+  );
   fn send_message(&self, endpoint: &str, msg: &TransportMessage);
 }
 
@@ -112,6 +119,7 @@ impl UdsTransport {
     endpoint: String,
     permissions: Option<Vec<u16>>,
     pm: Option<PermissionStore>,
+    notifier: Option<Notifier>,
   ) {
     let path = socket_path(&endpoint);
     if let Some(parent) = path.parent() {
@@ -164,6 +172,7 @@ impl UdsTransport {
 
         let tx = tx.clone();
         let ep_for_msg = ep.clone();
+        let notifier = notifier.clone();
         std::thread::spawn(move || {
           let mut reader = BufReader::new(stream);
           let mut line = String::new();
@@ -181,6 +190,9 @@ impl UdsTransport {
             }
             if let Ok(msg) = serde_json::from_str::<TransportMessage>(trimmed) {
               let _ = tx.send((ep_for_msg.clone(), msg, uid));
+              if let Some(n) = &notifier {
+                let _ = n.notify();
+              }
             }
           }
         });
@@ -190,11 +202,17 @@ impl UdsTransport {
 }
 
 impl TransportProtocol for UdsTransport {
-  fn setup(&mut self, endpoint: &str, permissions: Option<Vec<u16>>, pm: Option<PermissionStore>) {
+  fn setup(
+    &mut self,
+    endpoint: &str,
+    permissions: Option<Vec<u16>>,
+    pm: Option<PermissionStore>,
+    notifier: Option<Notifier>,
+  ) {
     if self.started.contains(endpoint) {
       return;
     }
-    self.start_listener(endpoint.to_string(), permissions, pm);
+    self.start_listener(endpoint.to_string(), permissions, pm, notifier);
     self.started.insert(endpoint.to_string());
   }
 
@@ -215,6 +233,7 @@ pub fn start_stdout_listener(
   service_name: String,
   child: &mut std::process::Child,
   tx: std::sync::mpsc::Sender<(String, TransportMessage)>,
+  notifier: Option<Notifier>,
 ) {
   if let Some(stdout) = child.stdout.take() {
     std::thread::spawn(move || {
@@ -222,6 +241,9 @@ pub fn start_stdout_listener(
       for line in reader.lines().flatten() {
         if let Ok(msg) = serde_json::from_str::<TransportMessage>(&line) {
           let _ = tx.send((service_name.clone(), msg));
+          if let Some(n) = &notifier {
+            let _ = n.notify();
+          }
         }
       }
     });
@@ -266,7 +288,9 @@ impl Runtime for TransportRuntime {
         let endpoint = payload.get::<String>("endpoint")?;
         let permissions = payload.get::<Vec<u16>>("permissions").ok();
 
-        self.uds.setup(&endpoint, permissions, Some(pm));
+        self
+          .uds
+          .setup(&endpoint, permissions, Some(pm), ctx.notifier.clone());
       }
       "register_stdio" => {
         let endpoint = payload.get::<String>("endpoint")?;

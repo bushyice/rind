@@ -9,6 +9,7 @@ use crate::user::UserRecord;
 
 use crate::events::EventBus;
 use crate::lifecycle::LifecycleQueue;
+use crate::notifier::Notifier;
 use crate::registry::InstanceRegistry;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -195,6 +196,7 @@ pub struct RuntimeContext<'a> {
   pub registry: InstanceRegistry<'a>,
   pub event_bus: &'a mut EventBus,
   pub lifecycle: &'a mut LifecycleQueue,
+  pub notifier: Option<Notifier>,
 }
 
 impl<'a> RuntimeContext<'a> {
@@ -204,6 +206,7 @@ impl<'a> RuntimeContext<'a> {
     registry: InstanceRegistry<'a>,
     event_bus: &'a mut EventBus,
     lifecycle: &'a mut LifecycleQueue,
+    notifier: Option<Notifier>,
   ) -> Self {
     Self {
       runtime_id,
@@ -211,6 +214,7 @@ impl<'a> RuntimeContext<'a> {
       registry,
       event_bus,
       lifecycle,
+      notifier,
     }
   }
 }

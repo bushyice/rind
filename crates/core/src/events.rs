@@ -1,3 +1,4 @@
+use crate::notifier::Notifier;
 use std::any::{Any, TypeId};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -72,14 +73,19 @@ struct ErasedChannel {
   sender: Box<dyn Any + Send + Sync>,
 }
 
-#[derive(Default, Clone)]
 pub struct EventBus {
   inner: Rc<RefCell<EventBusInner>>,
 }
 
-#[derive(Default)]
+impl Default for EventBus {
+  fn default() -> Self {
+    Self::new(None)
+  }
+}
+
 struct EventBusInner {
   channels: HashMap<TypeId, Vec<ErasedChannel>>,
+  notifier: Option<Notifier>,
 }
 
 pub struct Subscription<T> {
@@ -105,8 +111,13 @@ impl<T> Subscription<T> {
 }
 
 impl EventBus {
-  pub fn new() -> Self {
-    Self::default()
+  pub fn new(notifier: Option<Notifier>) -> Self {
+    Self {
+      inner: Rc::new(RefCell::new(EventBusInner {
+        channels: HashMap::new(),
+        notifier,
+      })),
+    }
   }
 
   pub fn subscribe<T: Clone + Send + 'static>(&self) -> Subscription<T> {
@@ -134,6 +145,9 @@ impl EventBus {
           false
         }
       });
+      if let Some(notifier) = &inner.notifier {
+        let _ = notifier.notify();
+      }
     }
   }
 }
@@ -144,7 +158,7 @@ mod tests {
 
   #[test]
   fn subscribe_and_emit() {
-    let bus = EventBus::new();
+    let bus = EventBus::new(None);
     let sub = bus.subscribe::<FlowEvent>();
 
     bus.emit(FlowEvent {
@@ -161,7 +175,7 @@ mod tests {
 
   #[test]
   fn multiple_subscribers() {
-    let bus = EventBus::new();
+    let bus = EventBus::new(None);
     let sub1 = bus.subscribe::<ServiceEvent>();
     let sub2 = bus.subscribe::<ServiceEvent>();
 
@@ -176,7 +190,7 @@ mod tests {
 
   #[test]
   fn different_types_are_independent() {
-    let bus = EventBus::new();
+    let bus = EventBus::new(None);
     let flow_sub = bus.subscribe::<FlowEvent>();
     let svc_sub = bus.subscribe::<ServiceEvent>();
 
@@ -193,7 +207,7 @@ mod tests {
 
   #[test]
   fn dead_subscriber_is_pruned() {
-    let bus = EventBus::new();
+    let bus = EventBus::new(None);
     let sub = bus.subscribe::<ServiceEvent>();
     drop(sub);
 
@@ -205,7 +219,7 @@ mod tests {
 
   #[test]
   fn drain_collects_all() {
-    let bus = EventBus::new();
+    let bus = EventBus::new(None);
     let sub = bus.subscribe::<ServiceEvent>();
 
     for i in 0..5 {
