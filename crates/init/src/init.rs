@@ -52,6 +52,7 @@ impl Orchestrator for BootOrchestrator {
     ctx.dispatch("firewall", "apply", json!({}))?;
 
     ctx.dispatch("flow", "bootstrap", json!({}))?;
+    ctx.dispatch("services", "bootstrap", json!({}))?;
     ctx.dispatch("networking", "bootstrap", json!({}))?;
     ctx.dispatch("networking", "scan", json!({}))?;
     ctx.dispatch("networking", "configure", json!({}))?;
@@ -204,6 +205,12 @@ fn process_lifecycle_action(
     LifecycleAction::ReloadUnits => {
       load_env();
       let _ = boot.reload_units_collection(metadata, instances, runtime);
+      let _ = runtime.dispatch(
+        "services",
+        "bootstrap",
+        json!({}).into(),
+        boot.primary_context_id().unwrap_or(0),
+      );
       true
     }
     LifecycleAction::SoftReboot => {
@@ -292,7 +299,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   tfd
     .set(
-      Expiration::Interval(TimeSpec::from(Duration::from_secs(60))),
+      Expiration::Interval(TimeSpec::from(Duration::from_secs(60))), // change a dynamic duration
       TimerSetTimeFlags::empty(),
     )
     .expect("failed to set timerfd");

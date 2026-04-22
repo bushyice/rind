@@ -270,6 +270,7 @@ pub struct ServiceRuntime {
   stdio_writers: Mutex<HashMap<String, Vec<Sender<TransportMessage>>>>,
   pid_map: HashMap<u32, String>,
   stopping_map: HashMap<u32, Instant>,
+  trigger_index: HashMap<String, HashSet<String>>,
 }
 
 impl Default for ServiceRuntime {
@@ -282,6 +283,7 @@ impl Default for ServiceRuntime {
       stdio_writers: Mutex::new(HashMap::new()),
       pid_map: HashMap::new(),
       stopping_map: HashMap::new(),
+      trigger_index: HashMap::new(),
     }
   }
 }
@@ -416,6 +418,35 @@ impl ServiceRuntime {
         }
 
         Ok(None)
+      }
+    }
+  }
+
+  fn rebuild_trigger_index(&mut self, metadata: &MetadataRegistry) {
+    self.trigger_index.clear();
+    let services = metadata.items::<Service>("units").unwrap_or_default();
+
+    for (group, meta) in services {
+      let key = format!("{}@{}", group, meta.name);
+
+      let mut interests = HashSet::new();
+      if let Some(start_on) = &meta.start_on {
+        for item in start_on {
+          interests.insert(item.name().clone());
+        }
+      }
+      if let Some(stop_on) = &meta.stop_on {
+        for item in stop_on {
+          interests.insert(item.name().clone());
+        }
+      }
+
+      for interest in interests {
+        self
+          .trigger_index
+          .entry(interest)
+          .or_default()
+          .insert(key.clone());
       }
     }
   }
@@ -1330,6 +1361,9 @@ impl Runtime for ServiceRuntime {
     log: &LogHandle,
   ) -> Result<Option<serde_json::Value>, CoreError> {
     match action {
+      "bootstrap" => {
+        self.rebuild_trigger_index(ctx.registry.metadata);
+      }
       "watch_events" => {
         self.event_rx = Some(ctx.event_bus.subscribe::<rind_core::prelude::FlowEvent>());
       }
@@ -1383,12 +1417,31 @@ impl Runtime for ServiceRuntime {
       "evaluate_triggers" => {
         let emit_trig = payload.r#as::<EmitTrigger>().unwrap_or_default();
 
-        // println!("{:?} {:?}", emit_trig.state, emit_trig.action);
+        if self.trigger_index.is_empty() {
+          self.rebuild_trigger_index(ctx.registry.metadata);
+        }
+
         ctx
           .registry
           .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
             (StateMachine::KEY.to_string(), VariableHeap::KEY.to_string()),
             |registry, (sm, vh)| {
+              let target_keys = if let Some(event_name) = emit_trig.state.as_ref() {
+                self
+                  .trigger_index
+                  .get(event_name)
+                  .cloned()
+                  .unwrap_or_default()
+              } else {
+                registry
+                  .metadata
+                  .items::<Service>("units")
+                  .unwrap_or_default()
+                  .into_iter()
+                  .map(|(group, meta)| format!("{}@{}", group, meta.name))
+                  .collect()
+              };
+
               let emit_event = match (
                 emit_trig.state.as_ref(),
                 emit_trig.flow_type,
@@ -1402,15 +1455,19 @@ impl Runtime for ServiceRuntime {
                 _ => None,
               };
 
-              let services = registry
-                .metadata
-                .items::<Service>("units")
-                .unwrap_or(Vec::new());
-
-              for (unit, service) in services {
+              for service_name in target_keys {
                 let mut is_running = false;
 
-                let service_key = format!("units@{}@{}", unit, service.name);
+                let Some(meta) = registry.metadata.find::<Service>("units", &service_name) else {
+                  continue;
+                };
+
+                let Some((unit, _)) = service_name.split_once('@') else {
+                  continue;
+                };
+
+                let service_key = format!("units@{}", service_name);
+
                 if let Some(instances) = registry.instances.get_mut(&service_key) {
                   for instance in instances.iter_mut() {
                     if let Some(service) = instance.downcast_mut::<Service>() {
@@ -1499,7 +1556,7 @@ impl Runtime for ServiceRuntime {
                   }
                 }
 
-                let should_start = service
+                let should_start = meta
                   .start_on
                   .as_ref()
                   .map(|conds| {
@@ -1513,18 +1570,12 @@ impl Runtime for ServiceRuntime {
                   continue;
                 }
 
-                if !service
-                  .branching
-                  .as_ref()
-                  .map(|b| b.enabled)
-                  .unwrap_or(false)
-                  && is_running
-                {
+                if !meta.branching.as_ref().map(|b| b.enabled).unwrap_or(false) && is_running {
                   continue;
                 }
 
                 let ser =
-                  registry.instantiate_one("units", &format!("{unit}@{}", service.name), |x| {
+                  registry.instantiate_one("units", &format!("{unit}@{}", meta.name), |x| {
                     Ok(Service::new(x))
                   })?;
 
