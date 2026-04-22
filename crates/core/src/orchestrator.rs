@@ -41,9 +41,8 @@ impl OrchestratorContext<'_> {
     &self,
     runtime_id: impl Into<String>,
     action: impl Into<String>,
-    payload: impl Into<RuntimePayload>,
+    payload: RuntimePayload,
   ) -> Result<(), CoreError> {
-    let payload = payload.into();
     self.runtime.send(RuntimeCommand::Dispatch {
       runtime_id: runtime_id.into(),
       action: action.into(),

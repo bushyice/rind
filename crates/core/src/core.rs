@@ -11,6 +11,7 @@ pub mod permissions;
 pub mod persistence;
 pub mod registry;
 pub mod runtime;
+pub mod types;
 pub mod user;
 pub mod utils;
 
@@ -29,6 +30,7 @@ pub mod prelude {
   pub use persistence::*;
   pub use registry::*;
   pub use runtime::*;
+  pub use types::*;
   pub use user::*;
   pub use utils::*;
 

@@ -15,8 +15,12 @@ use rind_ipc::{
   Message, MessageType,
   payloads::{LoginPayload, LogoutPayload, Run0AuthPayload},
 };
+use serde_json::json;
 
-use crate::{flow::StateMachine, permissions::PERM_RUN0};
+use crate::{
+  flow::{FlowRuntimePayload, StateMachine},
+  permissions::PERM_RUN0,
+};
 
 pub type Run0QueueState = Arc<Mutex<HashMap<i32, bool>>>;
 
@@ -142,7 +146,7 @@ pub fn handle_ipc_login(
   let _ = dispatch.dispatch(
     "user",
     "login",
-    serde_json::json!({
+    rpayload!({
       "username": payload.username.clone(),
       "tty": payload.tty.clone(),
       "session_id": session.id,
@@ -200,9 +204,9 @@ pub fn handle_ipc_logout(
     let _ = dispatch.dispatch(
       "user",
       "logout",
-      serde_json::json!({
+      rpayload!({
         "session_id": session_id,
-        "username": payload.username,
+        "username": payload.username.clone(),
       })
       .into(),
     );
@@ -253,11 +257,11 @@ impl Runtime for UserRuntime {
   fn handle(
     &mut self,
     action: &str,
-    payload: RuntimePayload,
+    mut payload: RuntimePayload,
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     _log: &LogHandle,
-  ) -> Result<Option<serde_json::Value>, CoreError> {
+  ) -> Result<Option<RuntimePayload>, CoreError> {
     let pam = ctx
       .registry
       .singleton::<Arc<PamHandle>>(PamHandle::KEY)
@@ -277,16 +281,14 @@ impl Runtime for UserRuntime {
         let _ = dispatch.dispatch(
           "flow",
           "set_state",
-          serde_json::json!({
-            "name": "rind@user_session",
-            "payload": {
+          FlowRuntimePayload::new("rind@user_session")
+            .payload(json!({
               "session_id": session_id,
               "username": username,
               "tty": tty,
               "runtime_dir": runtime_dir(user.uid).to_string_lossy().to_string()
-            }
-          })
-          .into(),
+            }))
+            .into(),
         );
 
         ctx.event_bus.emit(LoginEvent {
@@ -308,13 +310,11 @@ impl Runtime for UserRuntime {
         let _ = dispatch.dispatch(
           "flow",
           "remove_state",
-          serde_json::json!({
-            "name": "rind@user_session",
-            "payload": {
+          FlowRuntimePayload::new("rind@user_session")
+            .payload(json!({
               "session_id": session_id,
-            }
-          })
-          .into(),
+            }))
+            .into(),
         );
 
         ctx.event_bus.emit(LoginEvent {

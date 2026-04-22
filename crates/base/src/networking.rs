@@ -11,6 +11,8 @@ use rind_ipc::ser::PortStateSerialized;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::flow::FlowRuntimePayload;
+
 const NETWORKING_INTERFACE_STATE: &str = "rind@net-interface";
 const NETWORKING_ONLINE_STATE: &str = "rind@online";
 const NETWORKING_CONFIGURED_STATE: &str = "rind@net-configured";
@@ -177,11 +179,9 @@ impl NetworkingRuntime {
       dispatch.dispatch(
         "flow",
         "set_state",
-        json!({
-          "name": NETWORKING_INTERFACE_STATE,
-          "payload": serde_json::to_value(interface).unwrap_or_default(),
-        })
-        .into(),
+        FlowRuntimePayload::new(NETWORKING_INTERFACE_STATE)
+          .payload(serde_json::to_value(interface).unwrap_or_default())
+          .into(),
       )?;
     }
 
@@ -193,11 +193,9 @@ impl NetworkingRuntime {
       dispatch.dispatch(
         "flow",
         "remove_state",
-        json!({
-          "name": NETWORKING_INTERFACE_STATE,
-          "filter": { "as": { "name": name } },
-        })
-        .into(),
+        FlowRuntimePayload::new(NETWORKING_INTERFACE_STATE)
+          .filter(serde_json::json!( { "as": { "name": name } }))
+          .into(),
       )?;
     }
 
@@ -207,13 +205,13 @@ impl NetworkingRuntime {
         dispatch.dispatch(
           "flow",
           "set_state",
-          json!({ "name": NETWORKING_ONLINE_STATE }).into(),
+          FlowRuntimePayload::new(NETWORKING_ONLINE_STATE).into(),
         )?;
       } else {
         dispatch.dispatch(
           "flow",
           "remove_state",
-          json!({ "name": NETWORKING_ONLINE_STATE }).into(),
+          FlowRuntimePayload::new(NETWORKING_ONLINE_STATE).into(),
         )?;
       }
     }
@@ -448,22 +446,20 @@ impl NetworkingRuntime {
       dispatch.dispatch(
         "flow",
         "set_state",
-        json!({ "name": NETWORKING_DNS_READY_STATE }).into(),
+        FlowRuntimePayload::new(NETWORKING_DNS_READY_STATE).into(),
       )?;
     }
 
     dispatch.dispatch(
       "flow",
       "set_state",
-      json!({
-        "name": NETWORKING_CONFIGURED_STATE,
-        "payload": {
+      FlowRuntimePayload::new(NETWORKING_CONFIGURED_STATE)
+        .payload(json!({
           "name": iface,
           "ip": format!("{}/{}", ip, prefix),
           "gateway": gateway.map(|g| g.to_string()).unwrap_or_default(),
-        }
-      })
-      .into(),
+        }))
+        .into(),
     )?;
 
     let state = self.interface_states.entry(iface.to_string()).or_default();
@@ -508,22 +504,20 @@ impl NetworkingRuntime {
       dispatch.dispatch(
         "flow",
         "set_state",
-        json!({ "name": NETWORKING_DNS_READY_STATE }).into(),
+        FlowRuntimePayload::new(NETWORKING_DNS_READY_STATE).into(),
       )?;
     }
 
     dispatch.dispatch(
       "flow",
       "set_state",
-      json!({
-        "name": NETWORKING_CONFIGURED_STATE,
-        "payload": {
+      FlowRuntimePayload::new(NETWORKING_CONFIGURED_STATE)
+        .payload(json!({
           "name": iface,
           "ip": format!("{}/{}", lease.ip, lease.prefix_len()),
           "gateway": lease.gateway.map(|g| g.to_string()).unwrap_or_default(),
-        }
-      })
-      .into(),
+        }))
+        .into(),
     )?;
 
     if !self.configured_interfaces.contains(&iface.to_string()) {
@@ -574,11 +568,9 @@ impl NetworkingRuntime {
         dispatch.dispatch(
           "flow",
           "remove_state",
-          json!({
-            "name": NETWORKING_CONFIGURED_STATE,
-            "filter": { "as": { "name": iface } },
-          })
-          .into(),
+          FlowRuntimePayload::new(NETWORKING_CONFIGURED_STATE)
+            .filter(json!({ "as": { "name": iface } }))
+            .into(),
         )?;
         self.configured_interfaces.retain(|i| i != &iface);
         self.interface_states.remove(&iface);
@@ -601,7 +593,7 @@ impl Runtime for NetworkingRuntime {
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<Option<serde_json::Value>, CoreError> {
+  ) -> Result<Option<RuntimePayload>, CoreError> {
     match action {
       "scan" => self.scan_and_sync(dispatch)?,
       "bootstrap" => self.bootstrap(ctx, log)?,

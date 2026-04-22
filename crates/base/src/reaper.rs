@@ -21,7 +21,7 @@ impl Runtime for ReaperRuntime {
     _ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<Option<serde_json::Value>, CoreError> {
+  ) -> Result<Option<RuntimePayload>, CoreError> {
     match action {
       "reap_once" => loop {
         match waitpid(None, Some(WaitPidFlag::WNOHANG)) {
@@ -34,7 +34,9 @@ impl Runtime for ReaperRuntime {
             dispatch.dispatch(
               "services",
               "child_exited",
-              serde_json::json!({ "pid": pid.as_raw(), "code": code }).into(),
+              RuntimePayload::default()
+                .insert("pid", pid.as_raw())
+                .insert("code", code),
             )?;
           }
           Ok(WaitStatus::Signaled(pid, signal, _)) => {
@@ -47,7 +49,9 @@ impl Runtime for ReaperRuntime {
             dispatch.dispatch(
               "services",
               "child_exited",
-              serde_json::json!({ "pid": pid.as_raw(), "code": code }).into(),
+              RuntimePayload::default()
+                .insert("pid", pid.as_raw())
+                .insert("code", code),
             )?;
           }
           Ok(WaitStatus::StillAlive) | Err(nix::errno::Errno::ECHILD) => break,
@@ -61,7 +65,7 @@ impl Runtime for ReaperRuntime {
         }
       },
       "timeout_sweep" => {
-        let _ = dispatch.dispatch("services", "timeout_sweep", serde_json::json!({}).into());
+        dispatch.dispatch("services", "timeout_sweep", Default::default())?;
       }
       _ => {}
     }

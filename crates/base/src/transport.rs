@@ -272,11 +272,11 @@ impl Runtime for TransportRuntime {
   fn handle(
     &mut self,
     action: &str,
-    payload: RuntimePayload,
+    mut payload: RuntimePayload,
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     _log: &LogHandle,
-  ) -> Result<Option<serde_json::Value>, CoreError> {
+  ) -> Result<Option<RuntimePayload>, CoreError> {
     let pm = ctx
       .scope
       .get::<PermissionStore>()
@@ -302,28 +302,11 @@ impl Runtime for TransportRuntime {
       }
       "send" => {
         let endpoint = payload.get::<String>("endpoint")?;
-        let name: Option<String> = payload
-          .0
-          .get("name")
-          .and_then(|v| v.as_str())
-          .map(|s| s.to_string());
-        let branch = payload
-          .0
-          .get("branch")
-          .and_then(|v| serde_json::from_value::<FlowMatchOperation>(v.clone()).ok()); // FIX: clone?
-        let flow_payload = payload.0.get("payload").cloned();
-        let action_str: String = payload
-          .0
-          .get("action")
-          .and_then(|v| v.as_str())
-          .map(|s| s.to_string())
-          .unwrap_or("set".into());
-        let type_str: String = payload
-          .0
-          .get("type")
-          .and_then(|v| v.as_str())
-          .map(|s| s.to_string())
-          .unwrap_or("state".into());
+        let name: Option<String> = payload.get::<String>("name").ok();
+        let branch = payload.get::<FlowMatchOperation>("branch").ok();
+        let flow_payload = payload.get::<serde_json::Value>("payload").ok();
+        let action_str: String = payload.get::<String>("action").ok().unwrap_or("set".into());
+        let type_str: String = payload.get::<String>("type").ok().unwrap_or("state".into());
 
         let msg = TransportMessage {
           r#type: if type_str == "signal" {
@@ -345,11 +328,10 @@ impl Runtime for TransportRuntime {
           let _ = dispatch.dispatch(
             "services",
             "send_stdio",
-            serde_json::json!({
+            rpayload!({
               "endpoint": endpoint,
               "message": msg
-            })
-            .into(),
+            }),
           );
         } else {
           self.uds.send_message(&endpoint, &msg);
@@ -379,18 +361,20 @@ impl Runtime for TransportRuntime {
                     }
                   }
 
+                  let name = name.clone();
+
                   if msg.action == TransportMessageAction::Remove {
-                    let mut payload = serde_json::json!({ "name": name });
+                    let mut payload = rpayload!({ "name": name });
                     if let Some(p) = &msg.payload {
-                      payload["filter"] = p.to_json();
+                      payload = payload.insert("filter", p.to_json());
                     }
-                    let _ = dispatch.dispatch("flow", "remove_state", payload.into());
+                    let _ = dispatch.dispatch("flow", "remove_state", payload);
                   } else if msg.action == TransportMessageAction::Set {
-                    let mut payload = serde_json::json!({ "name": name });
+                    let mut payload = rpayload!({ "name": name });
                     if let Some(p) = &msg.payload {
-                      payload["payload"] = p.to_json();
+                      payload = payload.insert("payload", p.to_json());
                     }
-                    let _ = dispatch.dispatch("flow", "set_state", payload.into());
+                    let _ = dispatch.dispatch("flow", "set_state", payload);
                   }
                 }
               }
@@ -404,11 +388,13 @@ impl Runtime for TransportRuntime {
                     continue;
                   }
 
-                  let mut payload = serde_json::json!({ "name": name });
+                  let name = name.clone();
+
+                  let mut payload = rpayload!({ "name": name });
                   if let Some(p) = &msg.payload {
-                    payload["payload"] = p.to_json();
+                    payload = payload.insert("payload", p.to_json());
                   }
-                  let _ = dispatch.dispatch("flow", "emit_signal", payload.into());
+                  let _ = dispatch.dispatch("flow", "emit_signal", payload);
                 }
               }
               _ => {}

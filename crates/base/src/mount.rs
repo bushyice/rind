@@ -44,14 +44,23 @@ impl MountRuntime {
 
     let flags = parse_mount_flags(target.flags.as_deref());
 
-    mount(
+    if let Err(e) = mount(
       target.source.as_deref(),
       target.target.as_str(),
       target.fstype.as_deref(),
       flags,
       target.data.as_deref(),
-    )
-    .ok();
+    ) {
+      let mut fields = HashMap::new();
+      fields.insert("target".to_string(), target.target.clone());
+      fields.insert("error".to_string(), e.to_string());
+      log.log(
+        LogLevel::Error,
+        "mount-runtime",
+        "Failed to mount target",
+        fields,
+      );
+    }
   }
 
   pub fn mount_units(&self, mounts: Vec<(String, Arc<MountMetadata>)>, log: &LogHandle) {
@@ -149,11 +158,11 @@ impl Runtime for MountRuntime {
   fn handle(
     &mut self,
     action: &str,
-    payload: RuntimePayload,
+    mut payload: RuntimePayload,
     ctx: &mut RuntimeContext<'_>,
     _dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<Option<serde_json::Value>, CoreError> {
+  ) -> Result<Option<RuntimePayload>, CoreError> {
     match action {
       "mount" => {
         let name = payload.get::<String>("name")?;

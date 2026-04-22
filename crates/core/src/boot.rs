@@ -149,8 +149,6 @@ mod tests {
   use std::sync::mpsc::{self, Sender};
   use std::time::Duration;
 
-  use serde_json::json;
-
   use crate::context::{RuntimeContext, ScopeBuilder};
   use crate::logging::{LogConfig, LogHandle, start_logger};
   use crate::orchestrator::{
@@ -201,7 +199,7 @@ mod tests {
     }
 
     fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
-      ctx.dispatch(self.runtime_id.as_str(), "boot", json!({}))
+      ctx.dispatch(self.runtime_id.as_str(), "boot", Default::default())
     }
   }
 
@@ -231,7 +229,7 @@ mod tests {
       ctx: &mut RuntimeContext<'_>,
       _dispatch: &RuntimeDispatcher,
       _log: &LogHandle,
-    ) -> Result<Option<serde_json::Value>, CoreError> {
+    ) -> Result<Option<RuntimePayload>, CoreError> {
       if action == "boot" {
         let value =
           ctx.scope.get::<String>().cloned().ok_or_else(|| {
@@ -257,9 +255,13 @@ mod tests {
       _ctx: &mut RuntimeContext<'_>,
       dispatch: &RuntimeDispatcher,
       _log: &LogHandle,
-    ) -> Result<Option<serde_json::Value>, CoreError> {
+    ) -> Result<Option<RuntimePayload>, CoreError> {
       if action == "kick" {
-        dispatch.dispatch("pong", "from_ping", json!({ "hop": 1 }).into())?;
+        dispatch.dispatch(
+          "pong",
+          "from_ping",
+          RuntimePayload::default().insert("something", 1),
+        )?;
       }
       Ok(None)
     }
@@ -281,7 +283,7 @@ mod tests {
       ctx: &mut RuntimeContext<'_>,
       _dispatch: &RuntimeDispatcher,
       _log: &LogHandle,
-    ) -> Result<Option<serde_json::Value>, CoreError> {
+    ) -> Result<Option<RuntimePayload>, CoreError> {
       if action == "from_ping" {
         let value = ctx
           .scope
@@ -318,7 +320,7 @@ mod tests {
     }
 
     fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
-      ctx.dispatch("ping", "kick", json!({}))
+      ctx.dispatch("ping", "kick", Default::default())
     }
   }
 

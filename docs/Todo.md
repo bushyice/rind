@@ -16,6 +16,7 @@ kanban-plugin: board
 - [ ] **Trigger Optimizations**: Keep an index of flow <-> service relationships.
 - [ ] **Payload Optimizations**: Replace JSON with a faster payload for internal messaging.
 - [ ] **String Optimizations**: Use something like `strumbra` for strings.
+- [ ] **DI**: `ResourceBag` in place of json runtime payload.
 - [ ] **Piping**: Piping and payloads into other states/signals.
 	- [x] Simple circumstantial piping
 	- [ ] General piping

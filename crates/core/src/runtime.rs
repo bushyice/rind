@@ -1,10 +1,8 @@
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
-
-use serde::Serialize;
-use serde::de::DeserializeOwned;
 
 use crate::context::{RuntimeContext, RuntimeScopes};
 use crate::error::CoreError;
@@ -13,8 +11,9 @@ use crate::lifecycle::{LifecycleAction, LifecycleQueue};
 use crate::logging::{LogHandle, LogLevel};
 use crate::notifier::Notifier;
 use crate::registry::{InstanceMap, InstanceRegistry, MetadataRegistry};
+use crate::types::Ustr;
 
-pub enum RuntimeCommand<T: Serialize + DeserializeOwned = serde_json::Value> {
+pub enum RuntimeCommand {
   RegisterScopes {
     context_id: usize,
     scopes: RuntimeScopes,
@@ -24,46 +23,43 @@ pub enum RuntimeCommand<T: Serialize + DeserializeOwned = serde_json::Value> {
     action: String,
     payload: RuntimePayload,
     context_id: usize,
-    reply: Option<Sender<Result<T, CoreError>>>,
+    reply: Option<Sender<Result<RuntimePayload, CoreError>>>,
   },
   Stop,
 }
 
-pub struct RuntimePayload<T: serde::de::DeserializeOwned + 'static = serde_json::Value>(pub T);
+#[derive(Default)]
+pub struct RuntimePayload {
+  items: HashMap<Ustr, Box<dyn Any + Send + Sync>>,
+}
 
 impl RuntimePayload {
-  pub fn get<T: serde::de::DeserializeOwned + 'static>(
-    &self,
-    field: impl Into<String>,
-  ) -> Result<T, CoreError> {
-    let field = field.into();
+  pub fn insert<T: Send + Sync + 'static>(mut self, name: impl Into<Ustr>, item: T) -> Self {
+    self.items.insert(name.into(), Box::new(item));
     self
-      .0
-      .get(field.clone())
-      .and_then(|v| serde_json::from_value(v.clone()).ok()?)
-      .ok_or_else(|| {
-        CoreError::InvalidState(format!("Missing required field \"{field}\" in dispatch"))
-      })
   }
 
-  pub fn r#as<T: serde::de::DeserializeOwned + 'static>(&self) -> Result<T, CoreError> {
-    serde_json::from_value(self.0.clone()).map_err(CoreError::custom)
-  }
-}
-
-impl From<serde_json::Value> for RuntimePayload {
-  fn from(value: serde_json::Value) -> Self {
-    Self(value)
+  pub fn get<T: Send + Sync + 'static>(&mut self, name: impl Into<Ustr>) -> Result<T, CoreError> {
+    let name = name.into();
+    self
+      .items
+      .remove(&name)
+      .and_then(|v| v.downcast::<T>().ok().map(|b| *b))
+      .ok_or_else(|| CoreError::InvalidState(format!("Missing required field {name} in dispatch")))
   }
 }
 
-impl From<String> for RuntimePayload {
-  fn from(value: String) -> Self {
-    Self(value.into())
-  }
+#[macro_export]
+macro_rules! rpayload {
+  ({ $($key:literal : $value:expr),* $(,)? }) => {
+    RuntimePayload::default()
+    $(
+        .insert($key, $value)
+    )*
+  };
 }
 
-pub trait Runtime<T: Serialize + DeserializeOwned = serde_json::Value>: Send {
+pub trait Runtime: Send {
   fn id(&self) -> &str;
   fn handle(
     &mut self,
@@ -72,7 +68,7 @@ pub trait Runtime<T: Serialize + DeserializeOwned = serde_json::Value>: Send {
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<Option<T>, CoreError>;
+  ) -> Result<Option<RuntimePayload>, CoreError>;
 }
 
 #[derive(Clone)]

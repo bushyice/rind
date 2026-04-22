@@ -3,7 +3,6 @@ use nix::unistd::Pid;
 use rind_ipc::Message;
 use rind_ipc::payloads::ServicePayload;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::ops::{Deref, DerefMut};
@@ -550,8 +549,8 @@ impl ServiceRuntime {
 
   fn log_fields(&self, service: &Service, action: impl Into<String>) -> HashMap<String, String> {
     let mut fields = HashMap::new();
-    fields.insert("service".to_string(), service.metadata.name.clone());
     fields.insert("action".to_string(), action.into());
+    fields.insert("service".to_string(), service.metadata.name.to_string());
     fields
   }
 
@@ -773,7 +772,7 @@ impl ServiceRuntime {
 
     match self.spawn_service(service, log, sm, variable_heap, registry_key, notifier) {
       Ok(_) => {
-        self.register_stdio_transport(service, dispatch);
+        self.register_stdio_transport(service, dispatch, None);
         if let Some(inst) = service.instances.as_one_mut() {
           inst.state = ServiceState::Active;
           self.run_triggers(service.metadata.on_start.as_ref(), dispatch);
@@ -782,12 +781,11 @@ impl ServiceRuntime {
         let _ = dispatch.dispatch(
           "services",
           "reconcile_stacks",
-          json!({
-            "service": service.metadata.name,
+          rpayload!({
+            "service": service.metadata.name.to_string(),
             "id": service.id.0,
             "action": ServiceEventKind::Started
-          })
-          .into(),
+          }),
         );
       }
       Err(e) => {
@@ -868,12 +866,11 @@ impl ServiceRuntime {
     let _ = dispatch.dispatch(
       "services",
       "reconcile_stacks",
-      json!({
-        "service": service.metadata.name,
+      rpayload!({
+        "service": service.metadata.name.to_string(),
         "id": service.id.0,
         "action": ServiceEventKind::Stopped
-      })
-      .into(),
+      }),
     );
   }
 
@@ -963,23 +960,28 @@ impl ServiceRuntime {
           }
           let _ = cmd.spawn();
         } else if let Some(state) = &trigger.state {
-          let mut payload = serde_json::json!({ "name": state });
+          let mut payload = rpayload!({ "name": state.clone() });
           if let Some(p) = &trigger.payload {
-            payload["payload"] = p.clone();
+            payload = payload.insert("payload", p.clone());
           }
-          let _ = dispatch.dispatch("flow", "set_state", payload.into());
+          let _ = dispatch.dispatch("flow", "set_state", payload);
         } else if let Some(signal) = &trigger.signal {
-          let mut payload = serde_json::json!({ "name": signal });
+          let mut payload = rpayload!({ "name": signal.clone() });
           if let Some(p) = &trigger.payload {
-            payload["payload"] = p.clone();
+            payload = payload.insert("payload", p.clone());
           }
-          let _ = dispatch.dispatch("flow", "emit_signal", payload.into());
+          let _ = dispatch.dispatch("flow", "emit_signal", payload);
         }
       }
     }
   }
 
-  fn register_stdio_transport(&self, service: &Service, dispatch: &RuntimeDispatcher) {
+  fn register_stdio_transport(
+    &self,
+    service: &Service,
+    dispatch: &RuntimeDispatcher,
+    unit: Option<String>,
+  ) {
     if !service
       .metadata
       .transport
@@ -992,7 +994,7 @@ impl ServiceRuntime {
     let _ = dispatch.dispatch(
       "transport",
       "register_stdio",
-      serde_json::json!({ "endpoint": service.metadata.name }).into(),
+      rpayload!({ "endpoint": unit.map(|unit| format!("{unit}@{}", service.metadata.name)).unwrap_or(service.metadata.name.to_string()) }),
     );
   }
 
@@ -1013,7 +1015,7 @@ impl ServiceRuntime {
     let _ = dispatch.dispatch(
       "transport",
       "unregister_stdio",
-      serde_json::json!({ "endpoint": service.metadata.name }).into(),
+      rpayload!({ "endpoint": service.metadata.name.to_string() }),
     );
   }
 
@@ -1144,7 +1146,7 @@ fn start_service_stream_logs(service_name: String, child: &mut Child, log: LogHa
           continue;
         }
         let mut fields = HashMap::new();
-        fields.insert("service".to_string(), service_name.clone());
+        fields.insert("service".to_string(), service_name.to_string());
         fields.insert("stream".to_string(), "stdout".to_string());
         log.log(LogLevel::Info, "service-output", line, fields);
       }
@@ -1159,7 +1161,7 @@ fn start_service_stream_logs(service_name: String, child: &mut Child, log: LogHa
           continue;
         }
         let mut fields = HashMap::new();
-        fields.insert("service".to_string(), service_name.clone());
+        fields.insert("service".to_string(), service_name.to_string());
         fields.insert("stream".to_string(), "stderr".to_string());
         log.log(LogLevel::Warn, "service-output", line, fields);
       }
@@ -1188,7 +1190,7 @@ fn start_stdin_writer(
         || std::io::Write::flush(&mut stdin).is_err()
       {
         let mut fields = HashMap::new();
-        fields.insert("service".to_string(), service_name.clone());
+        fields.insert("service".to_string(), service_name.to_string());
         log.log(
           LogLevel::Warn,
           "service-transport",
@@ -1273,14 +1275,14 @@ pub fn handle_ipc_start(
   let _ = dispatch.dispatch(
     "services",
     "start",
-    serde_json::json!({ "name": payload.name, "only_user": only_user }).into(),
+    rpayload!({ "name": payload.name.clone(), "only_user": only_user }),
   );
 
   if payload.persist {
     let _ = dispatch.dispatch(
       "flow",
       "set_state",
-      serde_json::json!({ "name": "rind@active", "payload": payload.name }).into(),
+      rpayload!({ "name": "rind@active", "payload": payload.name.clone() }),
     );
   }
 
@@ -1337,14 +1339,14 @@ pub fn handle_ipc_stop(
   let _ = dispatch.dispatch(
     "services",
     "stop",
-    serde_json::json!({ "name": payload.name, "force": force, "only_user": only_user }).into(),
+    rpayload!({ "name": payload.name.clone(), "force": force, "only_user": only_user }),
   );
 
   if payload.persist {
     let _ = dispatch.dispatch(
       "flow",
       "remove_state",
-      serde_json::json!({ "name": "rind@active", "payload": payload.name }).into(),
+      rpayload!({ "name": "rind@active", "payload": payload.name.clone() }),
     );
   }
 
@@ -1355,11 +1357,11 @@ impl Runtime for ServiceRuntime {
   fn handle(
     &mut self,
     action: &str,
-    payload: RuntimePayload,
+    mut payload: RuntimePayload,
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<Option<serde_json::Value>, CoreError> {
+  ) -> Result<Option<RuntimePayload>, CoreError> {
     match action {
       "bootstrap" => {
         self.rebuild_trigger_index(ctx.registry.metadata);
@@ -1369,15 +1371,7 @@ impl Runtime for ServiceRuntime {
       }
       "send_stdio" => {
         let endpoint = payload.get::<String>("endpoint")?;
-        let message = payload
-          .0
-          .get("message")
-          .cloned()
-          .ok_or_else(|| CoreError::InvalidState("missing `message` for send_stdio".into()))
-          .and_then(|v| {
-            serde_json::from_value::<TransportMessage>(v)
-              .map_err(|e| CoreError::InvalidState(format!("invalid send_stdio message: {e}")))
-          })?;
+        let message = payload.get::<TransportMessage>("message")?;
         self.send_stdio_message(endpoint.as_str(), message);
       }
       "drain_events" => {
@@ -1392,8 +1386,11 @@ impl Runtime for ServiceRuntime {
               rind_core::prelude::FlowEventType::Signal => FlowType::Signal,
             });
             trig.action = w.action;
-            let val: serde_json::Value = trig.into();
-            let _ = dispatch.dispatch("services", "evaluate_triggers", val.into());
+            let _ = dispatch.dispatch(
+              "services",
+              "evaluate_triggers",
+              RuntimePayload::default().insert("trigger", trig),
+            );
           }
         }
 
@@ -1406,16 +1403,15 @@ impl Runtime for ServiceRuntime {
           let _ = dispatch.dispatch(
             "transport",
             "ingest",
-            serde_json::json!({
+            rpayload!({
               "endpoint": service_name,
               "message": message
-            })
-            .into(),
+            }),
           );
         }
       }
       "evaluate_triggers" => {
-        let emit_trig = payload.r#as::<EmitTrigger>().unwrap_or_default();
+        let emit_trig = payload.get::<EmitTrigger>("trigger").unwrap_or_default();
 
         if self.trigger_index.is_empty() {
           self.rebuild_trigger_index(ctx.registry.metadata);
@@ -1619,13 +1615,7 @@ impl Runtime for ServiceRuntime {
                       ) {
                         Ok(instances) => {
                           ser.instances.extend(instances);
-                          self.register_stdio_transport(ser, dispatch);
-                          let _ = dispatch.dispatch(
-                          "transport",
-                          "register_stdio",
-                          serde_json::json!({ "endpoint": format!("{unit}@{}", ser.metadata.name) })
-                            .into(),
-                        );
+                          self.register_stdio_transport(ser, dispatch, None);
                           started += 1;
                         }
                         Err(e) => {
@@ -1688,7 +1678,7 @@ impl Runtime for ServiceRuntime {
                 ) {
                   Ok(instances) => {
                     service.instances.extend(instances);
-                    self.register_stdio_transport(service, dispatch);
+                    self.register_stdio_transport(service, dispatch, None);
                     if let Some(inst) = service.instances.as_one_mut() {
                       inst.state = ServiceState::Active;
                       self.run_triggers(service.metadata.on_start.as_ref(), dispatch);
@@ -1696,12 +1686,11 @@ impl Runtime for ServiceRuntime {
                     let _ = dispatch.dispatch(
                       "services",
                       "reconcile_stacks",
-                      json!({
-                        "service": service.metadata.name,
+                      rpayload!({
+                        "service": service.metadata.name.clone(),
                         "id": service.id.0,
                         "action": ServiceEventKind::Started
-                      })
-                      .into(),
+                      }),
                     );
                   }
                   Err(e) => {
@@ -1740,7 +1729,7 @@ impl Runtime for ServiceRuntime {
                 let _ = dispatch.dispatch(
                   "transport",
                   "register_stdio",
-                  serde_json::json!({ "endpoint": name }).into(),
+                  rpayload!({ "endpoint": name }),
                 );
               }
               Ok(())
@@ -1989,12 +1978,11 @@ impl Runtime for ServiceRuntime {
                             let _ = dispatch.dispatch(
                               "services",
                               "reconcile_stacks",
-                              json!({
-                                "service": service.metadata.name,
+                              rpayload!({
+                                "service": service.metadata.name.clone(),
                                 "id": service.id.0,
                                 "action": ServiceEventKind::Exited { code }
-                              })
-                              .into(),
+                              }),
                             );
                           }
                         }

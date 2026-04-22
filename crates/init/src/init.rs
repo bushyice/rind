@@ -18,7 +18,6 @@ use rind_base::units::UnitsOrchestrator;
 use rind_base::user::UserRuntime;
 use rind_core::{notifier::Notifier, prelude::*};
 use rind_plugins::{collect_plugins, plugins_path};
-use serde_json::json;
 use std::os::fd::AsFd;
 
 struct BootOrchestrator;
@@ -40,25 +39,25 @@ impl Orchestrator for BootOrchestrator {
   }
 
   fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
-    ctx.dispatch("mounts", "mount_all", json!({}))?;
+    ctx.dispatch("mounts", "mount_all", Default::default())?;
 
-    ctx.dispatch("user", "create_sessions", json!({}))?;
+    ctx.dispatch("user", "create_sessions", Default::default())?;
 
-    ctx.dispatch("services", "watch_events", json!({}))?;
+    ctx.dispatch("services", "watch_events", Default::default())?;
 
-    ctx.dispatch("ipc", "init_actions", json!({}))?;
-    ctx.dispatch("ipc", "start_server", json!({}))?;
+    ctx.dispatch("ipc", "init_actions", Default::default())?;
+    ctx.dispatch("ipc", "start_server", Default::default())?;
 
-    ctx.dispatch("firewall", "apply", json!({}))?;
+    ctx.dispatch("firewall", "apply", Default::default())?;
 
-    ctx.dispatch("flow", "bootstrap", json!({}))?;
-    ctx.dispatch("services", "bootstrap", json!({}))?;
-    ctx.dispatch("networking", "bootstrap", json!({}))?;
-    ctx.dispatch("networking", "scan", json!({}))?;
-    ctx.dispatch("networking", "configure", json!({}))?;
+    ctx.dispatch("flow", "bootstrap", Default::default())?;
+    ctx.dispatch("services", "bootstrap", Default::default())?;
+    ctx.dispatch("networking", "bootstrap", Default::default())?;
+    ctx.dispatch("networking", "scan", Default::default())?;
+    ctx.dispatch("networking", "configure", Default::default())?;
 
-    ctx.dispatch("services", "start_all", json!({}))?;
-    ctx.dispatch("services", "evaluate_triggers", json!({}))?;
+    ctx.dispatch("services", "start_all", Default::default())?;
+    ctx.dispatch("services", "evaluate_triggers", Default::default())?;
 
     Ok(())
   }
@@ -119,13 +118,13 @@ impl Orchestrator for PumpOrchestrator {
   }
 
   fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
-    ctx.dispatch("reaper", "reap_once", json!({}))?;
-    ctx.dispatch("reaper", "timeout_sweep", json!({}))?;
-    ctx.dispatch("networking", "scan", json!({}))?;
-    ctx.dispatch("networking", "reconcile", json!({}))?;
-    ctx.dispatch("services", "drain_events", json!({}))?;
-    ctx.dispatch("transport", "drain_incoming", json!({}))?;
-    ctx.dispatch("ipc", "drain_requests", json!({}))?;
+    ctx.dispatch("reaper", "reap_once", Default::default())?;
+    ctx.dispatch("reaper", "timeout_sweep", Default::default())?;
+    ctx.dispatch("networking", "scan", Default::default())?;
+    ctx.dispatch("networking", "reconcile", Default::default())?;
+    ctx.dispatch("services", "drain_events", Default::default())?;
+    ctx.dispatch("transport", "drain_incoming", Default::default())?;
+    ctx.dispatch("ipc", "drain_requests", Default::default())?;
     Ok(())
   }
 }
@@ -143,7 +142,7 @@ fn try_stop_services(
   let _ = runtime.dispatch(
     "services",
     "stop_all",
-    json!({ "force": force }).into(),
+    rpayload!({ "force": force }),
     context_id,
   );
   let _ = runtime.flush_context(context_id, metadata);
@@ -208,7 +207,7 @@ fn process_lifecycle_action(
       let _ = runtime.dispatch(
         "services",
         "bootstrap",
-        json!({}).into(),
+        Default::default(),
         boot.primary_context_id().unwrap_or(0),
       );
       true

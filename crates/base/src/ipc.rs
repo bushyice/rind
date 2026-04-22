@@ -47,14 +47,14 @@ impl Default for IpcRuntime {
 }
 
 pub fn payload_to<T: serde::de::DeserializeOwned + 'static>(
-  payload: RuntimePayload,
+  mut payload: RuntimePayload,
 ) -> Result<T, CoreError> {
-  let msg = payload.r#as::<Message>()?;
+  let msg = payload.get::<Message>("message")?;
   msg.parse_payload::<T>().map_err(|x| CoreError::Custom(x))
 }
 
-pub fn payload_msg(payload: RuntimePayload) -> Result<Message, CoreError> {
-  payload.r#as::<Message>()
+pub fn payload_msg(mut payload: RuntimePayload) -> Result<Message, CoreError> {
+  payload.get::<Message>("message")
 }
 
 fn build_ipc_list_response(
@@ -410,16 +410,16 @@ impl Runtime for IpcRuntime {
   fn handle(
     &mut self,
     action: &str,
-    payload: RuntimePayload,
+    _payload: RuntimePayload,
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<Option<serde_json::Value>, CoreError> {
+  ) -> Result<Option<RuntimePayload>, CoreError> {
     match action {
-      "ipc:list" => {
-        let msg = payload_msg(payload)?;
-        return Ok(Some(handle_ipc_list(msg, ctx, dispatch, log)?.into()));
-      }
+      // "ipc:list" => {
+      //   let msg = payload_msg(payload)?;
+      //   return Ok(Some(handle_ipc_list(msg, ctx, dispatch, log)?.into()));
+      // }
       "init_actions" => {
         let ipcsrc = ctx.scope.get::<IpcSourcemap>().cloned().unwrap_or_default();
         ipcsrc.register("login", handle_ipc_login, PERM_LOGIN);

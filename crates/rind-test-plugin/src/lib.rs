@@ -31,7 +31,11 @@ impl Orchestrator for MyOrchestrator {
       .runtime
       .log(LogLevel::Info, "myplugin", "plugin loaded", HashMap::new())?;
 
-    match ctx.dispatch("myruntime", "something", "init".to_string()) {
+    match ctx.dispatch(
+      "myruntime",
+      "something",
+      RuntimePayload::default().insert("thing", "init".to_string()),
+    ) {
       Err(e) => ctx.runtime.log(
         LogLevel::Error,
         "myplugin",
@@ -58,11 +62,11 @@ impl Runtime for MyRuntime {
   fn handle(
     &mut self,
     action: &str,
-    payload: RuntimePayload,
+    mut payload: RuntimePayload,
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<Option<serde_json::Value>, CoreError> {
+  ) -> Result<Option<RuntimePayload>, CoreError> {
     let sm = &ctx
       .registry
       .singleton::<StateMachine>(StateMachine::KEY)
@@ -85,7 +89,7 @@ impl Runtime for MyRuntime {
         ("action".to_string(), action.to_string()),
         (
           "payload".to_string(),
-          payload.r#as::<String>().unwrap_or_default(),
+          payload.get::<String>("thing").unwrap_or_default(),
         ),
         ("states".into(), sm.len().to_string()),
       ]
@@ -95,13 +99,11 @@ impl Runtime for MyRuntime {
     let _ = dispatch.dispatch(
       "flow",
       "set_state",
-      serde_json::json!({
-        "name": "myplugin@state",
-        "payload": {
+      FlowRuntimePayload::new("myplugin@state")
+        .payload(serde_json::json!({
           "id": 0
-        }
-      })
-      .into(),
+        }))
+        .into(),
     );
 
     Ok(None)

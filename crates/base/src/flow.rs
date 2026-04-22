@@ -329,8 +329,9 @@ impl FlowRuntime {
       let _ = dispatch.dispatch(
         "transport",
         "setup_uds",
-        serde_json::json!({ "endpoint": endpoint, "permissions": subscriber.get_permissions() })
-          .into(),
+        RuntimePayload::default()
+          .insert("endpoint", endpoint.to_string())
+          .insert("permissions", subscriber.get_permissions()),
       );
     }
   }
@@ -355,14 +356,12 @@ impl FlowRuntime {
       let _ = dispatch.dispatch(
         "transport",
         "send",
-        serde_json::json!({
-          "endpoint": endpoint,
-          "type": "state",
-          "name": endpoint,
-          "action": action,
-          "payload": payload.to_json(),
-        })
-        .into(),
+        RuntimePayload::default()
+          .insert("endpoint", endpoint.to_string())
+          .insert("type", "state".to_string())
+          .insert("name", endpoint.to_string())
+          .insert("action", action)
+          .insert("payload", payload.to_json()),
       );
     }
   }
@@ -818,17 +817,17 @@ impl Runtime for FlowRuntime {
   fn handle(
     &mut self,
     action: &str,
-    payload: RuntimePayload,
+    mut payload: RuntimePayload,
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<Option<serde_json::Value>, CoreError> {
+  ) -> Result<Option<RuntimePayload>, CoreError> {
     let (state_defs, signal_defs) = Self::collect_defs(ctx.registry.metadata);
 
     match action {
       "set_state" => {
         let name = payload.get::<String>("name")?;
-        let flow_payload = FlowPayload::from_json(payload.0.get("payload").cloned());
+        let flow_payload = FlowPayload::from_json(payload.get::<serde_json::Value>("payload").ok());
 
         let sm = ctx
           .registry
@@ -857,7 +856,7 @@ impl Runtime for FlowRuntime {
       }
       "remove_state" => {
         let name = payload.get::<String>("name")?;
-        let filter_json: Option<serde_json::Value> = payload.0.get("filter").cloned();
+        let filter_json: Option<serde_json::Value> = payload.get("filter").ok();
         let filter = filter_json.and_then(|v| serde_json::from_value(v).ok());
 
         let sm = ctx
@@ -886,7 +885,7 @@ impl Runtime for FlowRuntime {
       }
       "emit_signal" => {
         let name = payload.get::<String>("name")?;
-        let flow_payload = FlowPayload::from_json(payload.0.get("payload").cloned());
+        let flow_payload = FlowPayload::from_json(payload.get("payload").ok());
         Self::emit_signal(
           name.clone(),
           Some(flow_payload.clone()),
@@ -1096,5 +1095,47 @@ fn transcendent_payload_for(
       }
     }
     FlowPayloadType::None => Some(FlowPayload::None(false)),
+  }
+}
+
+#[derive(Default)]
+pub struct FlowRuntimePayload<'a> {
+  pub name: &'a str,
+  pub payload: Option<serde_json::Value>,
+  pub filter: Option<serde_json::Value>,
+}
+
+impl<'a> FlowRuntimePayload<'a> {
+  pub fn new(name: &'a str) -> Self {
+    Self {
+      name,
+      ..Default::default()
+    }
+  }
+
+  pub fn payload(mut self, v: serde_json::Value) -> Self {
+    self.payload = Some(v);
+    self
+  }
+
+  pub fn filter(mut self, v: serde_json::Value) -> Self {
+    self.filter = Some(v);
+    self
+  }
+}
+
+impl<'a> Into<RuntimePayload> for FlowRuntimePayload<'a> {
+  fn into(self) -> RuntimePayload {
+    let mut p = RuntimePayload::default().insert("name", self.name.to_string());
+
+    if let Some(p1) = self.payload {
+      p = p.insert("payload", p1);
+    }
+
+    if let Some(p1) = self.filter {
+      p = p.insert("filter", p1);
+    }
+
+    p
   }
 }
