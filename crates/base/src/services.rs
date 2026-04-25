@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::ops::{Deref, DerefMut};
+use std::os::fd::RawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -22,6 +23,13 @@ use crate::transport::{TransportMessage, TransportMethod, start_stdout_listener}
 use crate::variables::VariableHeap;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct ServiceTimer {
+  pub duration: Ustr,
+  #[serde(default)]
+  pub restart: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RunOption {
   #[serde(default)]
   pub exec: Ustr,
@@ -29,6 +37,7 @@ pub struct RunOption {
   pub args: Vec<Ustr>,
   pub env: Option<HashMap<Ustr, Ustr>>,
   pub variable: Option<String>,
+  pub timer: Option<ServiceTimer>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -120,6 +129,8 @@ pub struct ChildInstance {
   pub retry_count: u32,
   pub stop_time: Option<Instant>,
   pub manually_stopped: bool,
+  pub timer_deadline: Option<Instant>,
+  pub timer_start: Option<Instant>,
 }
 
 impl ChildInstance {
@@ -132,11 +143,34 @@ impl ChildInstance {
       retry_count: 0,
       stop_time: None,
       manually_stopped: false,
+      timer_deadline: None,
+      timer_start: None,
     }
   }
 
   pub fn pid(&self) -> Option<u32> {
     self.child.as_ref().map(|c| c.id())
+  }
+}
+
+fn parse_duration(s: &str) -> Option<Duration> {
+  let s = s.trim();
+  if s.is_empty() {
+    return None;
+  }
+
+  let (num_str, unit) = s.split_at(s.len() - 1);
+  let num: u64 = num_str.parse().ok()?;
+
+  match unit {
+    "s" => Some(Duration::from_secs(num)),
+    "m" => Some(Duration::from_secs(num * 60)),
+    "h" => Some(Duration::from_secs(num * 3600)),
+    "d" => Some(Duration::from_secs(num * 86400)),
+    _ => {
+      // maybe it's just seconds?
+      s.parse().ok().map(Duration::from_secs)
+    }
   }
 }
 
@@ -228,7 +262,7 @@ pub enum ServiceSpace {
   meta_name = name,
   meta_fields(
     name, run, after, branching, restart, start_on, stop_on, on_start, on_stop,
-    transport, working_dir, space, user_source
+    transport, working_dir, space, user_source, singleton
   ),
   derive_metadata(Debug)
 )]
@@ -249,6 +283,8 @@ pub struct Service {
   pub working_dir: Option<Ustr>,
   #[serde(default, rename = "space")]
   pub space: ServiceSpace,
+  #[serde(default)]
+  pub singleton: bool,
   #[serde(rename = "user-source")]
   pub user_source: Option<ServiceUserSource>,
   pub transport: Option<TransportMethod>,
@@ -468,7 +504,9 @@ impl ServiceRuntime {
     &mut self,
     service: &Service,
     log: &LogHandle,
+    dispatch: &RuntimeDispatcher,
     branch_ctx: Option<&ServiceBranchContext>,
+    socket_activation: Option<&SocketActivation>,
     sm: Option<&StateMachine>,
     variable_heap: Option<&VariableHeap>,
     registry_key: Ustr,
@@ -478,16 +516,36 @@ impl ServiceRuntime {
     for run in service.metadata.run.as_many() {
       let resolved = self.resolve_run_option(run, variable_heap);
       let run_ref = resolved.as_ref().unwrap_or(run);
-      instances.push(self.spawn_process(
+      let mut instance = self.spawn_process(
         service,
         run_ref,
         log,
         branch_ctx,
+        socket_activation,
         sm,
         variable_heap,
         registry_key.clone(),
         notifier.clone(),
-      )?);
+      )?;
+
+      if let Some(timer) = &run_ref.timer {
+        if let Some(duration) = parse_duration(timer.duration.as_str()) {
+          let deadline = Instant::now() + duration;
+          instance.timer_start = Some(Instant::now());
+          instance.timer_deadline = Some(deadline);
+
+          let _ = dispatch.dispatch(
+            "timer",
+            "start_timer",
+            RuntimePayload::default()
+              .insert("name", service.metadata.name.clone())
+              .insert("index", service.instances.len() + instances.len())
+              .insert("duration", duration),
+          );
+        }
+      }
+
+      instances.push(instance);
     }
     Ok(instances)
   }
@@ -528,6 +586,7 @@ impl ServiceRuntime {
       args,
       env,
       variable: None,
+      timer: run.timer.clone(),
     })
   }
 
@@ -535,6 +594,8 @@ impl ServiceRuntime {
     &mut self,
     service: &mut Service,
     log: &LogHandle,
+    dispatch: &RuntimeDispatcher,
+    socket_activation: Option<&SocketActivation>,
     sm: Option<&StateMachine>,
     variable_heap: Option<&VariableHeap>,
     registry_key: Ustr,
@@ -550,7 +611,9 @@ impl ServiceRuntime {
     let instances = self.spawn_all(
       service,
       log,
+      dispatch,
       None,
+      socket_activation,
       sm,
       variable_heap,
       registry_key,
@@ -573,6 +636,7 @@ impl ServiceRuntime {
     run: &RunOption,
     log: &LogHandle,
     branch_ctx: Option<&ServiceBranchContext>,
+    socket_activation: Option<&SocketActivation>,
     sm: Option<&StateMachine>,
     variables: Option<&VariableHeap>,
     registry_key: Ustr,
@@ -669,15 +733,57 @@ impl ServiceRuntime {
       }
     }
 
+    let activation_fds = socket_activation
+      .map(|activation| activation.fds.clone())
+      .unwrap_or_default();
+    let activation_names = socket_activation
+      .map(|activation| activation.names.clone())
+      .unwrap_or_default();
+    if !activation_fds.is_empty() {
+      let inherited_fds = (0..activation_fds.len())
+        .map(|i| (3 + i).to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+      envs.insert(Ustr::from("RIND_SOCKET_FDS"), Ustr::from(inherited_fds));
+      envs.insert(
+        Ustr::from("RIND_SOCKET_COUNT"),
+        Ustr::from(activation_fds.len().to_string()),
+      );
+      envs.insert(
+        Ustr::from("LISTEN_FDS"),
+        Ustr::from(activation_fds.len().to_string()),
+      );
+      if !activation_names.is_empty() {
+        let names = activation_names
+          .iter()
+          .map(|x| x.as_str())
+          .collect::<Vec<_>>()
+          .join(":");
+        envs.insert(Ustr::from("RIND_SOCKET_NAMES"), Ustr::from(names.clone()));
+        envs.insert(Ustr::from("LISTEN_FDNAMES"), Ustr::from(names));
+      }
+    }
+
     let child = unsafe {
       let mut cmd = Command::new(run.exec.as_str());
+      let pre_exec_fds = activation_fds.clone();
       cmd
         .args(args.iter().map(|a| a.as_str()))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .pre_exec(|| {
+        .pre_exec(move || {
           libc::setsid();
+          for (idx, fd) in pre_exec_fds.iter().enumerate() {
+            let target_fd = (3 + idx) as RawFd;
+            if *fd != target_fd && libc::dup2(*fd, target_fd) < 0 {
+              return Err(std::io::Error::last_os_error());
+            }
+            let flags = libc::fcntl(target_fd, libc::F_GETFD);
+            if flags >= 0 {
+              let _ = libc::fcntl(target_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
+            }
+          }
           Ok(())
         });
       let user_info = if let Some(username) = resolved_user.as_ref() {
@@ -775,19 +881,50 @@ impl ServiceRuntime {
     &mut self,
     service: &mut Service,
     log: &LogHandle,
+    socket_activation: Option<&SocketActivation>,
     sm: Option<&StateMachine>,
     dispatch: &RuntimeDispatcher,
     variable_heap: Option<&VariableHeap>,
     registry_key: Ustr,
     notifier: Option<Notifier>,
   ) {
-    if let Some(inst) = service.instances.as_one() {
+    if let Some(inst) = service.instances.as_one_mut() {
       if inst.state == ServiceState::Active || inst.state == ServiceState::Starting {
-        return;
+        let mut handled = false;
+        for (run_meta, inst) in service
+          .metadata
+          .run
+          .as_many()
+          .zip(service.instances.iter_mut())
+        {
+          if let Some(timer) = &run_meta.timer {
+            if timer.restart && inst.timer_deadline.is_some() {
+              if let Some(duration) = parse_duration(timer.duration.as_str()) {
+                inst.timer_deadline = Some(Instant::now() + duration);
+                handled = true;
+              }
+            }
+          }
+        }
+        if handled {
+          return;
+        }
+        if service.metadata.singleton {
+          return;
+        }
       }
     }
 
-    match self.spawn_service(service, log, sm, variable_heap, registry_key, notifier) {
+    match self.spawn_service(
+      service,
+      log,
+      dispatch,
+      socket_activation,
+      sm,
+      variable_heap,
+      registry_key,
+      notifier,
+    ) {
       Ok(_) => {
         self.register_stdio_transport(service, dispatch, None);
         if let Some(inst) = service.instances.as_one_mut() {
@@ -822,6 +959,51 @@ impl ServiceRuntime {
     }
   }
 
+  fn stop_service_instance(
+    &mut self,
+    inst: &mut ChildInstance,
+    service: Arc<ServiceMetadata>,
+    mode: StopMode,
+    dispatch: &RuntimeDispatcher,
+    key: Option<Ustr>,
+    user: Option<Ustr>,
+  ) {
+    if let Some(ref key) = key {
+      if inst.key.as_str() != key.as_str() {
+        return;
+      }
+    };
+    if let Some(ref user) = user {
+      let matches_owner = inst
+        .user
+        .as_ref()
+        .map(|u| u.as_str() == user.as_str())
+        .unwrap_or(false)
+        || (inst.user.is_none() && inst.key.as_str() == user.as_str());
+      if !matches_owner {
+        return;
+      }
+    }
+    if let Some(child) = inst.child.as_ref() {
+      let pgid = Pid::from_raw(-(child.id() as i32));
+      let signal = if mode == StopMode::ForceKill {
+        Signal::SIGKILL
+      } else {
+        Signal::SIGTERM
+      };
+      let _ = kill(pgid, signal);
+      inst.state = ServiceState::Stopping;
+      inst.stop_time = Some(Instant::now());
+      inst.manually_stopped = true;
+      self.stopping_map.insert(child.id(), Instant::now());
+    } else {
+      if inst.state == ServiceState::Active {
+        self.run_triggers(service.on_stop.as_ref(), dispatch);
+      }
+      inst.state = ServiceState::Inactive;
+    }
+  }
+
   pub fn stop_service(
     &mut self,
     service: &mut Service,
@@ -830,69 +1012,73 @@ impl ServiceRuntime {
     dispatch: &RuntimeDispatcher,
     key: Option<Ustr>,
     user: Option<Ustr>,
+    index: Option<usize>,
   ) {
-    for inst in service.instances.iter_mut() {
-      if let Some(ref key) = key {
-        if inst.key.as_str() != key.as_str() {
-          continue;
-        }
-      };
-      if let Some(ref user) = user {
-        let matches_owner = inst
-          .user
-          .as_ref()
-          .map(|u| u.as_str() == user.as_str())
-          .unwrap_or(false)
-          || (inst.user.is_none() && inst.key.as_str() == user.as_str());
-        if !matches_owner {
-          continue;
-        }
+    if let Some(index) = index {
+      if let Some(inst) = service.instances.get_mut(index) {
+        self.stop_service_instance(
+          inst,
+          service.metadata.clone(),
+          mode,
+          dispatch,
+          key.clone(),
+          user.clone(),
+        );
       }
-      if let Some(child) = inst.child.as_ref() {
-        let pgid = Pid::from_raw(-(child.id() as i32));
-        let signal = if mode == StopMode::ForceKill {
-          Signal::SIGKILL
-        } else {
-          Signal::SIGTERM
-        };
-        let _ = kill(pgid, signal);
-        inst.state = ServiceState::Stopping;
-        inst.stop_time = Some(Instant::now());
-        inst.manually_stopped = true;
-        self.stopping_map.insert(child.id(), Instant::now());
-      } else {
-        if inst.state == ServiceState::Active {
-          self.run_triggers(service.metadata.on_stop.as_ref(), dispatch);
-        }
-        inst.state = ServiceState::Inactive;
+    } else {
+      for inst in service.instances.iter_mut() {
+        self.stop_service_instance(
+          inst,
+          service.metadata.clone(),
+          mode,
+          dispatch,
+          key.clone(),
+          user.clone(),
+        );
       }
     }
 
-    service.last_state = ServiceState::Stopping;
+    if service
+      .instances
+      .iter()
+      .filter(|x| x.state == ServiceState::Active)
+      .count()
+      < 1
+    {
+      service.last_state = ServiceState::Stopping;
 
-    let mut fields = self.log_fields(service, "stop");
-    fields.insert("mode".to_string(), format!("{mode:?}"));
-    if let Some(ref key) = key {
-      fields.insert("key".to_string(), format!("{key}"));
-    };
-    if let Some(ref user) = user {
-      fields.insert("user".to_string(), user.to_string());
-    };
-    log.log(
-      LogLevel::Info,
-      "service-runtime",
-      "service stopping",
-      fields,
-    );
-    let _ = dispatch.dispatch(
-      "services",
-      "reconcile_stacks",
-      rpayload!({
-        "service": service.metadata.name.clone(),
-        "id": service.id.0,
-        "action": ServiceEventKind::Stopped
-      }),
-    );
+      let mut fields = self.log_fields(service, "stop");
+      fields.insert("mode".to_string(), format!("{mode:?}"));
+      if let Some(ref key) = key {
+        fields.insert("key".to_string(), format!("{key}"));
+      };
+      if let Some(ref user) = user {
+        fields.insert("user".to_string(), user.to_string());
+      };
+      log.log(
+        LogLevel::Info,
+        "service-runtime",
+        "service stopping",
+        fields,
+      );
+      let _ = dispatch.dispatch(
+        "services",
+        "reconcile_stacks",
+        rpayload!({
+          "service": service.metadata.name.clone(),
+          "id": service.id.0,
+          "action": ServiceEventKind::Stopped
+        }),
+      );
+
+      println!("resetting fds");
+
+      let _ = dispatch.dispatch(
+        "sockets",
+        "resume_fds",
+        RuntimePayload::default().insert("name", service.metadata.name.clone()),
+      );
+    }
   }
 
   fn handle_child_exit(
@@ -963,6 +1149,28 @@ impl ServiceRuntime {
   //         }
   //       }
   //     }
+  //   }
+  // }
+
+  // fn timeout_sweep(
+  //   &mut self,
+  //   service: &mut Service,
+  //   log: &LogHandle,
+  //   dispatch: &RuntimeDispatcher,
+  // ) {
+  //   let mut should_stop = false;
+
+  //   for inst in service.instances.iter_mut() {
+  //     if let Some(deadline) = inst.timer_deadline {
+  //       if Instant::now() >= deadline {
+  //         should_stop = true;
+  //         break;
+  //       }
+  //     }
+  //   }
+
+  //   if should_stop {
+  //     self.stop_service(service, StopMode::Graceful, log, dispatch, None, None, None);
   //   }
   // }
 
@@ -1240,6 +1448,18 @@ pub struct ServiceBranchContext {
   pub forced_user: Option<Ustr>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SocketActivation {
+  pub fds: Vec<RawFd>,
+  pub names: Vec<Ustr>,
+}
+
+impl SocketActivation {
+  pub fn is_empty(&self) -> bool {
+    self.fds.is_empty()
+  }
+}
+
 impl Into<serde_json::Value> for EmitTrigger {
   fn into(self) -> serde_json::Value {
     serde_json::to_value(self).unwrap_or_default()
@@ -1296,7 +1516,7 @@ pub fn handle_ipc_start(
   let _ = dispatch.dispatch(
     "services",
     "start",
-    rpayload!({ "name": payload.name.clone(), "only_user": only_user }),
+    rpayload!({ "name": payload.name.to_ustr(), "only_user": only_user }),
   );
 
   if payload.persist {
@@ -1360,7 +1580,7 @@ pub fn handle_ipc_stop(
   let _ = dispatch.dispatch(
     "services",
     "stop",
-    rpayload!({ "name": payload.name.clone(), "force": force, "only_user": only_user }),
+    rpayload!({ "name": payload.name.to_ustr(), "force": force, "only_user": only_user }),
   );
 
   if payload.persist {
@@ -1528,6 +1748,7 @@ impl Runtime for ServiceRuntime {
                                 dispatch,
                                 Some(i),
                                 None,
+                                None,
                               );
                             }
                           }
@@ -1569,7 +1790,15 @@ impl Runtime for ServiceRuntime {
                         };
 
                         if (should_stop || auto_stop_on_revert) && is_running {
-                          self.stop_service(service, StopMode::Graceful, log, dispatch, None, None);
+                          self.stop_service(
+                            service,
+                            StopMode::Graceful,
+                            log,
+                            dispatch,
+                            None,
+                            None,
+                            None,
+                          );
                         }
                       }
                     }
@@ -1631,7 +1860,9 @@ impl Runtime for ServiceRuntime {
                       match self.spawn_all(
                         ser,
                         log,
+                        dispatch,
                         Some(&branch_ctx),
+                        None,
                         Some(sm),
                         Some(vh),
                         service_key.clone().into(),
@@ -1662,6 +1893,7 @@ impl Runtime for ServiceRuntime {
                 self.start_service(
                   ser,
                   log,
+                  None,
                   Some(sm),
                   dispatch,
                   Some(vh),
@@ -1674,7 +1906,26 @@ impl Runtime for ServiceRuntime {
           )?;
       }
       "start" => {
-        let name = payload.get::<String>("name")?;
+        let socket_fds = payload
+          .get::<Vec<i32>>("socket_fds")
+          .ok()
+          .unwrap_or_default()
+          .into_iter()
+          .map(|fd| fd as RawFd)
+          .collect::<Vec<_>>();
+        let socket_fd_names = payload
+          .get::<Vec<Ustr>>("socket_fd_names")
+          .ok()
+          .unwrap_or_default();
+        let socket_activation = if socket_fds.is_empty() {
+          None
+        } else {
+          Some(SocketActivation {
+            fds: socket_fds,
+            names: socket_fd_names,
+          })
+        };
+        let name = payload.get::<Ustr>("name")?;
         let only_user = payload.get::<String>("only_user").ok();
         ctx
           .registry
@@ -1682,8 +1933,8 @@ impl Runtime for ServiceRuntime {
             (StateMachine::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, vh)| {
               let service_key = format!("units@{}", name);
-              let service =
-                registry.instantiate_one::<Service>("units", &name, |x| Ok(Service::new(x)))?;
+              let service = registry
+                .instantiate_one::<Service>("units", name.clone(), |x| Ok(Service::new(x)))?;
               if let Some(user) = only_user.clone() {
                 let launch_ctx = ServiceBranchContext {
                   key: None,
@@ -1694,7 +1945,9 @@ impl Runtime for ServiceRuntime {
                 match self.spawn_all(
                   service,
                   log,
+                  dispatch,
                   Some(&launch_ctx),
+                  socket_activation.as_ref(),
                   Some(sm),
                   Some(vh),
                   service_key.into(),
@@ -1736,6 +1989,7 @@ impl Runtime for ServiceRuntime {
                 self.start_service(
                   service,
                   log,
+                  socket_activation.as_ref(),
                   Some(sm),
                   dispatch,
                   Some(vh),
@@ -1761,8 +2015,9 @@ impl Runtime for ServiceRuntime {
           )?;
       }
       "stop" => {
-        let name = payload.get::<String>("name")?;
+        let name = payload.get::<Ustr>("name")?;
         let force = payload.get::<bool>("force").unwrap_or(false);
+        let index = payload.get::<usize>("index").ok();
         let mode = if force {
           StopMode::ForceKill
         } else {
@@ -1771,9 +2026,9 @@ impl Runtime for ServiceRuntime {
 
         let service = ctx
           .registry
-          .instantiate_one::<Service>("units", &name, |x| Ok(Service::new(x)))?;
+          .instantiate_one::<Service>("units", name, |x| Ok(Service::new(x)))?;
         let only_user = payload.get::<Ustr>("only_user").ok();
-        self.stop_service(service, mode, log, dispatch, None, only_user);
+        self.stop_service(service, mode, log, dispatch, None, only_user, index);
       }
       "stop_all" => {
         let force = payload.get::<bool>("force").unwrap_or(false);
@@ -1795,7 +2050,7 @@ impl Runtime for ServiceRuntime {
           if let Some(instances) = ctx.registry.instances.get_mut(&key) {
             for instance in instances.iter_mut() {
               if let Some(service) = instance.downcast_mut::<Service>() {
-                self.stop_service(service, mode, log, dispatch, None, None);
+                self.stop_service(service, mode, log, dispatch, None, None, None);
               }
             }
           }
@@ -1837,6 +2092,7 @@ impl Runtime for ServiceRuntime {
                   self.start_service(
                     service,
                     log,
+                    None,
                     Some(sm),
                     dispatch,
                     Some(vh),
@@ -1859,6 +2115,7 @@ impl Runtime for ServiceRuntime {
                       self.start_service(
                         service,
                         log,
+                        None,
                         Some(sm),
                         dispatch,
                         Some(vh),
@@ -1934,7 +2191,7 @@ impl Runtime for ServiceRuntime {
                 .registry
                 .as_one_mut::<Service>("units", dependent.as_str())
               {
-                self.stop_service(service, StopMode::Graceful, log, dispatch, None, None);
+                self.stop_service(service, StopMode::Graceful, log, dispatch, None, None, None);
               }
             }
           }
@@ -1968,6 +2225,7 @@ impl Runtime for ServiceRuntime {
                       self.start_service(
                         service,
                         log,
+                        None,
                         Some(sm),
                         dispatch,
                         Some(vh),
@@ -2005,6 +2263,7 @@ impl Runtime for ServiceRuntime {
                             self.start_service(
                               service,
                               log,
+                              None,
                               Some(sm),
                               dispatch,
                               Some(vh),

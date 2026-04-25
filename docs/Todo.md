@@ -13,10 +13,14 @@ kanban-plugin: board
 
 ## Doing
 
-- [ ] **Trigger Optimizations**: Keep an index of flow <-> service relationships.
-- [ ] **Payload Optimizations**: Replace JSON with a faster payload for internal messaging.
-- [ ] **String Optimizations**: Use something like `strumbra` for strings.
-- [ ] **DI**: `ResourceBag` in place of json runtime payload.
+- [ ] **Sockets, FDs and timers**: 
+	- [x] Socket-trigger-services
+	- [x] FD resource manager
+	- [ ] Service timers
+	- [ ] Socket transcendence
+	- [ ] Socket branching
+	- [ ] Socket piping
+	- [ ] Socket state triggers
 - [ ] **Piping**: Piping and payloads into other states/signals.
 	- [x] Simple circumstantial piping
 	- [ ] General piping
@@ -48,6 +52,7 @@ kanban-plugin: board
 
 - [ ] **Envs**: Loading `.env` files as user profile and as `rind` config source.
 - [ ] **Reaper**: Zombie process terminator.
+- [ ] **String Optimizations**: Use something like `strumbra` for strings.
 - [ ] **Userspace Services**: Isolate services for user and system.
 - [ ] **Advanced Triggering**: More complex state based service triggers.
 - [x] **State Transcendence**: Auto-activation of states based on dependencies (e.g. `SwayActive` on `UserLoggedIn`).
@@ -66,6 +71,9 @@ kanban-plugin: board
 **Complete**
 - [ ] **Permissions**: Entity-based(users, groups) access control for internal actions.
 - [x] **State Persistence**: Continuity of state across restarts.
+- [x] **Trigger Optimizations**: Keep an index of flow <-> service relationships.
+- [x] **Payload Optimizations**: Replace JSON with a faster payload for internal messaging.
+- [x] **DI**: `ResourceBag` in place of json runtime payload.
 - [x] **Flow System**: Signal/State definitions and broadcasting.
 - [ ] **Service Optimization**: 
 	- [x] Clean service instances with `Exited` states.

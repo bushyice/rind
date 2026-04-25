@@ -3,6 +3,7 @@ use crate::error::CoreError;
 use crate::logging::{LogConfig, LogHandle, start_logger};
 use crate::notifier::Notifier;
 use crate::orchestrator::{BootCycle, BootPhase, OrchestratorContext, OrchestratorStore};
+use crate::prelude::Resources;
 use crate::registry::{InstanceMap, MetadataRegistry};
 use crate::runtime::{RuntimeHandle, start_runtime};
 
@@ -42,6 +43,7 @@ impl BootEngine {
     metadata: &mut MetadataRegistry,
     instances: &mut InstanceMap,
     runtime: &RuntimeHandle,
+    resources: &mut Resources,
   ) -> Result<(), CoreError> {
     self.persistent_context_ids.clear();
 
@@ -64,11 +66,12 @@ impl BootEngine {
             metadata,
             instances,
             runtime,
+            resources,
           };
           self.orchestrators.run_cycle_phase(cycle, phase, &mut ctx)?;
         }
 
-        runtime.flush_context(context_id, metadata)?;
+        runtime.flush_context(context_id, metadata, resources)?;
 
         if cycle == BootCycle::Runtime && phase == BootPhase::Start {
           self.persistent_context_ids.push(context_id);
@@ -84,6 +87,7 @@ impl BootEngine {
     metadata: &mut MetadataRegistry,
     instances: &mut InstanceMap,
     runtime: &RuntimeHandle,
+    resources: &mut Resources,
   ) -> Result<(), CoreError> {
     let context_ids = self.persistent_context_ids.clone();
     for context_id in context_ids {
@@ -93,12 +97,13 @@ impl BootEngine {
           metadata,
           instances,
           runtime,
+          resources,
         };
 
         self
           .orchestrators
           .run_cycle_phase(BootCycle::Pump, phase, &mut ctx)?;
-        runtime.flush_context(context_id, metadata)?;
+        runtime.flush_context(context_id, metadata, resources)?;
       }
     }
 
@@ -114,6 +119,7 @@ impl BootEngine {
     metadata: &mut MetadataRegistry,
     instances: &mut InstanceMap,
     runtime: &RuntimeHandle,
+    resources: &mut Resources,
   ) -> Result<(), CoreError> {
     metadata.remove_metadata("units");
 
@@ -131,13 +137,14 @@ impl BootEngine {
           metadata,
           instances,
           runtime,
+          resources,
         };
         self
           .orchestrators
           .run_cycle_phase(BootCycle::Collect, phase, &mut ctx)?;
       }
 
-      runtime.flush_context(context_id, metadata)?;
+      runtime.flush_context(context_id, metadata, resources)?;
     }
 
     Ok(())
@@ -347,8 +354,9 @@ mod tests {
 
     let mut metadata = MetadataRegistry::default();
     let mut instances = InstanceMap::default();
+    let mut resources = Resources::default();
     boot
-      .run(&mut metadata, &mut instances, &runtime)
+      .run(&mut metadata, &mut instances, &runtime, &mut resources)
       .expect("boot run should succeed");
 
     let value = rx
@@ -381,8 +389,9 @@ mod tests {
 
     let mut metadata = MetadataRegistry::default();
     let mut instances = InstanceMap::default();
+    let mut resources = Resources::default();
     boot
-      .run(&mut metadata, &mut instances, &runtime)
+      .run(&mut metadata, &mut instances, &runtime, &mut resources)
       .expect("boot run should succeed");
 
     let first = rx
@@ -394,6 +403,61 @@ mod tests {
     assert_eq!(first, "from_start".to_string());
     assert_eq!(second, "from_end".to_string());
 
+    let _ = runtime.send(RuntimeCommand::Stop);
+  }
+
+  struct ResourceRuntime;
+  impl Runtime for ResourceRuntime {
+    fn id(&self) -> &str {
+      "resource"
+    }
+    fn handle(
+      &mut self,
+      action: &str,
+      _payload: RuntimePayload,
+      ctx: &mut RuntimeContext<'_>,
+      _dispatch: &RuntimeDispatcher,
+      _log: &LogHandle,
+    ) -> Result<Option<RuntimePayload>, CoreError> {
+      if action == "register" {
+        ctx.resources.register_resource(42);
+      }
+      Ok(None)
+    }
+  }
+
+  struct ResourceOrchestrator;
+  impl Orchestrator for ResourceOrchestrator {
+    fn id(&self) -> &str {
+      "resource"
+    }
+    fn depends_on(&self) -> &[&str] {
+      &[]
+    }
+    fn when(&self) -> OrchestratorWhen<'static> {
+      OrchestratorWhen {
+        cycle: &[BootCycle::Runtime],
+        phase: BootPhase::Start,
+      }
+    }
+    fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
+      ctx.dispatch("resource", "register", Default::default())
+    }
+  }
+
+  #[test]
+  fn runtime_can_register_resources() {
+    let log = logger_for_tests();
+    let runtime = start_runtime(log, vec![Box::new(ResourceRuntime)], None);
+    let mut boot = BootEngine::default();
+    boot.orchestrators.push(ResourceOrchestrator);
+    let mut metadata = MetadataRegistry::default();
+    let mut instances = InstanceMap::default();
+    let mut resources = Resources::default();
+    boot
+      .run(&mut metadata, &mut instances, &runtime, &mut resources)
+      .expect("boot run should succeed");
+    assert_eq!(resources.unwatched_fds(), vec![42]);
     let _ = runtime.send(RuntimeCommand::Stop);
   }
 }

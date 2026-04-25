@@ -5,6 +5,8 @@ pub mod networking;
 pub mod permissions;
 pub mod reaper;
 pub mod services;
+pub mod sockets;
+pub mod timer;
 pub mod transport;
 pub mod triggers;
 pub mod units;
@@ -27,6 +29,8 @@ pub mod prelude {
   pub use networking::*;
   pub use reaper::*;
   pub use services::*;
+  pub use sockets::*;
+  pub use timer::*;
   pub use transport::*;
   pub use triggers::*;
   pub use units::*;

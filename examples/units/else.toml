@@ -12,7 +12,8 @@ name = "four"
 start-on = ["my_signal"]
 run.exec = "/usr/bin/example-inactive"
 run.args = ["arg1", "arg2"]
-restart = true
+run.timer = { duration = "5s", restart = true }
+singleton = true
 
 [[state]]
 name = "my_state"
@@ -24,6 +25,17 @@ branch = ["id"]
 name = "some_state"
 payload = "string"
 
+[[socket]]
+name = "four_starter"
+type = "uds"
+listen = "/var/sock/my.sock"
+owner = "else@four"
+signal = "else@my_signal_2"
+
 [[signal]]
 name = "my_signal"
 payload = "string"
+
+[[signal]]
+name = "my_signal_2"
+payload = "json"

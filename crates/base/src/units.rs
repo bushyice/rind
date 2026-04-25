@@ -6,6 +6,7 @@ use crate::mount::Mount;
 use crate::networking::NetworkConfig;
 use crate::permissions::{PERM_LOGIN, PERM_RUN0, PERM_SYSTEM_SERVICES, Permission};
 use crate::services::Service;
+use crate::sockets::Socket;
 use crate::user::Run0QueueState;
 use crate::variables::{Variable, VariableHeap, variables_path};
 use rind_core::prelude::*;
@@ -84,6 +85,7 @@ impl UnitsOrchestrator {
     let mut metadata = Metadata::new(UNITS_META)
       .of::<Service>("service")
       .of::<Mount>("mount")
+      .of::<Socket>("socket")
       .of::<NetworkConfig>("network")
       .of::<State>("state")
       .of::<Signal>("signal")
@@ -194,6 +196,7 @@ impl UnitsOrchestrator {
     ctx.metadata.insert_metadata(metadata);
     ctx.metadata.ensure_index_for_type::<Service>(UNITS_META)?;
     ctx.metadata.ensure_index_for_type::<Mount>(UNITS_META)?;
+    ctx.metadata.ensure_index_for_type::<Socket>(UNITS_META)?;
     ctx.metadata.ensure_index_for_type::<State>(UNITS_META)?;
     ctx.metadata.ensure_index_for_type::<Signal>(UNITS_META)?;
 

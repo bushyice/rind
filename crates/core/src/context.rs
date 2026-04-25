@@ -5,7 +5,7 @@ use std::{
   time::Instant,
 };
 
-use crate::user::UserRecord;
+use crate::{prelude::Resources, user::UserRecord};
 
 use crate::events::EventBus;
 use crate::lifecycle::LifecycleQueue;
@@ -194,6 +194,7 @@ pub struct RuntimeContext<'a> {
   pub runtime_id: &'a str,
   pub scope: &'a mut RuntimeScope,
   pub registry: InstanceRegistry<'a>,
+  pub resources: &'a mut Resources,
   pub event_bus: &'a mut EventBus,
   pub lifecycle: &'a mut LifecycleQueue,
   pub notifier: Option<Notifier>,
@@ -204,6 +205,7 @@ impl<'a> RuntimeContext<'a> {
     runtime_id: &'a str,
     scope: &'a mut RuntimeScope,
     registry: InstanceRegistry<'a>,
+    resources: &'a mut Resources,
     event_bus: &'a mut EventBus,
     lifecycle: &'a mut LifecycleQueue,
     notifier: Option<Notifier>,
@@ -212,6 +214,7 @@ impl<'a> RuntimeContext<'a> {
       runtime_id,
       scope,
       registry,
+      resources,
       event_bus,
       lifecycle,
       notifier,

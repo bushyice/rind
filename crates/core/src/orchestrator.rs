@@ -2,6 +2,7 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::context::ScopeBuilder;
 use crate::error::CoreError;
+use crate::prelude::Resources;
 use crate::registry::{InstanceMap, InstanceRegistry, MetadataRegistry};
 use crate::runtime::{Runtime, RuntimeCommand, RuntimeHandle, RuntimePayload};
 
@@ -30,6 +31,7 @@ pub struct OrchestratorContext<'a> {
   pub metadata: &'a mut MetadataRegistry,
   pub instances: &'a mut InstanceMap,
   pub runtime: &'a RuntimeHandle,
+  pub resources: &'a mut Resources,
 }
 
 impl OrchestratorContext<'_> {

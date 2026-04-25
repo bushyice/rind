@@ -10,6 +10,7 @@ use crate::events::EventBus;
 use crate::lifecycle::{LifecycleAction, LifecycleQueue};
 use crate::logging::{LogHandle, LogLevel};
 use crate::notifier::Notifier;
+use crate::prelude::Resources;
 use crate::registry::{InstanceMap, InstanceRegistry, MetadataRegistry};
 use crate::types::Ustr;
 
@@ -107,6 +108,28 @@ impl RuntimeDispatcher {
       reply: None,
     })
   }
+
+  #[deprecated]
+  pub fn call(
+    &self,
+    runtime_id: impl Into<String>,
+    action: impl Into<String>,
+    payload: RuntimePayload,
+  ) -> Result<Option<RuntimePayload>, CoreError> {
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    self.handle.send(RuntimeCommand::Dispatch {
+      runtime_id: runtime_id.into(),
+      action: action.into(),
+      payload,
+      context_id: self.context_id,
+      reply: Some(tx),
+    })?;
+
+    rx.recv()
+      .map_err(|_| CoreError::InvalidState("Runtime failed to reply (deadlock?)".into()))?
+      .map(Some)
+  }
 }
 
 #[derive(Clone)]
@@ -192,6 +215,29 @@ impl RuntimeHandle {
     })
   }
 
+  #[deprecated]
+  pub fn call(
+    &self,
+    runtime_id: impl Into<String>,
+    action: impl Into<String>,
+    payload: RuntimePayload,
+    context_id: usize,
+  ) -> Result<Option<RuntimePayload>, CoreError> {
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    self.send(RuntimeCommand::Dispatch {
+      runtime_id: runtime_id.into(),
+      action: action.into(),
+      payload,
+      context_id,
+      reply: Some(tx),
+    })?;
+
+    rx.recv()
+      .map_err(|_| CoreError::InvalidState("Runtime failed to reply (deadlock?)".into()))?
+      .map(Some)
+  }
+
   pub fn register_scopes(&self, context_id: usize, scopes: RuntimeScopes) -> Result<(), CoreError> {
     self.send(RuntimeCommand::RegisterScopes { context_id, scopes })
   }
@@ -216,6 +262,7 @@ impl RuntimeHandle {
     &self,
     context_id: usize,
     metadata: &MetadataRegistry,
+    resources: &mut Resources,
   ) -> Result<(), CoreError> {
     loop {
       let command = {
@@ -283,6 +330,7 @@ impl RuntimeHandle {
         runtime_id.as_str(),
         &mut scope,
         registry,
+        resources,
         &mut event_bus,
         &mut lifecycle,
         self.inner.borrow().notifier.clone(),

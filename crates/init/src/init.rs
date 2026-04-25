@@ -13,6 +13,8 @@ use rind_base::mount::MountRuntime;
 use rind_base::networking::NetworkingRuntime;
 use rind_base::reaper::ReaperRuntime;
 use rind_base::services::ServiceRuntime;
+use rind_base::sockets::SocketRuntime;
+use rind_base::timer::TimerRuntime;
 use rind_base::transport::TransportRuntime;
 use rind_base::units::UnitsOrchestrator;
 use rind_base::user::UserRuntime;
@@ -56,6 +58,8 @@ impl Orchestrator for BootOrchestrator {
     ctx.dispatch("networking", "scan", Default::default())?;
     ctx.dispatch("networking", "configure", Default::default())?;
 
+    ctx.dispatch("sockets", "setup_all", Default::default())?;
+
     ctx.dispatch("services", "start_all", Default::default())?;
     ctx.dispatch("services", "evaluate_triggers", Default::default())?;
 
@@ -91,6 +95,8 @@ impl Orchestrator for RuntimeProviderOrchestrator {
       Box::new(ReaperRuntime::default()),
       Box::new(IpcRuntime::default()),
       Box::new(UserRuntime::default()),
+      Box::new(SocketRuntime::default()),
+      Box::new(TimerRuntime::default()),
     ]
   }
 
@@ -133,6 +139,7 @@ fn try_stop_services(
   boot: &BootEngine,
   metadata: &MetadataRegistry,
   runtime: &RuntimeHandle,
+  resources: &mut Resources,
   force: bool,
 ) {
   let Some(context_id) = boot.primary_context_id() else {
@@ -145,7 +152,7 @@ fn try_stop_services(
     rpayload!({ "force": force }),
     context_id,
   );
-  let _ = runtime.flush_context(context_id, metadata);
+  let _ = runtime.flush_context(context_id, metadata, resources);
 }
 
 fn collect_other_pids() -> Vec<i32> {
@@ -199,28 +206,30 @@ fn process_lifecycle_action(
   metadata: &mut MetadataRegistry,
   instances: &mut InstanceMap,
   runtime: &RuntimeHandle,
+  resources: &mut Resources,
 ) -> bool {
   match action {
     LifecycleAction::ReloadUnits => {
       load_env();
-      let _ = boot.reload_units_collection(metadata, instances, runtime);
+      let _ = boot.reload_units_collection(metadata, instances, runtime, resources);
       let _ = runtime.dispatch(
         "services",
         "bootstrap",
         Default::default(),
         boot.primary_context_id().unwrap_or(0),
       );
+      let _ = runtime.flush_context(boot.primary_context_id().unwrap_or(0), metadata, resources);
       true
     }
     LifecycleAction::SoftReboot => {
-      try_stop_services(boot, metadata, runtime, false);
+      try_stop_services(boot, metadata, runtime, resources, false);
       terminate_all_processes();
       metadata.remove_metadata("units");
-      let _ = boot.run(metadata, instances, runtime);
+      let _ = boot.run(metadata, instances, runtime, resources);
       true
     }
     LifecycleAction::Reboot => {
-      try_stop_services(boot, metadata, runtime, false);
+      try_stop_services(boot, metadata, runtime, resources, false);
       terminate_all_processes();
       let _ = runtime.send(RuntimeCommand::Stop);
       unsafe {
@@ -230,7 +239,7 @@ fn process_lifecycle_action(
       false
     }
     LifecycleAction::Shutdown => {
-      try_stop_services(boot, metadata, runtime, true);
+      try_stop_services(boot, metadata, runtime, resources, true);
       terminate_all_processes();
       let _ = runtime.send(RuntimeCommand::Stop);
       unsafe {
@@ -257,6 +266,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let mut metadata = MetadataRegistry::default();
   let mut instances = InstanceMap::default();
+  let mut resources = Resources::default();
 
   let log = boot.start_logger();
 
@@ -276,7 +286,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   let runtime = boot.init_runtime(log, Some(notifier.clone()));
 
   boot
-    .run(&mut metadata, &mut instances, &runtime)
+    .run(&mut metadata, &mut instances, &runtime, &mut resources)
     .map_err(|e| format!("boot failed: {e}"))?;
 
   let context_id = boot
@@ -316,13 +326,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .add(tfd.as_fd(), EpollEvent::new(EpollFlags::EPOLLIN, 2))
     .expect("failed to add timerfd to epoll");
 
-  let mut events = [EpollEvent::empty(); 4];
+  let mut events = [EpollEvent::empty(); 16];
 
   loop {
     while let Some(action) = runtime.next_lifecycle_action(context_id) {
-      if !process_lifecycle_action(action, &mut boot, &mut metadata, &mut instances, &runtime) {
+      if !process_lifecycle_action(
+        action,
+        &mut boot,
+        &mut metadata,
+        &mut instances,
+        &runtime,
+        &mut resources,
+      ) {
         return Ok(());
       }
+    }
+
+    for fd in resources.removed_fds() {
+      use std::os::fd::BorrowedFd;
+
+      let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+
+      epoll
+        .delete(borrowed)
+        .expect("failed to remove dynamic resource to epoll");
+
+      println!("removed {fd}");
+      resources.remove_full(fd);
+    }
+
+    for fd in resources.unwatched_fds() {
+      use std::os::fd::BorrowedFd;
+
+      let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+
+      epoll
+        .add(
+          borrowed,
+          EpollEvent::new(EpollFlags::EPOLLIN, fd as u64 + 100),
+        )
+        .expect("failed to add dynamic resource to epoll");
+
+      println!("watching {fd}");
+      resources.watch(fd);
     }
 
     let n = epoll
@@ -343,11 +389,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
           // println!("here");
           let _ = tfd.wait();
         }
+        d if d >= 100 => {
+          let fd = (d - 100) as i32;
+          if let Some(act) = resources.get_action(fd) {
+            let payload = RuntimePayload::default().insert("fd", fd);
+            let _ = runtime.dispatch(
+              &act.runtime,
+              &act.action,
+              if let Some(p) = &act.payload {
+                p(payload)
+              } else {
+                payload
+              },
+              context_id,
+            );
+          }
+        }
         _ => {}
       }
     }
 
-    // println!("Pumping");
-    let _ = boot.pump_once(&mut metadata, &mut instances, &runtime);
+    println!("Pumping");
+    let _ = boot.pump_once(&mut metadata, &mut instances, &runtime, &mut resources);
   }
 }

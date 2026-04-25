@@ -73,6 +73,9 @@ files = [
   "@xz:usr:/usr",
   "@zlib:usr:/usr",
   "@zstd:usr:/usr",
+  "@linux-headers:usr/lib/modules/6.19.11-arch1-1/build/include/uapi:/usr/include",
+  "@linux-headers:usr/lib/modules/6.19.11-arch1-1/build/arch/x86/include/uapi:/usr/include",
+  "@linux-headers:usr/lib/modules/6.19.11-arch1-1/build/arch/x86/include/generated/uapi:/usr/include",
 ]
 
 # Installer cache sources:
@@ -112,6 +115,7 @@ install = [
   "xz:https://archlinux.org/packages/core/x86_64/xz/download",
   "zlib:https://archlinux.org/packages/core/x86_64/zlib/download",
   "zstd:https://archlinux.org/packages/core/x86_64/zstd/download",
+  "linux-headers:https://archlinux.org/packages/core/x86_64/linux-headers/download",
 ]
 
 # C header files and static libs
