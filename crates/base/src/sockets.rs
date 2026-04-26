@@ -1,5 +1,6 @@
+use rind_ipc::payloads::ServicePayload;
 use std::collections::HashMap;
-use std::os::fd::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
@@ -10,7 +11,10 @@ use nix::sys::socket::{
 use rind_core::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::flow::FlowRuntimePayload;
+use crate::flow::{FlowItem, StateMachine, Trigger};
+use crate::permissions::PERM_SYSTEM_SERVICES;
+use crate::prelude::{SocketActivation, VariableHeap, trigger_events};
+use rind_ipc::Message;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -20,29 +24,56 @@ pub enum SocketType {
   Uds,
 }
 
-#[model(meta_name = name, meta_fields(name, listen, r#type, owner, signal), derive_metadata(Debug, Clone))]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SocketServiceLifecycle {
+  #[default]
+  Managed,
+  Owned,
+}
+
+#[model(meta_name = name, meta_fields(name, listen, r#type, owner, start_on, lifecycle, trigger, stop_on, on_start, on_stop, on_data), derive_metadata(Debug, Clone))]
 pub struct Socket {
   pub name: Ustr,
   pub listen: String,
   pub r#type: SocketType,
   pub owner: Option<Ustr>,
-  pub signal: Option<Ustr>,
+  #[serde(rename = "start-on")]
+  pub start_on: Option<Vec<FlowItem>>,
+  #[serde(rename = "stop-on")]
+  pub stop_on: Option<Vec<FlowItem>>,
+  #[serde(rename = "on-start")]
+  pub on_start: Option<Vec<Trigger>>,
+  #[serde(rename = "trigger")]
+  pub trigger: Option<Vec<Trigger>>,
+  #[serde(rename = "on-stop")]
+  pub on_stop: Option<Vec<Trigger>>,
+  #[serde(default)]
+  pub lifecycle: SocketServiceLifecycle,
+
   pub fd: RawFd,
+  pub owned_fd: OwnedFd,
   pub active: bool,
 }
-#[derive(Debug)]
-struct SocketRuntimeEntry {
-  socket: Ustr,
-  socket_name: Ustr,
-  owner: Option<Ustr>,
-  #[allow(dead_code)]
-  fd: std::os::fd::OwnedFd,
+
+pub struct SocketRuntime {
+  instances: HashMap<RawFd, Ustr>,
+  owner: HashMap<RawFd, Ustr>,
+  paused: HashMap<Ustr, Vec<RawFd>>,
+  trigger_index: HashMap<Ustr, std::collections::HashSet<Ustr>>,
+  event_rx: Option<rind_core::events::Subscription<rind_core::prelude::FlowEvent>>,
 }
 
-#[derive(Default)]
-pub struct SocketRuntime {
-  instances: HashMap<RawFd, SocketRuntimeEntry>,
-  paused: HashMap<Ustr, Vec<RawFd>>,
+impl Default for SocketRuntime {
+  fn default() -> Self {
+    Self {
+      instances: HashMap::new(),
+      owner: HashMap::new(),
+      paused: HashMap::new(),
+      trigger_index: HashMap::new(),
+      event_rx: None,
+    }
+  }
 }
 
 impl SocketRuntime {
@@ -116,21 +147,16 @@ impl SocketRuntime {
     Ok(fd)
   }
 
-  fn normalize_owner(group: &Ustr, owner: Ustr) -> Ustr {
-    if owner.as_str().contains('@') {
-      owner
-    } else {
-      Ustr::from(format!("{group}@{owner}"))
-    }
-  }
-
   fn owner_fds(&self, owner: &Ustr) -> Vec<(RawFd, Ustr)> {
     let mut fds: Vec<(RawFd, Ustr)> = self
-      .instances
+      .owner
       .iter()
       .filter_map(|(fd, entry)| {
-        if entry.owner.as_ref() == Some(owner) {
-          Some((*fd, entry.socket_name.clone()))
+        if entry == owner {
+          Some((
+            *fd,
+            self.instances.get(fd).cloned().unwrap_or(Ustr::from("")),
+          ))
         } else {
           None
         }
@@ -139,6 +165,105 @@ impl SocketRuntime {
     fds.sort_by_key(|(fd, _)| *fd);
     fds
   }
+
+  fn rebuild_trigger_index(&mut self, metadata: &MetadataRegistry) {
+    self.trigger_index.clear();
+    let sockets = metadata.items::<Socket>("units").unwrap_or_default();
+
+    for (group, meta) in sockets {
+      let key = Ustr::from(format!("{}@{}", group, meta.name));
+      let mut interests = std::collections::HashSet::new();
+
+      if let Some(start_on) = &meta.start_on {
+        for item in start_on {
+          interests.insert(item.name());
+        }
+      }
+      if let Some(stop_on) = &meta.stop_on {
+        for item in stop_on {
+          interests.insert(item.name());
+        }
+      }
+
+      for interest in interests {
+        self
+          .trigger_index
+          .entry(interest.clone())
+          .or_default()
+          .insert(key.clone());
+      }
+    }
+  }
+
+  fn start_socket(
+    &mut self,
+    name: Ustr,
+    resources: &mut Resources,
+    registry: &mut InstanceRegistry,
+    sr: &mut SocketRegistry,
+  ) -> CoreResult<()> {
+    let sock = registry.instantiate_one("units", name.clone(), |metadata| {
+      let owned_fd = self
+        .create_socket(&metadata)
+        .map_err(|e| CoreError::Custom(format!("failed to create socket {name}: {e}")))?;
+      let fd = owned_fd.as_raw_fd();
+      Ok(Socket {
+        metadata,
+        fd,
+        owned_fd,
+        active: true,
+      })
+    })?;
+
+    resources.action(sock.fd, ("sockets", "drain_incoming"));
+
+    self.instances.insert(sock.fd, name);
+
+    if let Some(owner) = sock.metadata.owner.as_ref() {
+      self.owner.insert(sock.fd, owner.clone());
+      sr.owners
+        .entry(owner.clone())
+        .or_default()
+        .push((sock.metadata.name.clone(), sock.fd));
+    }
+
+    Ok(())
+  }
+
+  fn stop_socket(
+    &mut self,
+    name: Ustr,
+    resources: &mut Resources,
+    registry: &mut InstanceRegistry,
+    sr: &mut SocketRegistry,
+  ) -> CoreResult<()> {
+    let socket = registry.as_one_mut::<Socket>("units", name.clone())?;
+    let fd = socket.fd;
+
+    resources.terminate(fd);
+    self.instances.remove(&fd);
+    self.owner.remove(&fd);
+
+    if let Some(owner) = &socket.metadata.owner {
+      if let Some(paused) = self.paused.get_mut(owner) {
+        paused.retain(|&f| f != fd);
+      }
+      sr.owners.remove(owner);
+    }
+
+    socket.active = false;
+
+    Ok(())
+  }
+}
+
+#[derive(Default)]
+pub struct SocketRegistry {
+  pub owners: HashMap<Ustr, Vec<(Ustr, RawFd)>>,
+}
+
+impl SocketRegistry {
+  pub const KEY: &str = "runtime@socket_registry";
 }
 
 impl Runtime for SocketRuntime {
@@ -155,55 +280,152 @@ impl Runtime for SocketRuntime {
     _log: &LogHandle,
   ) -> Result<Option<RuntimePayload>, CoreError> {
     match action {
-      "setup_all" => {
-        let sockets = ctx
+      "bootstrap" => {
+        ctx
           .registry
-          .metadata
-          .items::<Socket>("units")
-          .unwrap_or_default();
-        for (group, meta) in sockets {
-          let full_name = format!("{}@{}", group, meta.name);
-          println!("{full_name}");
-          if self
-            .instances
-            .values()
-            .any(|entry| entry.socket.as_str() == full_name)
-          {
-            continue;
+          .singleton_or_insert_with(SocketRegistry::KEY, || SocketRegistry::default());
+        self.rebuild_trigger_index(ctx.registry.metadata);
+      }
+      "watch_events" => {
+        self.event_rx = Some(ctx.event_bus.subscribe::<rind_core::prelude::FlowEvent>());
+      }
+      "drain_events" => {
+        if let Some(rx) = &self.event_rx {
+          while let Some(w) = rx.try_recv() {
+            let mut trig = crate::services::EmitTrigger::default();
+            trig.state = Some(w.name);
+            trig.payload = Some(crate::flow::FlowPayload::from_json(Some(w.payload)));
+            trig.flow_type = Some(match w.flow_type {
+              rind_core::prelude::FlowEventType::State => crate::flow::FlowType::State,
+              rind_core::prelude::FlowEventType::Signal => crate::flow::FlowType::Signal,
+            });
+            trig.action = w.action;
+            let _ = dispatch.dispatch(
+              "sockets",
+              "evaluate_triggers",
+              RuntimePayload::default().insert("trigger", trig),
+            );
           }
-
-          let owner = meta
-            .owner
-            .clone()
-            .map(|owner| Self::normalize_owner(&group, owner));
-
-          let owned_fd = self
-            .create_socket(&meta)
-            .map_err(|e| CoreError::Custom(format!("failed to create socket {full_name}: {e}")))?;
-          let fd = owned_fd.as_raw_fd();
-
-          let _ = ctx
-            .registry
-            .instantiate_one("units", full_name.clone(), |metadata| {
-              Ok(Socket {
-                metadata,
-                fd,
-                active: true,
-              })
-            })?;
-
-          ctx.resources.action(fd, ("sockets", "drain_incoming"));
-
-          self.instances.insert(
-            fd,
-            SocketRuntimeEntry {
-              socket: full_name.to_ustr(),
-              socket_name: meta.name.clone(),
-              owner,
-              fd: owned_fd,
-            },
-          );
         }
+      }
+      "evaluate_triggers" => {
+        let emit_trig = payload
+          .get::<crate::services::EmitTrigger>("trigger")
+          .unwrap_or_default();
+
+        if self.trigger_index.is_empty() {
+          self.rebuild_trigger_index(ctx.registry.metadata);
+        }
+
+        ctx
+          .registry
+          .singleton_handle::<(&mut StateMachine, &mut SocketRegistry), _>(
+            (StateMachine::KEY.into(), SocketRegistry::KEY.into()),
+            |registry, (sm, sr)| {
+              let target_keys = if let Some(event_name) = emit_trig.state.as_ref() {
+                self
+                  .trigger_index
+                  .get(event_name)
+                  .cloned()
+                  .unwrap_or_default()
+              } else {
+                registry
+                  .metadata
+                  .items::<Socket>("units")
+                  .unwrap_or_default()
+                  .into_iter()
+                  .map(|(group, meta)| Ustr::from(format!("{}@{}", group, meta.name)))
+                  .collect::<std::collections::HashSet<Ustr>>()
+              };
+
+              let emit_event = match (
+                emit_trig.state.as_ref(),
+                emit_trig.flow_type,
+                emit_trig.payload.as_ref(),
+              ) {
+                (Some(name), Some(flow_type), Some(payload)) => Some(crate::flow::FlowInstance {
+                  name: name.clone().into(),
+                  payload: payload.clone(),
+                  r#type: flow_type,
+                }),
+                _ => None,
+              };
+
+              for socket_name in target_keys {
+                let Some((_unit, _)) = socket_name.split_once('@') else {
+                  continue;
+                };
+
+                let Some(meta) = registry
+                  .metadata
+                  .find::<Socket>("units", socket_name.as_str())
+                else {
+                  continue;
+                };
+
+                let is_active =
+                  if let Ok(sock) = registry.as_one::<Socket>("units", socket_name.as_str()) {
+                    sock.active
+                  } else {
+                    false
+                  };
+
+                let should_start = meta
+                  .start_on
+                  .as_ref()
+                  .map(|conds| {
+                    conds.iter().any(|cond| {
+                      crate::flow::condition_matches(sm, cond, emit_event.as_ref(), None)
+                    })
+                  })
+                  .unwrap_or(false);
+
+                let should_stop = meta
+                  .stop_on
+                  .as_ref()
+                  .map(|conds| {
+                    conds.iter().any(|cond| {
+                      crate::flow::condition_matches(sm, cond, emit_event.as_ref(), None)
+                    })
+                  })
+                  .unwrap_or(false);
+
+                if should_start && !is_active {
+                  let _ = self.start_socket(meta.name.clone(), ctx.resources, registry, sr);
+                } else if should_stop && is_active {
+                  let _ = self.stop_socket(meta.name.clone(), ctx.resources, registry, sr);
+                }
+              }
+              Ok(())
+            },
+          )?;
+      }
+      "setup_all" => {
+        ctx
+          .registry
+          .singleton_handle::<(&mut StateMachine, &mut VariableHeap, &mut SocketRegistry), _>(
+            (
+              StateMachine::KEY.into(),
+              VariableHeap::KEY.into(),
+              SocketRegistry::KEY.into(),
+            ),
+            |registry, (sm, _vh, sr)| {
+              let Some(active) = sm.states.get("rind@active") else {
+                return Ok(());
+              };
+
+              for branch in active {
+                self.start_socket(
+                  branch.payload.to_string_payload().to_ustr(),
+                  ctx.resources,
+                  registry,
+                  sr,
+                )?;
+              }
+
+              Ok(())
+            },
+          )?;
       }
       "get_all_fds" => {
         let fds: Vec<_> = self.instances.keys().map(|i| *i).collect();
@@ -218,63 +440,133 @@ impl Runtime for SocketRuntime {
           "fds": fds
         })));
       }
+      "stop" => {
+        let name = payload.get::<Ustr>("name")?;
+
+        ctx
+          .registry
+          .singleton_handle::<(&mut SocketRegistry, &mut VariableHeap), _>(
+            (SocketRegistry::KEY.into(), VariableHeap::KEY.into()),
+            |registry, (sr, _)| self.stop_socket(name, ctx.resources, registry, sr),
+          )?;
+      }
       "resume_fd" => {
         let fd = payload.get::<i32>("fd")? as RawFd;
-        ctx.resources.register_resource(fd);
+        ctx.resources.resume(fd);
       }
-      "resume_fds" => {
+      "reset_fds" | "resume_fds" => {
         let owner = payload.get::<Ustr>("name")?;
-        if let Some(fds) = self.paused.get(&owner) {
+        if let Some(fds) = self.paused.remove(&owner) {
           for fd in fds {
-            println!("resuming sockets");
-            ctx.resources.register_resource(*fd);
+            ctx.resources.resume(fd);
+          }
+          if let Some(n) = &ctx.notifier {
+            n.notify()?;
           }
         }
       }
       "drain_incoming" => {
         let fd = payload.get::<i32>("fd")? as RawFd;
-        let entry = self.instances.get(&fd).ok_or(CoreError::InvalidState(
+        let name = self.instances.get(&fd).ok_or(CoreError::InvalidState(
           "Socket for fd was not found".into(),
         ))?;
+        let socket = ctx.registry.as_one::<Socket>("units", name.clone())?;
+        ctx.resources.pause(fd);
 
-        if let Some(owner) = entry.owner.clone() {
-          ctx.resources.pause(fd);
+        if let Some(owner) = socket.metadata.owner.clone() {
           self.paused.entry(owner.clone()).or_default().push(fd);
 
-          let owner_fds = self.owner_fds(&owner);
-          let socket_fds: Vec<i32> = owner_fds.iter().map(|(fd, _)| *fd).collect();
-          let socket_fd_names: Vec<Ustr> = owner_fds.into_iter().map(|(_, name)| name).collect();
+          if let SocketServiceLifecycle::Owned = &socket.metadata.lifecycle {
+            let owner_fds = self.owner_fds(&owner);
+            let socket_fds: Vec<i32> = owner_fds.iter().map(|(fd, _)| *fd).collect();
+            let socket_fd_names: Vec<Ustr> = owner_fds.into_iter().map(|(_, name)| name).collect();
 
-          let _ = dispatch.dispatch(
-            "services",
-            "start",
-            rpayload!({
-              "name": owner,
-              "socket_fds": socket_fds,
-              "socket_fd_names": socket_fd_names,
-            }),
-          );
-        }
-
-        let socket_full_name = entry.socket.clone();
-
-        if let Ok(sock) = ctx.registry.as_one::<Socket>("units", socket_full_name) {
-          if let Some(signal_name) = &sock.metadata.signal {
             let _ = dispatch.dispatch(
-              "flow",
-              "emit_signal",
-              FlowRuntimePayload::new(signal_name)
-                .payload(
-                  serde_json::json!({ "socket": sock.metadata.name, "fd": sock.fd
-                  }),
-                )
-                .into(),
+              "services",
+              "start",
+              rpayload!({
+                "name": owner,
+                "socket_fds": socket_fds,
+                "socket_fd_names": socket_fd_names,
+              }),
             );
           }
+        }
+
+        if let Some(triggers) = &socket.metadata.trigger {
+          let triggers = triggers.clone();
+          ctx.registry.singleton_handle::<(&mut StateMachine,), _>(
+            (StateMachine::KEY.into(),),
+            |_, (sm,)| {
+              trigger_events(triggers, Some(sm), dispatch);
+              Ok(())
+            },
+          )?;
         }
       }
       _ => {}
     }
     Ok(None)
   }
+}
+
+pub fn handle_ipc_stop_socket(
+  msg: Message,
+  ctx: &mut RuntimeContext<'_>,
+  dispatch: &RuntimeDispatcher,
+  _log: &LogHandle,
+) -> Result<Message, CoreError> {
+  let pm = ctx
+    .registry
+    .singleton::<PermissionStore>(PermissionStore::KEY)
+    .cloned()
+    .unwrap_or_default();
+
+  let payload = msg
+    .parse_payload::<ServicePayload>()
+    .map_err(CoreError::Custom)?;
+
+  let Some(uid) = msg.from_uid else {
+    return Err(CoreError::PermissionDenied);
+  };
+
+  let sock = ctx.registry.metadata.find::<Socket>("units", &payload.name);
+  let caller = pm.users.lookup_by_uid(uid);
+  let can_manage = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
+    true
+  } else if let (Some(_caller), Some(sock)) = (caller, sock.as_ref()) {
+    match &sock.owner {
+      Some(_) => true, // If it has an owner, maybe user should be able to stop it?
+      None => false,
+    }
+  } else {
+    false
+  };
+
+  if !can_manage {
+    return Err(CoreError::PermissionDenied);
+  }
+
+  let _ = dispatch.dispatch(
+    "sockets",
+    "stop",
+    rpayload!({ "name": payload.name.to_ustr() }),
+  );
+
+  Ok(Message::ok(format!("stopped socket {}", payload.name)))
+}
+
+pub fn get_all_sockets(
+  registry: &rind_core::registry::InstanceRegistry<'_>,
+) -> HashMap<Ustr, SocketActivation> {
+  let Some(sockets) = registry.singleton::<SocketRegistry>(SocketRegistry::KEY) else {
+    return Default::default();
+  };
+
+  sockets
+    .owners
+    .clone()
+    .into_iter()
+    .map(|(name, vec)| (name, SocketActivation::from(vec)))
+    .collect()
 }

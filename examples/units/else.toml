@@ -28,6 +28,7 @@ payload = "string"
 [[socket]]
 name = "four_starter"
 type = "uds"
+lifecycle = "owned"
 listen = "/var/sock/my.sock"
 owner = "else@four"
 signal = "else@my_signal_2"

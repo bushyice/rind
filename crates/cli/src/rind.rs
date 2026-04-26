@@ -537,11 +537,16 @@ fn main() {
     }
     Commands::Start {
       name,
-      r#type: _,
+      r#type,
       persist,
     } => {
+      let action = if r#type == "socket" {
+        "start_socket"
+      } else {
+        "start_service"
+      };
       handle_send!(
-        "start_service",
+        action,
         &ServicePayload {
           force: false,
           name,
@@ -551,12 +556,17 @@ fn main() {
     }
     Commands::Stop {
       name,
-      r#type: _,
+      r#type,
       force,
       persist,
     } => {
+      let action = if r#type == "socket" {
+        "stop_socket"
+      } else {
+        "stop_service"
+      };
       handle_send!(
-        "stop_service",
+        action,
         &ServicePayload {
           force: force,
           name,

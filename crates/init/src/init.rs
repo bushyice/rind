@@ -45,23 +45,23 @@ impl Orchestrator for BootOrchestrator {
 
     ctx.dispatch("user", "create_sessions", Default::default())?;
 
+    ctx.dispatch("sockets", "watch_events", Default::default())?;
     ctx.dispatch("services", "watch_events", Default::default())?;
 
     ctx.dispatch("ipc", "init_actions", Default::default())?;
     ctx.dispatch("ipc", "start_server", Default::default())?;
 
-    ctx.dispatch("firewall", "apply", Default::default())?;
-
     ctx.dispatch("flow", "bootstrap", Default::default())?;
+    ctx.dispatch("sockets", "bootstrap", Default::default())?;
     ctx.dispatch("services", "bootstrap", Default::default())?;
     ctx.dispatch("networking", "bootstrap", Default::default())?;
     ctx.dispatch("networking", "scan", Default::default())?;
     ctx.dispatch("networking", "configure", Default::default())?;
 
     ctx.dispatch("sockets", "setup_all", Default::default())?;
-
     ctx.dispatch("services", "start_all", Default::default())?;
     ctx.dispatch("services", "evaluate_triggers", Default::default())?;
+    ctx.dispatch("sockets", "evaluate_triggers", Default::default())?;
 
     Ok(())
   }
@@ -129,6 +129,7 @@ impl Orchestrator for PumpOrchestrator {
     ctx.dispatch("networking", "scan", Default::default())?;
     ctx.dispatch("networking", "reconcile", Default::default())?;
     ctx.dispatch("services", "drain_events", Default::default())?;
+    ctx.dispatch("sockets", "drain_events", Default::default())?;
     ctx.dispatch("transport", "drain_incoming", Default::default())?;
     ctx.dispatch("ipc", "drain_requests", Default::default())?;
     Ok(())
@@ -260,6 +261,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     PathBuf::from("/etc/units")
   };
 
+  let pump_interval: u64 = std::env::var("RIND_PUMP_INTERVAL")
+    .unwrap_or(15.to_string())
+    .parse()
+    .unwrap_or(15);
+
   let mut boot = BootEngine::default();
 
   let mut units = UnitsOrchestrator::new(units_dir);
@@ -283,7 +289,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   boot.orchestrators.insert(0, RuntimeProviderOrchestrator);
 
   let notifier = Notifier::new().expect("failed to create notifier");
-  let runtime = boot.init_runtime(log, Some(notifier.clone()));
+  let runtime = boot.init_runtime(log.clone(), Some(notifier.clone()));
 
   boot
     .run(&mut metadata, &mut instances, &runtime, &mut resources)
@@ -308,7 +314,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   tfd
     .set(
-      Expiration::Interval(TimeSpec::from(Duration::from_secs(60))), // change a dynamic duration
+      Expiration::Interval(TimeSpec::from(Duration::from_secs(pump_interval))),
       TimerSetTimeFlags::empty(),
     )
     .expect("failed to set timerfd");
@@ -347,12 +353,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
       let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
 
-      epoll
-        .delete(borrowed)
-        .expect("failed to remove dynamic resource to epoll");
+      match epoll.delete(borrowed) {
+        Err(e) => log.log(
+          LogLevel::Error,
+          "epoll",
+          &format!("failed to delete dynamic resource \"{fd}\": {e}"),
+          Default::default(),
+        ),
+        _ => {}
+      }
 
-      println!("removed {fd}");
-      resources.remove_full(fd);
+      if !resources.is_paused(fd) {
+        resources.remove_full(fd);
+      } else {
+        resources.clear_removed(fd);
+      }
     }
 
     for fd in resources.unwatched_fds() {
@@ -360,15 +375,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
       let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
 
-      epoll
-        .add(
-          borrowed,
-          EpollEvent::new(EpollFlags::EPOLLIN, fd as u64 + 100),
-        )
-        .expect("failed to add dynamic resource to epoll");
-
-      println!("watching {fd}");
-      resources.watch(fd);
+      match epoll.add(
+        borrowed,
+        EpollEvent::new(EpollFlags::EPOLLIN, fd as u64 + 100),
+      ) {
+        Ok(_) | Err(nix::Error::EEXIST) => {
+          println!("watching {fd}");
+          resources.watch(fd);
+        }
+        Err(e) => log.log(
+          LogLevel::Error,
+          "epoll",
+          &format!("failed to add dynamic resource \"{fd}\": {e}"),
+          Default::default(),
+        ),
+      }
     }
 
     let n = epoll
@@ -384,6 +405,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         1 => {
           let _ = sfd.read_signal();
+          // quick fix
+          let _ = runtime.dispatch("reaper", "reap_once", Default::default(), context_id);
         }
         2 => {
           // println!("here");
@@ -409,7 +432,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
       }
     }
 
-    println!("Pumping");
+    // println!("Pumping");
     let _ = boot.pump_once(&mut metadata, &mut instances, &runtime, &mut resources);
   }
 }

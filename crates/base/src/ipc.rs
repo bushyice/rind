@@ -18,6 +18,7 @@ use crate::mount::{Mount, is_mounted};
 use crate::networking::{get_ports, handle_ipc_network};
 use crate::permissions::{PERM_LOGIN, PERM_NETWORK};
 use crate::services::{Service, handle_ipc_start, handle_ipc_stop};
+use crate::sockets::handle_ipc_stop_socket;
 use crate::user::{handle_ipc_login, handle_ipc_logout, handle_ipc_run0};
 use crate::variables::VariableHeap;
 use rind_core::prelude::*;
@@ -452,6 +453,7 @@ impl Runtime for IpcRuntime {
         ipcsrc.register("run0", handle_ipc_run0, PermissionExpr::All);
         ipcsrc.register("start_service", handle_ipc_start, PermissionExpr::All);
         ipcsrc.register("stop_service", handle_ipc_stop, PermissionExpr::All);
+        ipcsrc.register("stop_socket", handle_ipc_stop_socket, PermissionExpr::All);
         ipcsrc.register("list", handle_ipc_list, PermissionExpr::All);
         ipcsrc.register("network", handle_ipc_network, PERM_NETWORK);
         ipcsrc.register("set_variable", handle_ipc_set, PermissionExpr::All);

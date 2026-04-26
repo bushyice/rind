@@ -19,6 +19,8 @@ use rind_core::{notifier::Notifier, prelude::*};
 
 use crate::flow::{FlowInstance, FlowItem, FlowPayload, FlowType, StateMachine, Trigger};
 use crate::permissions::PERM_SYSTEM_SERVICES;
+use crate::prelude::trigger_events;
+use crate::sockets::get_all_sockets;
 use crate::transport::{TransportMessage, TransportMethod, start_stdout_listener};
 use crate::variables::VariableHeap;
 
@@ -506,7 +508,7 @@ impl ServiceRuntime {
     log: &LogHandle,
     dispatch: &RuntimeDispatcher,
     branch_ctx: Option<&ServiceBranchContext>,
-    socket_activation: Option<&SocketActivation>,
+    sockets_map: &HashMap<Ustr, SocketActivation>,
     sm: Option<&StateMachine>,
     variable_heap: Option<&VariableHeap>,
     registry_key: Ustr,
@@ -520,8 +522,9 @@ impl ServiceRuntime {
         service,
         run_ref,
         log,
+        dispatch,
         branch_ctx,
-        socket_activation,
+        sockets_map,
         sm,
         variable_heap,
         registry_key.clone(),
@@ -595,7 +598,7 @@ impl ServiceRuntime {
     service: &mut Service,
     log: &LogHandle,
     dispatch: &RuntimeDispatcher,
-    socket_activation: Option<&SocketActivation>,
+    sockets_map: &HashMap<Ustr, SocketActivation>,
     sm: Option<&StateMachine>,
     variable_heap: Option<&VariableHeap>,
     registry_key: Ustr,
@@ -613,7 +616,7 @@ impl ServiceRuntime {
       log,
       dispatch,
       None,
-      socket_activation,
+      sockets_map,
       sm,
       variable_heap,
       registry_key,
@@ -635,13 +638,18 @@ impl ServiceRuntime {
     service: &Service,
     run: &RunOption,
     log: &LogHandle,
+    _dispatch: &RuntimeDispatcher,
     branch_ctx: Option<&ServiceBranchContext>,
-    socket_activation: Option<&SocketActivation>,
+    sockets_map: &HashMap<Ustr, SocketActivation>,
     sm: Option<&StateMachine>,
     variables: Option<&VariableHeap>,
     registry_key: Ustr,
     notifier: Option<Notifier>,
   ) -> anyhow::Result<ChildInstance> {
+    let full_name = registry_key
+      .strip_prefix("units@")
+      .map(|n| n.to_ustr())
+      .unwrap();
     let mut args = run.args.clone();
     let mut envs = run.env.clone().unwrap_or_default();
     let branch_key = branch_ctx.and_then(|ctx| ctx.key.as_ref());
@@ -733,12 +741,14 @@ impl ServiceRuntime {
       }
     }
 
-    let activation_fds = socket_activation
-      .map(|activation| activation.fds.clone())
-      .unwrap_or_default();
-    let activation_names = socket_activation
-      .map(|activation| activation.names.clone())
-      .unwrap_or_default();
+    let mut activation_fds = Vec::new();
+    let mut activation_names = Vec::new();
+
+    if let Some(activation) = sockets_map.get(&full_name) {
+      activation_fds.extend(activation.fds.clone());
+      activation_names.extend(activation.names.clone());
+    }
+
     if !activation_fds.is_empty() {
       let inherited_fds = (0..activation_fds.len())
         .map(|i| (3 + i).to_string())
@@ -881,7 +891,7 @@ impl ServiceRuntime {
     &mut self,
     service: &mut Service,
     log: &LogHandle,
-    socket_activation: Option<&SocketActivation>,
+    sockets_map: &HashMap<Ustr, SocketActivation>,
     sm: Option<&StateMachine>,
     dispatch: &RuntimeDispatcher,
     variable_heap: Option<&VariableHeap>,
@@ -919,7 +929,7 @@ impl ServiceRuntime {
       service,
       log,
       dispatch,
-      socket_activation,
+      sockets_map,
       sm,
       variable_heap,
       registry_key,
@@ -929,7 +939,7 @@ impl ServiceRuntime {
         self.register_stdio_transport(service, dispatch, None);
         if let Some(inst) = service.instances.as_one_mut() {
           inst.state = ServiceState::Active;
-          self.run_triggers(service.metadata.on_start.as_ref(), dispatch);
+          self.run_triggers(service.metadata.on_start.as_ref(), sm, dispatch);
         }
 
         let _ = dispatch.dispatch(
@@ -965,6 +975,7 @@ impl ServiceRuntime {
     service: Arc<ServiceMetadata>,
     mode: StopMode,
     dispatch: &RuntimeDispatcher,
+    sm: Option<&StateMachine>,
     key: Option<Ustr>,
     user: Option<Ustr>,
   ) {
@@ -998,7 +1009,7 @@ impl ServiceRuntime {
       self.stopping_map.insert(child.id(), Instant::now());
     } else {
       if inst.state == ServiceState::Active {
-        self.run_triggers(service.on_stop.as_ref(), dispatch);
+        self.run_triggers(service.on_stop.as_ref(), sm, dispatch);
       }
       inst.state = ServiceState::Inactive;
     }
@@ -1010,6 +1021,7 @@ impl ServiceRuntime {
     mode: StopMode,
     log: &LogHandle,
     dispatch: &RuntimeDispatcher,
+    sm: Option<&StateMachine>,
     key: Option<Ustr>,
     user: Option<Ustr>,
     index: Option<usize>,
@@ -1021,6 +1033,7 @@ impl ServiceRuntime {
           service.metadata.clone(),
           mode,
           dispatch,
+          sm,
           key.clone(),
           user.clone(),
         );
@@ -1032,6 +1045,7 @@ impl ServiceRuntime {
           service.metadata.clone(),
           mode,
           dispatch,
+          sm,
           key.clone(),
           user.clone(),
         );
@@ -1070,14 +1084,6 @@ impl ServiceRuntime {
           "action": ServiceEventKind::Stopped
         }),
       );
-
-      println!("resetting fds");
-
-      let _ = dispatch.dispatch(
-        "sockets",
-        "resume_fds",
-        RuntimePayload::default().insert("name", service.metadata.name.clone()),
-      );
     }
   }
 
@@ -1088,13 +1094,15 @@ impl ServiceRuntime {
     code: i32,
     _log: &LogHandle,
     dispatch: &RuntimeDispatcher,
+    sm: Option<&StateMachine>,
+    service_key: Ustr,
   ) -> Option<ServiceExitAction> {
     let idx = service.instances.find_by_pid(pid)?;
     let (manually_stopped, retry_count) = {
       let inst = &mut service.instances.0[idx];
 
       if matches!(inst.state, ServiceState::Active | ServiceState::Stopping) {
-        self.run_triggers(service.metadata.on_stop.as_ref(), dispatch);
+        self.run_triggers(service.metadata.on_stop.as_ref(), sm, dispatch);
       }
 
       inst.state = ServiceState::Exited(code);
@@ -1132,6 +1140,13 @@ impl ServiceRuntime {
           || inst.state == ServiceState::Starting
           || inst.state == ServiceState::Stopping
       });
+
+      let full_name = service_key.strip_prefix("units@")?.to_ustr();
+      let _ = dispatch.dispatch(
+        "sockets",
+        "resume_fds",
+        RuntimePayload::default().insert("name", full_name),
+      );
     }
 
     Some(action)
@@ -1174,34 +1189,14 @@ impl ServiceRuntime {
   //   }
   // }
 
-  fn run_triggers(&self, triggers: Option<&Vec<Trigger>>, dispatch: &RuntimeDispatcher) {
+  fn run_triggers(
+    &self,
+    triggers: Option<&Vec<Trigger>>,
+    sm: Option<&StateMachine>,
+    dispatch: &RuntimeDispatcher,
+  ) {
     if let Some(triggers) = triggers {
-      for trigger in triggers {
-        if let Some(script) = &trigger.script {
-          let _ = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(script)
-            .spawn();
-        } else if let Some(exec) = &trigger.exec {
-          let mut cmd = std::process::Command::new(exec);
-          if let Some(args) = &trigger.args {
-            cmd.args(args);
-          }
-          let _ = cmd.spawn();
-        } else if let Some(state) = &trigger.state {
-          let mut payload = rpayload!({ "name": state.clone() });
-          if let Some(p) = &trigger.payload {
-            payload = payload.insert("payload", p.clone());
-          }
-          let _ = dispatch.dispatch("flow", "set_state", payload);
-        } else if let Some(signal) = &trigger.signal {
-          let mut payload = rpayload!({ "name": signal.clone() });
-          if let Some(p) = &trigger.payload {
-            payload = payload.insert("payload", p.clone());
-          }
-          let _ = dispatch.dispatch("flow", "emit_signal", payload);
-        }
-      }
+      trigger_events(triggers.clone(), sm, dispatch);
     }
   }
 
@@ -1448,6 +1443,12 @@ pub struct ServiceBranchContext {
   pub forced_user: Option<Ustr>,
 }
 
+impl Into<serde_json::Value> for EmitTrigger {
+  fn into(self) -> serde_json::Value {
+    serde_json::to_value(self).unwrap_or_default()
+  }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SocketActivation {
   pub fds: Vec<RawFd>,
@@ -1460,9 +1461,12 @@ impl SocketActivation {
   }
 }
 
-impl Into<serde_json::Value> for EmitTrigger {
-  fn into(self) -> serde_json::Value {
-    serde_json::to_value(self).unwrap_or_default()
+impl From<Vec<(Ustr, RawFd)>> for SocketActivation {
+  fn from(value: Vec<(Ustr, RawFd)>) -> Self {
+    SocketActivation {
+      fds: value.iter().map(|(_, x)| *x).collect(),
+      names: value.into_iter().map(|(x, _)| x).collect(),
+    }
   }
 }
 
@@ -1658,6 +1662,7 @@ impl Runtime for ServiceRuntime {
           self.rebuild_trigger_index(ctx.registry.metadata);
         }
 
+        let sockets_map = get_all_sockets(&ctx.registry);
         ctx
           .registry
           .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
@@ -1746,6 +1751,7 @@ impl Runtime for ServiceRuntime {
                                 StopMode::Graceful,
                                 log,
                                 dispatch,
+                                Some(sm),
                                 Some(i),
                                 None,
                                 None,
@@ -1795,6 +1801,7 @@ impl Runtime for ServiceRuntime {
                             StopMode::Graceful,
                             log,
                             dispatch,
+                            Some(sm),
                             None,
                             None,
                             None,
@@ -1862,7 +1869,7 @@ impl Runtime for ServiceRuntime {
                         log,
                         dispatch,
                         Some(&branch_ctx),
-                        None,
+                        &sockets_map,
                         Some(sm),
                         Some(vh),
                         service_key.clone().into(),
@@ -1893,7 +1900,7 @@ impl Runtime for ServiceRuntime {
                 self.start_service(
                   ser,
                   log,
-                  None,
+                  &sockets_map,
                   Some(sm),
                   dispatch,
                   Some(vh),
@@ -1917,14 +1924,18 @@ impl Runtime for ServiceRuntime {
           .get::<Vec<Ustr>>("socket_fd_names")
           .ok()
           .unwrap_or_default();
-        let socket_activation = if socket_fds.is_empty() {
-          None
-        } else {
-          Some(SocketActivation {
-            fds: socket_fds,
-            names: socket_fd_names,
-          })
-        };
+        let mut sockets_map = get_all_sockets(&ctx.registry);
+        if !socket_fds.is_empty() {
+          let name = payload.get::<Ustr>("name").unwrap_or_default();
+          let entry = sockets_map
+            .entry(name.clone())
+            .or_insert_with(|| SocketActivation {
+              fds: Vec::new(),
+              names: Vec::new(),
+            });
+          entry.fds.extend(socket_fds);
+          entry.names.extend(socket_fd_names);
+        }
         let name = payload.get::<Ustr>("name")?;
         let only_user = payload.get::<String>("only_user").ok();
         ctx
@@ -1947,7 +1958,7 @@ impl Runtime for ServiceRuntime {
                   log,
                   dispatch,
                   Some(&launch_ctx),
-                  socket_activation.as_ref(),
+                  &sockets_map,
                   Some(sm),
                   Some(vh),
                   service_key.into(),
@@ -1958,7 +1969,7 @@ impl Runtime for ServiceRuntime {
                     self.register_stdio_transport(service, dispatch, None);
                     if let Some(inst) = service.instances.as_one_mut() {
                       inst.state = ServiceState::Active;
-                      self.run_triggers(service.metadata.on_start.as_ref(), dispatch);
+                      self.run_triggers(service.metadata.on_start.as_ref(), Some(sm), dispatch);
                     }
                     let _ = dispatch.dispatch(
                       "services",
@@ -1989,7 +2000,7 @@ impl Runtime for ServiceRuntime {
                 self.start_service(
                   service,
                   log,
-                  socket_activation.as_ref(),
+                  &sockets_map,
                   Some(sm),
                   dispatch,
                   Some(vh),
@@ -2024,11 +2035,28 @@ impl Runtime for ServiceRuntime {
           StopMode::Graceful
         };
 
-        let service = ctx
+        ctx
           .registry
-          .instantiate_one::<Service>("units", name, |x| Ok(Service::new(x)))?;
-        let only_user = payload.get::<Ustr>("only_user").ok();
-        self.stop_service(service, mode, log, dispatch, None, only_user, index);
+          .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
+            (StateMachine::KEY.into(), VariableHeap::KEY.into()),
+            |registry, (sm, _)| {
+              let service =
+                registry.instantiate_one::<Service>("units", name, |x| Ok(Service::new(x)))?;
+              let only_user = payload.get::<Ustr>("only_user").ok();
+
+              self.stop_service(
+                service,
+                mode,
+                log,
+                dispatch,
+                Some(sm),
+                None,
+                only_user,
+                index,
+              );
+              Ok(())
+            },
+          )?;
       }
       "stop_all" => {
         let force = payload.get::<bool>("force").unwrap_or(false);
@@ -2038,27 +2066,36 @@ impl Runtime for ServiceRuntime {
           StopMode::Graceful
         };
 
-        let keys: Vec<Ustr> = ctx
+        ctx
           .registry
-          .instances
-          .keys()
-          .filter(|k| k.starts_with("units@"))
-          .cloned()
-          .collect();
+          .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
+            (StateMachine::KEY.into(), VariableHeap::KEY.into()),
+            move |registry, (sm, _)| {
+              let keys: Vec<Ustr> = registry
+                .instances
+                .keys()
+                .filter(|k| k.starts_with("units@"))
+                .cloned()
+                .collect();
 
-        for key in keys {
-          if let Some(instances) = ctx.registry.instances.get_mut(&key) {
-            for instance in instances.iter_mut() {
-              if let Some(service) = instance.downcast_mut::<Service>() {
-                self.stop_service(service, mode, log, dispatch, None, None, None);
+              for key in keys {
+                if let Some(instances) = registry.instances.get_mut(&key) {
+                  for instance in instances.iter_mut() {
+                    if let Some(service) = instance.downcast_mut::<Service>() {
+                      self.stop_service(service, mode, log, dispatch, Some(sm), None, None, None);
+                    }
+                  }
+                }
               }
-            }
-          }
-        }
+
+              Ok(())
+            },
+          )?;
       }
       "start_all" => {
         let mut started: HashSet<Ustr> = HashSet::new();
         let mut pending: Vec<(Ustr, Vec<Ustr>, Arc<ServiceMetadata>)> = Vec::new();
+        let sockets_map = get_all_sockets(&ctx.registry);
         ctx
           .registry
           .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
@@ -2092,7 +2129,7 @@ impl Runtime for ServiceRuntime {
                   self.start_service(
                     service,
                     log,
-                    None,
+                    &sockets_map,
                     Some(sm),
                     dispatch,
                     Some(vh),
@@ -2115,7 +2152,7 @@ impl Runtime for ServiceRuntime {
                       self.start_service(
                         service,
                         log,
-                        None,
+                        &sockets_map,
                         Some(sm),
                         dispatch,
                         Some(vh),
@@ -2186,16 +2223,32 @@ impl Runtime for ServiceRuntime {
           ServiceEventKind::Failed
           | ServiceEventKind::Stopped
           | ServiceEventKind::Exited { code: _ } => {
-            for (dependent, _) in dependents {
-              if let Ok(service) = ctx
-                .registry
-                .as_one_mut::<Service>("units", dependent.as_str())
-              {
-                self.stop_service(service, StopMode::Graceful, log, dispatch, None, None, None);
-              }
-            }
+            ctx
+              .registry
+              .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
+                (StateMachine::KEY.into(), VariableHeap::KEY.into()),
+                |registry, (sm, _)| {
+                  for (dependent, _) in dependents {
+                    if let Ok(service) = registry.as_one_mut::<Service>("units", dependent.as_str())
+                    {
+                      self.stop_service(
+                        service,
+                        StopMode::Graceful,
+                        log,
+                        dispatch,
+                        Some(sm),
+                        None,
+                        None,
+                        None,
+                      );
+                    }
+                  }
+                  Ok(())
+                },
+              )?;
           }
           ServiceEventKind::Started => {
+            let sockets_map = get_all_sockets(&ctx.registry);
             ctx
               .registry
               .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
@@ -2225,7 +2278,7 @@ impl Runtime for ServiceRuntime {
                       self.start_service(
                         service,
                         log,
-                        None,
+                        &sockets_map,
                         Some(sm),
                         dispatch,
                         Some(vh),
@@ -2246,6 +2299,7 @@ impl Runtime for ServiceRuntime {
 
         if let Some(service_key) = self.pid_map.remove(&pid) {
           self.stopping_map.remove(&pid);
+          let sockets_map = get_all_sockets(&ctx.registry);
 
           ctx
             .registry
@@ -2255,15 +2309,21 @@ impl Runtime for ServiceRuntime {
                 if let Some(instances) = registry.instances.get_mut(&service_key) {
                   for instance in instances.iter_mut() {
                     if let Some(service) = instance.downcast_mut::<Service>() {
-                      if let Some(exit_action) =
-                        self.handle_child_exit(service, pid as i32, code, log, dispatch)
-                      {
+                      if let Some(exit_action) = self.handle_child_exit(
+                        service,
+                        pid as i32,
+                        code,
+                        log,
+                        dispatch,
+                        Some(sm),
+                        service_key.clone(),
+                      ) {
                         match exit_action {
                           ServiceExitAction::Restart => {
                             self.start_service(
                               service,
                               log,
-                              None,
+                              &sockets_map,
                               Some(sm),
                               dispatch,
                               Some(vh),

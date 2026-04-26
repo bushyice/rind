@@ -17,7 +17,7 @@ pub fn print_units(units: &[UnitSerialized]) {
   for u in units {
     println!(
       "{:<20} {:<10} {:<15} {:<10} {:<10}",
-      u.name.bold().white(),
+      u.name.to_string().bold().white(),
       u.services.to_string().green(),
       u.active_services.to_string().green(),
       u.mounts.to_string().yellow(),

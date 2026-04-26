@@ -34,6 +34,7 @@ pub struct Resources {
   unwatched_fds: HashSet<i32>,
   watched_fds: HashSet<i32>,
   removed_fds: HashSet<i32>,
+  paused_fds: HashSet<i32>,
 }
 
 pub struct ResourceAction {
@@ -64,7 +65,9 @@ impl From<(&str, &str)> for ResourceAction {
 
 impl Resources {
   pub fn register_resource(&mut self, res: i32) {
-    self.unwatched_fds.insert(res);
+    if !self.watched_fds.contains(&res) {
+      self.unwatched_fds.insert(res);
+    }
   }
 
   pub fn watch(&mut self, res: i32) {
@@ -92,7 +95,23 @@ impl Resources {
   pub fn pause(&mut self, res: i32) {
     if self.watched_fds.remove(&res) {
       self.removed_fds.insert(res);
+      self.paused_fds.insert(res);
     }
+  }
+
+  pub fn resume(&mut self, res: i32) {
+    if self.paused_fds.remove(&res) {
+      self.removed_fds.remove(&res);
+      self.register_resource(res);
+    }
+  }
+
+  pub fn is_paused(&self, res: i32) -> bool {
+    self.paused_fds.contains(&res)
+  }
+
+  pub fn clear_removed(&mut self, res: i32) {
+    self.removed_fds.remove(&res);
   }
 
   pub fn own(&mut self, res: i32, fd: impl Into<FdLoc>) {

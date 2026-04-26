@@ -1,5 +1,6 @@
 use crate::flow::{
-  FlowInstance, FlowItem, FlowMatchOperation, FlowPayload, FlowPayloadType, FlowType,
+  FlowInstance, FlowItem, FlowMatchOperation, FlowPayload, FlowPayloadType, FlowType, StateMachine,
+  Trigger,
 };
 use rind_core::prelude::*;
 
@@ -65,6 +66,124 @@ pub fn match_operation(matcher: &FlowMatchOperation, payload: &FlowPayload) -> b
         subset_match(filter, &payload.to_json())
       } else {
         false
+      }
+    }
+  }
+}
+
+pub fn trigger_events(
+  triggers: Vec<Trigger>,
+  sm: Option<&StateMachine>,
+  dispatch: &RuntimeDispatcher,
+) {
+  for trigger in triggers {
+    let mut resolved_triggers = Vec::new();
+
+    let resolve_path = |branch: &crate::flow::FlowInstance, path: &str| -> String {
+      if let crate::flow::FlowPayload::Json(j) = &branch.payload {
+        let mut cur = j.into_json();
+        for key in path.split('/') {
+          if let Some(val) = cur.get(key) {
+            cur = val.clone();
+          }
+        }
+        cur
+          .as_str()
+          .map(|st| st.to_string())
+          .unwrap_or_else(|| cur.to_string())
+      } else {
+        branch.payload.to_string_payload()
+      }
+    };
+
+    if let Some(sm) = sm {
+      match &trigger.payload {
+        Some(serde_json::Value::String(s)) => {
+          if let Some((state_name, path)) = s.rsplit_once('@') {
+            if let Some(branches) = sm.states.get(state_name) {
+              for branch in branches {
+                let mut resolved_trigger = trigger.clone();
+                let resolved = resolve_path(branch, path);
+                resolved_trigger.payload = Some(serde_json::Value::String(resolved));
+                resolved_triggers.push(resolved_trigger);
+              }
+            }
+          } else {
+            resolved_triggers.push(trigger.clone());
+          }
+        }
+        Some(serde_json::Value::Object(map)) => {
+          let mut primary_state = None;
+          for v in map.values() {
+            if let Some(s) = v.as_str() {
+              if let Some(spec) = s.strip_prefix("state:") {
+                if let Some((state_name, _)) = spec.rsplit_once('@') {
+                  primary_state = Some(state_name.to_string());
+                  break;
+                }
+              }
+            }
+          }
+
+          if let Some(state_name) = primary_state {
+            if let Some(branches) = sm.states.get(state_name.as_str()) {
+              for branch in branches {
+                let mut resolved_trigger = trigger.clone();
+                let mut new_map = map.clone();
+                for (_k, v) in new_map.iter_mut() {
+                  if let Some(s) = v.as_str() {
+                    if let Some(spec) = s.strip_prefix("state:") {
+                      if let Some((s_name, path)) = spec.rsplit_once('@') {
+                        let branch_to_use = if s_name == state_name {
+                          Some(branch)
+                        } else {
+                          sm.states.get(s_name).and_then(|b| b.first())
+                        };
+                        if let Some(b) = branch_to_use {
+                          *v = serde_json::Value::String(resolve_path(b, path));
+                        }
+                      }
+                    }
+                  }
+                }
+                resolved_trigger.payload = Some(serde_json::Value::Object(new_map));
+                resolved_triggers.push(resolved_trigger);
+              }
+            }
+          } else {
+            resolved_triggers.push(trigger.clone());
+          }
+        }
+        _ => {
+          resolved_triggers.push(trigger.clone());
+        }
+      }
+    }
+
+    for resolved_trigger in resolved_triggers {
+      if let Some(script) = &resolved_trigger.script {
+        let _ = std::process::Command::new("sh")
+          .arg("-c")
+          .arg(script)
+          .spawn();
+      } else if let Some(exec) = &resolved_trigger.exec {
+        let mut cmd = std::process::Command::new(exec);
+        if let Some(args) = &resolved_trigger.args {
+          cmd.args(args);
+        }
+        let _ = cmd.spawn();
+      } else if let Some(state) = &resolved_trigger.state {
+        let mut p = rpayload!({ "name": state.clone() });
+        if let Some(payload) = &resolved_trigger.payload {
+          p = p.insert("payload", payload.clone());
+        }
+        let _ = dispatch.dispatch("flow", "set_state", p);
+      } else if let Some(signal) = &resolved_trigger.signal {
+        let mut p = rpayload!({ "name": signal.clone() });
+        if let Some(payload) = &resolved_trigger.payload {
+          p = p.insert("payload", payload.clone());
+        }
+        let _ = dispatch.dispatch("flow", "emit_signal", p);
       }
     }
   }

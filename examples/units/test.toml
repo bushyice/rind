@@ -24,3 +24,24 @@ user-source = { state = "rind@user_session", username-field = "username" }
 [[variable]]
 name = "someservice"
 default = { exec = "/bin/tcp", args = ["makano-test"], env = { PORT = "4533" } }
+
+[[signal]]
+name = "thething"
+payload = "string"
+
+[[service]]
+name = "ipcs"
+run.exec = "/bin/ipc_so"
+run.args = ["makano-test"]
+start-on = [{ signal = "test@thething" }]
+
+[[socket]]
+name = "ipcs_s"
+type = "uds"
+listen = "/var/sock/some.sock"
+owner = "test@ipcs"
+start-on = [{ state = "rind@net-configured" }]
+trigger = [{
+  signal = "test@thething",
+  payload = "yeaaaaaaaah"
+}]
