@@ -7,7 +7,7 @@ pub struct ListPayload {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
-pub struct ServicePayload {
+pub struct SSPayload {
   pub name: String,
   #[serde(default)]
   pub force: bool,

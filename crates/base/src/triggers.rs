@@ -133,7 +133,7 @@ pub fn trigger_events(
                 for (_k, v) in new_map.iter_mut() {
                   if let Some(s) = v.as_str() {
                     if let Some(spec) = s.strip_prefix("state:") {
-                      if let Some((s_name, path)) = spec.rsplit_once('@') {
+                      if let Some((s_name, path)) = spec.split_once('/') {
                         let branch_to_use = if s_name == state_name {
                           Some(branch)
                         } else {

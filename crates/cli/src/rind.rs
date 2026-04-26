@@ -14,11 +14,11 @@ use owo_colors::OwoColorize;
 use rind_core::logging::{LogEntry, LogLevel};
 use rind_ipc::{
   Message, MessageType,
-  payloads::{ListPayload, LogoutPayload, Run0AuthPayload, ServicePayload},
+  payloads::{ListPayload, LogoutPayload, Run0AuthPayload, SSPayload},
   send::send_message,
   ser::{
-    NetworkStatusSerialized, PortStateSerialized, ServiceSerialized, StateSerialized,
-    UnitItemsSerialized, UnitSerialized,
+    NetworkStatusSerialized, PortStateSerialized, ServiceSerialized, SocketSerialized,
+    StateSerialized, UnitItemsSerialized, UnitSerialized,
   },
 };
 
@@ -88,6 +88,9 @@ enum Commands {
 
     #[arg(short = 's', long)]
     service: bool,
+
+    #[arg(short = 'x', long)]
+    socket: bool,
 
     #[arg(short = 'm', long)]
     mount: bool,
@@ -447,6 +450,7 @@ fn main() {
       service,
       mount,
       state,
+      socket,
       network,
       port,
       r#type,
@@ -465,6 +469,8 @@ fn main() {
             "mount"
           } else if state {
             "state"
+          } else if socket {
+            "socket"
           } else if port && network {
             "netport"
           } else if network {
@@ -497,6 +503,12 @@ fn main() {
         print::print_state(
           &result
             .parse_payload::<StateSerialized>()
+            .expect("Failed to parse"),
+        );
+      } else if socket {
+        print::print_socket(
+          &result
+            .parse_payload::<SocketSerialized>()
             .expect("Failed to parse"),
         );
       } else if port && network {
@@ -540,14 +552,14 @@ fn main() {
       r#type,
       persist,
     } => {
-      let action = if r#type == "socket" {
+      let action = if r#type == "socket" || r#type == "soc" {
         "start_socket"
       } else {
         "start_service"
       };
       handle_send!(
         action,
-        &ServicePayload {
+        &SSPayload {
           force: false,
           name,
           persist
@@ -560,14 +572,14 @@ fn main() {
       force,
       persist,
     } => {
-      let action = if r#type == "socket" {
+      let action = if r#type == "socket" || r#type == "soc" {
         "stop_socket"
       } else {
         "stop_service"
       };
       handle_send!(
         action,
-        &ServicePayload {
+        &SSPayload {
           force: force,
           name,
           persist

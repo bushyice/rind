@@ -1,4 +1,4 @@
-use rind_ipc::payloads::ServicePayload;
+use rind_ipc::payloads::SSPayload;
 use std::collections::HashMap;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
@@ -450,6 +450,16 @@ impl Runtime for SocketRuntime {
             |registry, (sr, _)| self.stop_socket(name, ctx.resources, registry, sr),
           )?;
       }
+      "start" => {
+        let name = payload.get::<Ustr>("name")?;
+
+        ctx
+          .registry
+          .singleton_handle::<(&mut SocketRegistry, &mut VariableHeap), _>(
+            (SocketRegistry::KEY.into(), VariableHeap::KEY.into()),
+            |registry, (sr, _)| self.start_socket(name, ctx.resources, registry, sr),
+          )?;
+      }
       "resume_fd" => {
         let fd = payload.get::<i32>("fd")? as RawFd;
         ctx.resources.resume(fd);
@@ -510,6 +520,64 @@ impl Runtime for SocketRuntime {
   }
 }
 
+fn ipc_owner_has_access(_owner: &Ustr, _user: &UserRecord) -> bool {
+  true
+}
+
+pub fn handle_ipc_start_socket(
+  msg: Message,
+  ctx: &mut RuntimeContext<'_>,
+  dispatch: &RuntimeDispatcher,
+  _log: &LogHandle,
+) -> Result<Message, CoreError> {
+  let pm = ctx
+    .registry
+    .singleton::<PermissionStore>(PermissionStore::KEY)
+    .cloned()
+    .unwrap_or_default();
+
+  let payload = msg
+    .parse_payload::<SSPayload>()
+    .map_err(CoreError::Custom)?;
+
+  let Some(uid) = msg.from_uid else {
+    return Err(CoreError::PermissionDenied);
+  };
+
+  let sock = ctx.registry.metadata.find::<Socket>("units", &payload.name);
+  let caller = pm.users.lookup_by_uid(uid);
+  let can_manage = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
+    true
+  } else if let (Some(user), Some(sock)) = (caller, sock.as_ref()) {
+    sock
+      .owner
+      .as_ref()
+      .map_or(false, |owner| ipc_owner_has_access(owner, user))
+  } else {
+    false
+  };
+
+  if !can_manage {
+    return Err(CoreError::PermissionDenied);
+  }
+
+  let _ = dispatch.dispatch(
+    "sockets",
+    "start",
+    rpayload!({ "name": payload.name.to_ustr() }),
+  );
+
+  if payload.persist {
+    let _ = dispatch.dispatch(
+      "flow",
+      "set_state",
+      rpayload!({ "name": "rind@active", "payload": payload.name.clone() }),
+    );
+  }
+
+  Ok(Message::ok(format!("started socket {}", payload.name)))
+}
+
 pub fn handle_ipc_stop_socket(
   msg: Message,
   ctx: &mut RuntimeContext<'_>,
@@ -523,7 +591,7 @@ pub fn handle_ipc_stop_socket(
     .unwrap_or_default();
 
   let payload = msg
-    .parse_payload::<ServicePayload>()
+    .parse_payload::<SSPayload>()
     .map_err(CoreError::Custom)?;
 
   let Some(uid) = msg.from_uid else {
@@ -534,11 +602,11 @@ pub fn handle_ipc_stop_socket(
   let caller = pm.users.lookup_by_uid(uid);
   let can_manage = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
     true
-  } else if let (Some(_caller), Some(sock)) = (caller, sock.as_ref()) {
-    match &sock.owner {
-      Some(_) => true, // If it has an owner, maybe user should be able to stop it?
-      None => false,
-    }
+  } else if let (Some(user), Some(sock)) = (caller, sock.as_ref()) {
+    sock
+      .owner
+      .as_ref()
+      .map_or(false, |owner| ipc_owner_has_access(owner, user))
   } else {
     false
   };
@@ -552,6 +620,14 @@ pub fn handle_ipc_stop_socket(
     "stop",
     rpayload!({ "name": payload.name.to_ustr() }),
   );
+
+  if payload.persist {
+    let _ = dispatch.dispatch(
+      "flow",
+      "remove_state",
+      rpayload!({ "name": "rind@active", "payload": payload.name.clone() }),
+    );
+  }
 
   Ok(Message::ok(format!("stopped socket {}", payload.name)))
 }

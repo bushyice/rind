@@ -16,11 +16,11 @@ kanban-plugin: board
 - [ ] **Sockets, FDs and timers**: 
 	- [x] Socket-trigger-services
 	- [x] FD resource manager
-	- [ ] Service timers
-	- [ ] Socket transcendence
-	- [ ] Socket branching
-	- [ ] Socket piping
-	- [ ] Socket state triggers
+	- [x] Service timers
+	- [x] Socket transcendence
+	- [x] Socket branching
+	- [x] Socket piping
+	- [x] Socket state triggers
 - [ ] **Piping**: Piping and payloads into other states/signals.
 	- [x] Simple circumstantial piping
 	- [ ] General piping

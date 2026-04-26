@@ -1,13 +1,18 @@
 use rind_core::types::Ustr;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct UnitSerialized {
   pub name: Ustr,
   pub services: usize,
   pub active_services: usize,
   pub mounts: usize,
   pub mounted: usize,
+  pub sockets: usize,
+  pub active_sockets: usize,
+  pub states: usize,
+  pub active_states: usize,
+  pub signals: usize,
 }
 
 impl UnitSerialized {
@@ -18,10 +23,7 @@ impl UnitSerialized {
   pub fn from_string(str: String) -> Self {
     serde_json::from_str(&str).unwrap_or(Self {
       name: String::new().into(),
-      services: 0,
-      active_services: 0,
-      mounts: 0,
-      mounted: 0,
+      ..Default::default()
     })
   }
 
@@ -55,6 +57,21 @@ impl ServiceSerialized {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct SocketSerialized {
+  pub name: Ustr,
+  pub listen: String,
+  pub r#type: Ustr,
+  pub triggers: usize,
+  pub active: bool,
+}
+
+impl SocketSerialized {
+  pub fn stringify(&self) -> String {
+    serde_json::to_string(self).unwrap_or_default()
+  }
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct StateSerialized {
   pub name: Ustr,
   pub instances: Vec<serde_json::Value>,
@@ -68,6 +85,11 @@ impl StateSerialized {
 }
 
 #[derive(Serialize, Deserialize)]
+pub struct SignalSerialized {
+  pub name: Ustr,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct MountSerialized {
   pub source: Option<Ustr>,
   pub target: Ustr,
@@ -75,10 +97,13 @@ pub struct MountSerialized {
   pub mounted: bool,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default)]
 pub struct UnitItemsSerialized {
   pub mounts: Vec<MountSerialized>,
   pub services: Vec<ServiceSerialized>,
+  pub sockets: Vec<SocketSerialized>,
+  pub states: Vec<StateSerialized>,
+  pub signals: Vec<SignalSerialized>,
 }
 
 impl UnitItemsSerialized {
@@ -130,6 +155,7 @@ mod tests {
       active_services: 1,
       mounts: 1,
       mounted: 1,
+      ..Default::default()
     };
     let encoded = item.stringify();
     let decoded = UnitSerialized::from_string(encoded);
@@ -163,6 +189,7 @@ mod tests {
     let unit_items = UnitItemsSerialized {
       mounts: vec![],
       services,
+      ..Default::default()
     };
     assert!(!unit_items.stringify().is_empty());
   }

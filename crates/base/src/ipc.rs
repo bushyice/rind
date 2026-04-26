@@ -1,7 +1,7 @@
 use libc::{SO_PEERCRED, SOL_SOCKET, getsockopt, ucred};
 use rind_ipc::payloads::ListPayload;
 use rind_ipc::recv::IpcSourcemap;
-use rind_ipc::ser::{NetworkStatusSerialized, StateSerialized};
+use rind_ipc::ser::{NetworkStatusSerialized, SignalSerialized, SocketSerialized, StateSerialized};
 use rind_ipc::{Message, MessageType};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -13,12 +13,12 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crate::flow::{State, StateMachine};
+use crate::flow::{Signal, State, StateMachine};
 use crate::mount::{Mount, is_mounted};
 use crate::networking::{get_ports, handle_ipc_network};
 use crate::permissions::{PERM_LOGIN, PERM_NETWORK};
 use crate::services::{Service, handle_ipc_start, handle_ipc_stop};
-use crate::sockets::handle_ipc_stop_socket;
+use crate::sockets::{Socket, handle_ipc_start_socket, handle_ipc_stop_socket};
 use crate::user::{handle_ipc_login, handle_ipc_logout, handle_ipc_run0};
 use crate::variables::VariableHeap;
 use rind_core::prelude::*;
@@ -86,6 +86,33 @@ fn build_ipc_list_response(
     } else {
       Vec::new()
     };
+    let sockets = if let Some(sockets) = ctx
+      .registry
+      .metadata
+      .group_items::<Socket>("units", Ustr::from(payload.name.as_str()))
+    {
+      sockets
+    } else {
+      Vec::new()
+    };
+    let states = if let Some(states) = ctx
+      .registry
+      .metadata
+      .group_items::<State>("units", Ustr::from(payload.name.as_str()))
+    {
+      states
+    } else {
+      Vec::new()
+    };
+    let signals = if let Some(signals) = ctx
+      .registry
+      .metadata
+      .group_items::<Signal>("units", Ustr::from(payload.name.as_str()))
+    {
+      signals
+    } else {
+      Vec::new()
+    };
 
     let ser_instances: HashMap<Ustr, (String, Vec<u32>)> = services
       .iter()
@@ -131,6 +158,38 @@ fn build_ipc_list_response(
             restart: svc.restart.as_ref().map_or(false, |_| true),
           })
           .collect(),
+        sockets: sockets
+          .iter()
+          .map(|x| SocketSerialized {
+            name: x.name.clone(),
+            active: ctx
+              .registry
+              .as_one::<Socket>("units", Ustr::from(format!("{}@{}", payload.name, x.name)))
+              .is_ok(),
+            listen: x.listen.clone(),
+            triggers: x.trigger.as_ref().map_or(0, |x| x.len()),
+            r#type: format!("{:?}", x.r#type).to_ustr(),
+          })
+          .collect(),
+        states: states
+          .iter()
+          .map(|st| StateSerialized {
+            name: st.name.clone(),
+            instances: sm
+              .states
+              .get(&Ustr::from(format!("{}@{}", payload.name, st.name)))
+              .map_or(Default::default(), |x| {
+                x.iter().map(|x| x.payload.to_json()).collect()
+              }),
+            keys: st.branch.clone().unwrap_or_default(),
+          })
+          .collect(),
+        signals: signals
+          .iter()
+          .map(|st| SignalSerialized {
+            name: st.name.clone(),
+          })
+          .collect(),
       }
       .stringify(),
     )
@@ -171,14 +230,36 @@ fn build_ipc_list_response(
       }
       .stringify(),
     )
-  } else if payload.unit_type == "state" && !payload.name.is_empty() {
-    let name_ustr = Ustr::from(payload.name.as_str());
-    let Some(instances) = sm.states.get(&name_ustr) else {
+  } else if payload.unit_type == "socket" {
+    let Some(sock_meta) = ctx
+      .registry
+      .metadata
+      .find::<Socket>("units", payload.name.clone())
+    else {
       return Err(CoreError::MetadataNotFound(format!(
-        "State not found: {}",
+        "Socket not found: {}",
         payload.name
       )));
     };
+
+    let active = ctx
+      .registry
+      .as_one::<Socket>("units", Ustr::from(payload.name.as_str()))
+      .map_or(false, |x| x.active);
+
+    Message::from_type(MessageType::Ok).with(
+      SocketSerialized {
+        name: sock_meta.name.clone(),
+        active,
+        listen: sock_meta.listen.clone(),
+        triggers: sock_meta.trigger.as_ref().map_or(0, |x| x.len()),
+        r#type: format!("{:?}", sock_meta.r#type).to_ustr(),
+      }
+      .stringify(),
+    )
+  } else if payload.unit_type == "state" && !payload.name.is_empty() {
+    let name_ustr = Ustr::from(payload.name.as_str());
+    let instances = sm.states.get(&name_ustr);
     let Some(def) = ctx
       .registry
       .metadata
@@ -194,7 +275,9 @@ fn build_ipc_list_response(
     Message::from_type(MessageType::Ok).with(
       StateSerialized {
         name: payload.name,
-        instances: instances.iter().map(|x| x.payload.to_json()).collect(),
+        instances: instances.map_or(Default::default(), |x| {
+          x.iter().map(|x| x.payload.to_json()).collect()
+        }),
         keys: if let Some(branches) = branches {
           branches.clone()
         } else {
@@ -299,12 +382,40 @@ fn build_ipc_list_response(
         } else {
           Vec::new()
         };
+        let sockets = if let Some(sockets) = ctx
+          .registry
+          .metadata
+          .group_items::<Socket>("units", group.clone())
+        {
+          sockets
+        } else {
+          Vec::new()
+        };
+        let states = if let Some(states) = ctx
+          .registry
+          .metadata
+          .group_items::<State>("units", group.clone())
+        {
+          states
+        } else {
+          Vec::new()
+        };
+
+        let signals = if let Some(signals) = ctx
+          .registry
+          .metadata
+          .group_items::<Signal>("units", group.clone())
+        {
+          signals
+        } else {
+          Vec::new()
+        };
 
         let mounted = mounts
           .iter()
           .filter(|mnt| is_mounted(&mnt.target).unwrap_or(false))
           .count();
-        let active = services
+        let active_services = services
           .iter()
           .filter(|s| {
             ctx
@@ -314,14 +425,38 @@ fn build_ipc_list_response(
               .map_or(false, |x| x.iter().any(|x| x.instances.is_active()))
           })
           .count();
+        let active_sockets = sockets
+          .iter()
+          .filter(|s| {
+            ctx
+              .registry
+              .instances::<Socket>("units", Ustr::from(format!("{group}@{}", s.name)))
+              .ok()
+              .map_or(false, |x| x.iter().any(|x| x.active))
+          })
+          .count();
+        let active_states = states
+          .iter()
+          .filter(|s| {
+            sm.states
+              .get(&Ustr::from(format!("{group}@{}", s.name)))
+              .is_some()
+          })
+          .count();
+
         units_map.insert(
           group.clone(),
           UnitSerialized {
-            active_services: active,
+            active_services,
+            active_sockets,
+            active_states,
             mounted: mounted,
             mounts: mounts.len(),
             name: group.clone(),
             services: services.len(),
+            sockets: sockets.len(),
+            states: states.len(),
+            signals: signals.len(),
           },
         );
       }
@@ -453,6 +588,7 @@ impl Runtime for IpcRuntime {
         ipcsrc.register("run0", handle_ipc_run0, PermissionExpr::All);
         ipcsrc.register("start_service", handle_ipc_start, PermissionExpr::All);
         ipcsrc.register("stop_service", handle_ipc_stop, PermissionExpr::All);
+        ipcsrc.register("start_socket", handle_ipc_start_socket, PermissionExpr::All);
         ipcsrc.register("stop_socket", handle_ipc_stop_socket, PermissionExpr::All);
         ipcsrc.register("list", handle_ipc_list, PermissionExpr::All);
         ipcsrc.register("network", handle_ipc_network, PERM_NETWORK);

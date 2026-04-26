@@ -1,7 +1,7 @@
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use rind_ipc::Message;
-use rind_ipc::payloads::ServicePayload;
+use rind_ipc::payloads::SSPayload;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
@@ -1483,7 +1483,7 @@ pub fn handle_ipc_start(
     .unwrap_or_default();
 
   let payload = msg
-    .parse_payload::<ServicePayload>()
+    .parse_payload::<SSPayload>()
     .map_err(CoreError::Custom)?;
 
   let Some(uid) = msg.from_uid else {
@@ -1547,7 +1547,7 @@ pub fn handle_ipc_stop(
     .unwrap_or_default();
 
   let payload = msg
-    .parse_payload::<ServicePayload>()
+    .parse_payload::<SSPayload>()
     .map_err(CoreError::Custom)?;
 
   let Some(uid) = msg.from_uid else {

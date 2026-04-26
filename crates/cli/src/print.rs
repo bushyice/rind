@@ -1,27 +1,27 @@
 use owo_colors::OwoColorize;
 use rind_ipc::ser::{
-  NetworkStatusSerialized, PortStateSerialized, ServiceSerialized, StateSerialized,
-  UnitItemsSerialized, UnitSerialized,
+  NetworkStatusSerialized, PortStateSerialized, ServiceSerialized, SocketSerialized,
+  StateSerialized, UnitItemsSerialized, UnitSerialized,
 };
 
 pub fn print_units(units: &[UnitSerialized]) {
   println!(
-    "{:<20} {:<10} {:<15} {:<10} {:<10}",
+    "{:<20} {:<10} {:<10} {:<10} {:<15}",
     "Unit".bold().on_cyan().white(),
     "Services".bold().on_green().white(),
-    "Active".bold().on_green().white(),
+    "Sockets".bold().on_blue().white(),
     "Mounts".bold().on_yellow().white(),
-    "Mounted".bold().on_yellow().white()
+    "Flow".bold().on_purple().white(),
   );
 
   for u in units {
     println!(
-      "{:<20} {:<10} {:<15} {:<10} {:<10}",
+      "{:<20} {:<10} {:<10} {:<10} {:<15}",
       u.name.to_string().bold().white(),
-      u.services.to_string().green(),
-      u.active_services.to_string().green(),
-      u.mounts.to_string().yellow(),
-      u.mounted.to_string().yellow()
+      format!("{}/{}", u.active_services, u.services).bright_green(),
+      format!("{}/{}", u.active_sockets, u.sockets).bright_blue(),
+      format!("{}/{}", u.mounted, u.mounts).bright_yellow(),
+      format!("{}/{} | {}", u.active_states, u.states, u.signals).bright_purple(),
     );
   }
 }
@@ -79,7 +79,7 @@ pub fn print_unit(unit_name: &String, unit: &UnitItemsSerialized) {
     for s in &unit.services {
       println!(
         "  {:<20} {:<10} {:<10} {:<5} {:<}",
-        s.name.bold().white(),
+        s.name.to_string().bold().white(),
         s.last_state.green(),
         s.after
           .clone()
@@ -93,14 +93,55 @@ pub fn print_unit(unit_name: &String, unit: &UnitItemsSerialized) {
     }
   }
 
+  if !unit.sockets.is_empty() {
+    println!("{}", " Services ".on_bright_blue().bold().white());
+    for s in &unit.sockets {
+      println!(
+        "  {:<20} {:<10} {:<5} {:<5} {:<}",
+        s.name.to_string().bold().white(),
+        s.active.green(),
+        s.triggers.yellow(),
+        s.r#type.to_string().blue(),
+        s.listen.to_string().yellow(),
+      );
+    }
+  }
+
+  if !unit.states.is_empty() {
+    println!("{}", " States ".on_bright_green().bold().white());
+    for s in &unit.states {
+      println!(
+        "  {:<20} {:<5} {:<}",
+        s.name.to_string().bold().white(),
+        s.instances.len().blue(),
+        s.keys.join(" "),
+      );
+    }
+  }
+
+  if !unit.signals.is_empty() {
+    println!("{}", " Signals ".on_bright_green().bold().white());
+    for s in &unit.signals {
+      println!("  {:<}", s.name.to_string().bold().white());
+    }
+  }
+
   if !unit.mounts.is_empty() {
     println!("{}", " Mounts ".on_yellow().bold().white());
     for m in &unit.mounts {
       println!(
         "  {:<20} {:<20} {:<10} {:<}",
-        m.target.bold().white(),
-        m.source.clone().unwrap_or("-".into()).yellow(),
-        m.fstype.clone().unwrap_or("-".into()).cyan(),
+        m.target.to_string().bold().white(),
+        m.source
+          .clone()
+          .map(|x| x.to_string())
+          .unwrap_or("-".into())
+          .yellow(),
+        m.fstype
+          .clone()
+          .map(|x| x.to_string())
+          .unwrap_or("-".into())
+          .cyan(),
         if m.mounted {
           "✓".green().to_string()
         } else {
@@ -124,7 +165,7 @@ pub fn print_state(st: &StateSerialized) {
     return;
   };
 
-  println!("{}", st.name.bold().white());
+  println!("{}", st.name.to_string().bold().white());
 
   let mut groups: BTreeMap<String, Vec<&serde_json::Map<String, serde_json::Value>>> =
     BTreeMap::new();
@@ -238,4 +279,24 @@ pub fn print_service(service: &ServiceSerialized) {
   if let Some(after) = &service.after {
     println!("   {}: {}", "After".bold(), after.join(", ").blue());
   }
+}
+
+pub fn print_socket(socket: &SocketSerialized) {
+  let (dot, state) = if socket.active {
+    (
+      "●".green().bold().to_string(),
+      "Active".green().bold().to_string(),
+    )
+  } else {
+    ("●".white().to_string(), "Inactive".white().to_string())
+  };
+
+  println!("{} {}", dot, socket.name.bold().white());
+  println!(
+    "   {}: {} (addr {}:{})",
+    "State".bold(),
+    state,
+    socket.r#type.yellow(),
+    socket.listen.green()
+  );
 }
