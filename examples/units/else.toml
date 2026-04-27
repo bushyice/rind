@@ -12,6 +12,7 @@ name = "four"
 start-on = ["my_signal"]
 run.exec = "/usr/bin/example-inactive"
 run.args = ["arg1", "arg2"]
+on-start = [{ timer = "else@timeout_four" }]
 singleton = true
 
 [[state]]
@@ -42,5 +43,4 @@ payload = "json"
 [[timer]]
 name = "timeout_four"
 duration = "5s"
-after = ["else@four"]
 finish = [{ service = "else@four", stop = true }]

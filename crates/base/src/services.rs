@@ -969,6 +969,7 @@ impl ServiceRuntime {
     user: Option<Ustr>,
     index: Option<usize>,
     service_key: Option<&Ustr>,
+    notifier: Option<Notifier>,
   ) {
     if let Some(index) = index {
       if let Some(inst) = service.instances.get_mut(index) {
@@ -1019,6 +1020,20 @@ impl ServiceRuntime {
         "service stopping",
         fields,
       );
+
+      let full_name = service_key
+        .cloned()
+        .unwrap_or(service.metadata.name.clone())
+        .strip_prefix("units@")
+        .map(|n| n.to_ustr())
+        .unwrap_or(service.metadata.name.clone());
+
+      let _ = dispatch.dispatch(
+        "sockets",
+        "clear_for",
+        RuntimePayload::default().insert("name", full_name.clone()),
+      );
+
       let _ = dispatch.dispatch(
         "services",
         "reconcile_stacks",
@@ -1038,6 +1053,11 @@ impl ServiceRuntime {
           "action": ServiceEventKind::Stopped
         }),
       );
+
+      if let Some(ref notifier) = notifier {
+        let _ = notifier.notify();
+      }
+
       // if let Some(service_key) = service_key {
       //   let full_name = if service_key.starts_with("units@") {
       //     service_key.strip_prefix("units@").unwrap_or("").to_ustr()
@@ -1108,6 +1128,12 @@ impl ServiceRuntime {
       });
 
       let full_name = service_key.strip_prefix("units@")?.to_ustr();
+      let _ = dispatch.dispatch(
+        "sockets",
+        "clear_for",
+        RuntimePayload::default().insert("name", full_name.clone()),
+      );
+
       let _ = dispatch.dispatch(
         "sockets",
         "resume_fds",
@@ -1722,6 +1748,7 @@ impl Runtime for ServiceRuntime {
                                 None,
                                 None,
                                 Some(&service_key),
+                                ctx.notifier.clone(),
                               );
                             }
                           }
@@ -1773,6 +1800,7 @@ impl Runtime for ServiceRuntime {
                             None,
                             None,
                             Some(&service_key),
+                            ctx.notifier.clone(),
                           );
                         }
                       }
@@ -2011,6 +2039,7 @@ impl Runtime for ServiceRuntime {
         } else {
           StopMode::Graceful
         };
+        let notifier = ctx.notifier.clone();
 
         ctx
           .registry
@@ -2031,6 +2060,7 @@ impl Runtime for ServiceRuntime {
                 only_user,
                 index,
                 Some(&name),
+                notifier,
               );
               Ok(())
             },
@@ -2043,6 +2073,7 @@ impl Runtime for ServiceRuntime {
         } else {
           StopMode::Graceful
         };
+        let notifier = ctx.notifier.clone();
 
         ctx
           .registry
@@ -2070,6 +2101,7 @@ impl Runtime for ServiceRuntime {
                         None,
                         None,
                         Some(&key),
+                        notifier.clone(),
                       );
                     }
                   }
@@ -2178,6 +2210,7 @@ impl Runtime for ServiceRuntime {
       "reconcile_stacks" => {
         let service = normalize_uaddr(payload.get::<Ustr>("service")?, "units@");
         let action = payload.get::<ServiceEventKind>("action")?;
+        let notifier = ctx.notifier.clone();
 
         let metadata = ctx
           .registry
@@ -2229,6 +2262,7 @@ impl Runtime for ServiceRuntime {
                         None,
                         None,
                         Some(&dependent),
+                        notifier.clone(),
                       );
                     }
                   }

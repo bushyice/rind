@@ -263,6 +263,35 @@ impl SocketRuntime {
 
     Ok(())
   }
+
+  fn clear_socket(&mut self, socket: &Socket) {
+    let fd = socket.fd;
+
+    match socket.metadata.r#type {
+      SocketType::Tcp | SocketType::Uds => {
+        use nix::sys::socket::accept;
+        use nix::unistd::close;
+        loop {
+          match accept(fd) {
+            Ok(client_fd) => {
+              let _ = close(client_fd);
+            }
+            Err(_) => break,
+          }
+        }
+      }
+      SocketType::Udp => {
+        use nix::sys::socket::{MsgFlags, recv};
+        let mut buf = [0u8; 2048];
+        loop {
+          match recv(fd, &mut buf, MsgFlags::MSG_DONTWAIT) {
+            Ok(_) => {}
+            Err(_) => break,
+          }
+        }
+      }
+    }
+  }
 }
 
 #[derive(Default)]
@@ -360,10 +389,6 @@ impl Runtime for SocketRuntime {
               };
 
               for socket_name in target_keys {
-                let Some((_unit, _)) = socket_name.split_once('@') else {
-                  continue;
-                };
-
                 let Some(meta) = registry
                   .metadata
                   .find::<Socket>("units", socket_name.as_str())
@@ -399,9 +424,9 @@ impl Runtime for SocketRuntime {
                   .unwrap_or(false);
 
                 if should_start && !is_active {
-                  let _ = self.start_socket(meta.name.clone(), ctx.resources, registry, sr);
+                  let _ = self.start_socket(socket_name.clone(), ctx.resources, registry, sr);
                 } else if should_stop && is_active {
-                  let _ = self.stop_socket(meta.name.clone(), ctx.resources, registry, sr);
+                  let _ = self.stop_socket(socket_name.clone(), ctx.resources, registry, sr);
                 }
               }
               Ok(())
@@ -478,6 +503,36 @@ impl Runtime for SocketRuntime {
             n.notify()?;
           }
         }
+      }
+      "clear_for" => {
+        let name = payload.get::<Ustr>("name")?;
+
+        let Some(sockets) = ctx
+          .registry
+          .singleton::<SocketRegistry>(SocketRegistry::KEY)
+        else {
+          return Ok(None);
+        };
+
+        let Some(sockets) = sockets.owners.get(&name) else {
+          return Ok(None);
+        };
+
+        for (_, fd) in sockets {
+          let sock = self.instances.get(&fd).ok_or(CoreError::InvalidState(
+            "Socket for fd was not found".into(),
+          ))?;
+          let Ok(socket) = ctx.registry.as_one::<Socket>("units", sock.clone()) else {
+            continue;
+          };
+
+          self.clear_socket(socket);
+        }
+      }
+      "clear" => {
+        let name = payload.get::<Ustr>("name")?;
+        let socket = ctx.registry.as_one::<Socket>("units", name.clone())?;
+        self.clear_socket(socket);
       }
       "drain_incoming" => {
         let fd = payload.get::<i32>("fd")? as RawFd;

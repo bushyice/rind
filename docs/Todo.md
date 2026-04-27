@@ -13,9 +13,9 @@ kanban-plugin: board
 
 ## Doing
 
-- [ ] **Instance Deletion**: Remove items from instance registry.
-	- [ ] Socket Uninstantiation
-	- [ ] Service Uninstantiation
+- [ ] **Little Tasks 1**:
+	- [ ] Fix the persistent socket issue
+	- [ ] Test sockets <-> services <-> timers.
 - [ ] **Piping**: Piping and payloads into other states/signals.
 	- [x] Simple circumstantial piping
 	- [ ] General piping
@@ -73,6 +73,8 @@ kanban-plugin: board
 
 **Complete**
 - [ ] **Permissions**: Entity-based(users, groups) access control for internal actions.
+- [x] **Instance Deletion**: Remove items from instance registry.
+	- [x] Socket Uninstantiation
 - [x] **Envs**: Loading `.env` files as user profile and as `rind` config source.
 - [x] **State Persistence**: Continuity of state across restarts.
 - [x] **Trigger Optimizations**: Keep an index of flow <-> service relationships.

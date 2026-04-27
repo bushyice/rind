@@ -377,7 +377,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
       match epoll.add(
         borrowed,
-        EpollEvent::new(EpollFlags::EPOLLIN, fd as u64 + 100),
+        EpollEvent::new(resources.flags(fd), fd as u64 + 100),
       ) {
         Ok(_) | Err(nix::Error::EEXIST) => {
           resources.watch(fd);

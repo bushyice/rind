@@ -3,7 +3,7 @@ use std::{
   os::fd::OwnedFd,
 };
 
-use nix::sys::timerfd::TimerFd;
+use nix::sys::{epoll::EpollFlags, timerfd::TimerFd};
 
 use crate::{
   runtime::RuntimePayload,
@@ -31,6 +31,7 @@ impl From<TimerFd> for FdLoc {
 pub struct Resources {
   actions: HashMap<i32, ResourceAction>,
   fd: HashMap<i32, FdLoc>,
+  flags: HashMap<i32, EpollFlags>,
   unwatched_fds: HashSet<i32>,
   watched_fds: HashSet<i32>,
   removed_fds: HashSet<i32>,
@@ -122,6 +123,7 @@ impl Resources {
     self.unwatched_fds.remove(&res);
     if self.watched_fds.remove(&res) {
       self.removed_fds.insert(res);
+      self.flags.remove(&res);
     };
     self.actions.remove(&res);
   }
@@ -129,5 +131,13 @@ impl Resources {
   pub fn remove_full(&mut self, res: i32) {
     self.removed_fds.remove(&res);
     self.fd.remove(&res);
+  }
+
+  pub fn flags(&self, res: i32) -> EpollFlags {
+    self.flags.get(&res).map_or(EpollFlags::EPOLLIN, |x| *x)
+  }
+
+  pub fn flag(&mut self, res: i32, flags: EpollFlags) {
+    self.flags.insert(res, flags);
   }
 }
