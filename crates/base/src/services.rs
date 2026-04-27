@@ -25,13 +25,6 @@ use crate::transport::{TransportMessage, TransportMethod, start_stdout_listener}
 use crate::variables::VariableHeap;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct ServiceTimer {
-  pub duration: Ustr,
-  #[serde(default)]
-  pub restart: bool,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RunOption {
   #[serde(default)]
   pub exec: Ustr,
@@ -39,7 +32,6 @@ pub struct RunOption {
   pub args: Vec<Ustr>,
   pub env: Option<HashMap<Ustr, Ustr>>,
   pub variable: Option<String>,
-  pub timer: Option<ServiceTimer>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -131,8 +123,6 @@ pub struct ChildInstance {
   pub retry_count: u32,
   pub stop_time: Option<Instant>,
   pub manually_stopped: bool,
-  pub timer_deadline: Option<Instant>,
-  pub timer_start: Option<Instant>,
 }
 
 impl ChildInstance {
@@ -145,34 +135,11 @@ impl ChildInstance {
       retry_count: 0,
       stop_time: None,
       manually_stopped: false,
-      timer_deadline: None,
-      timer_start: None,
     }
   }
 
   pub fn pid(&self) -> Option<u32> {
     self.child.as_ref().map(|c| c.id())
-  }
-}
-
-fn parse_duration(s: &str) -> Option<Duration> {
-  let s = s.trim();
-  if s.is_empty() {
-    return None;
-  }
-
-  let (num_str, unit) = s.split_at(s.len() - 1);
-  let num: u64 = num_str.parse().ok()?;
-
-  match unit {
-    "s" => Some(Duration::from_secs(num)),
-    "m" => Some(Duration::from_secs(num * 60)),
-    "h" => Some(Duration::from_secs(num * 3600)),
-    "d" => Some(Duration::from_secs(num * 86400)),
-    _ => {
-      // maybe it's just seconds?
-      s.parse().ok().map(Duration::from_secs)
-    }
   }
 }
 
@@ -518,7 +485,7 @@ impl ServiceRuntime {
     for run in service.metadata.run.as_many() {
       let resolved = self.resolve_run_option(run, variable_heap);
       let run_ref = resolved.as_ref().unwrap_or(run);
-      let mut instance = self.spawn_process(
+      let instance = self.spawn_process(
         service,
         run_ref,
         log,
@@ -530,23 +497,6 @@ impl ServiceRuntime {
         registry_key.clone(),
         notifier.clone(),
       )?;
-
-      if let Some(timer) = &run_ref.timer {
-        if let Some(duration) = parse_duration(timer.duration.as_str()) {
-          let deadline = Instant::now() + duration;
-          instance.timer_start = Some(Instant::now());
-          instance.timer_deadline = Some(deadline);
-
-          let _ = dispatch.dispatch(
-            "timer",
-            "start_timer",
-            RuntimePayload::default()
-              .insert("name", service.metadata.name.clone())
-              .insert("index", service.instances.len() + instances.len())
-              .insert("duration", duration),
-          );
-        }
-      }
 
       instances.push(instance);
     }
@@ -589,7 +539,6 @@ impl ServiceRuntime {
       args,
       env,
       variable: None,
-      timer: run.timer.clone(),
     })
   }
 
@@ -899,26 +848,10 @@ impl ServiceRuntime {
     notifier: Option<Notifier>,
   ) {
     if let Some(inst) = service.instances.as_one_mut() {
-      if inst.state == ServiceState::Active || inst.state == ServiceState::Starting {
-        let mut handled = false;
-        for (run_meta, inst) in service
-          .metadata
-          .run
-          .as_many()
-          .zip(service.instances.iter_mut())
-        {
-          if let Some(timer) = &run_meta.timer {
-            if timer.restart && inst.timer_deadline.is_some() {
-              if let Some(duration) = parse_duration(timer.duration.as_str()) {
-                inst.timer_deadline = Some(Instant::now() + duration);
-                handled = true;
-              }
-            }
-          }
-        }
-        if handled {
-          return;
-        }
+      if inst.state == ServiceState::Active
+        || inst.state == ServiceState::Starting
+        || inst.state == ServiceState::Stopping
+      {
         if service.metadata.singleton {
           return;
         }
@@ -932,7 +865,7 @@ impl ServiceRuntime {
       sockets_map,
       sm,
       variable_heap,
-      registry_key,
+      registry_key.clone(),
       notifier,
     ) {
       Ok(_) => {
@@ -946,7 +879,17 @@ impl ServiceRuntime {
           "services",
           "reconcile_stacks",
           rpayload!({
-            "service": service.metadata.name.clone(),
+            "service": registry_key.clone(),
+            "id": service.id.0,
+            "action": ServiceEventKind::Started
+          }),
+        );
+
+        let _ = dispatch.dispatch(
+          "timer",
+          "reconcile_timers",
+          rpayload!({
+            "service": registry_key.clone(),
             "id": service.id.0,
             "action": ServiceEventKind::Started
           }),
@@ -1025,6 +968,7 @@ impl ServiceRuntime {
     key: Option<Ustr>,
     user: Option<Ustr>,
     index: Option<usize>,
+    service_key: Option<&Ustr>,
   ) {
     if let Some(index) = index {
       if let Some(inst) = service.instances.get_mut(index) {
@@ -1079,11 +1023,33 @@ impl ServiceRuntime {
         "services",
         "reconcile_stacks",
         rpayload!({
-          "service": service.metadata.name.clone(),
+          "service": service_key.cloned().unwrap_or(service.metadata.name.clone()),
           "id": service.id.0,
           "action": ServiceEventKind::Stopped
         }),
       );
+
+      let _ = dispatch.dispatch(
+        "timer",
+        "reconcile_timers",
+        rpayload!({
+          "service": service_key.cloned().unwrap_or(service.metadata.name.clone()),
+          "id": service.id.0,
+          "action": ServiceEventKind::Stopped
+        }),
+      );
+      // if let Some(service_key) = service_key {
+      //   let full_name = if service_key.starts_with("units@") {
+      //     service_key.strip_prefix("units@").unwrap_or("").to_ustr()
+      //   } else {
+      //     service_key.clone()
+      //   };
+      //   let _ = dispatch.dispatch(
+      //     "sockets",
+      //     "resume_fds",
+      //     RuntimePayload::default().insert("name", full_name),
+      //   );
+      // }
     }
   }
 
@@ -1176,7 +1142,6 @@ impl ServiceRuntime {
   //   let mut should_stop = false;
 
   //   for inst in service.instances.iter_mut() {
-  //     if let Some(deadline) = inst.timer_deadline {
   //       if Instant::now() >= deadline {
   //         should_stop = true;
   //         break;
@@ -1335,6 +1300,7 @@ impl ServiceRuntime {
   }
 }
 
+#[derive(Debug)]
 enum ServiceExitAction {
   Restart,
   StopDependents,
@@ -1755,6 +1721,7 @@ impl Runtime for ServiceRuntime {
                                 Some(i),
                                 None,
                                 None,
+                                Some(&service_key),
                               );
                             }
                           }
@@ -1805,6 +1772,7 @@ impl Runtime for ServiceRuntime {
                             None,
                             None,
                             None,
+                            Some(&service_key),
                           );
                         }
                       }
@@ -1925,8 +1893,8 @@ impl Runtime for ServiceRuntime {
           .ok()
           .unwrap_or_default();
         let mut sockets_map = get_all_sockets(&ctx.registry);
+        let name = payload.get::<Ustr>("name")?;
         if !socket_fds.is_empty() {
-          let name = payload.get::<Ustr>("name").unwrap_or_default();
           let entry = sockets_map
             .entry(name.clone())
             .or_insert_with(|| SocketActivation {
@@ -1936,7 +1904,6 @@ impl Runtime for ServiceRuntime {
           entry.fds.extend(socket_fds);
           entry.names.extend(socket_fd_names);
         }
-        let name = payload.get::<Ustr>("name")?;
         let only_user = payload.get::<String>("only_user").ok();
         ctx
           .registry
@@ -1961,7 +1928,7 @@ impl Runtime for ServiceRuntime {
                   &sockets_map,
                   Some(sm),
                   Some(vh),
-                  service_key.into(),
+                  service_key.to_ustr(),
                   ctx.notifier.clone(),
                 ) {
                   Ok(instances) => {
@@ -1975,7 +1942,17 @@ impl Runtime for ServiceRuntime {
                       "services",
                       "reconcile_stacks",
                       rpayload!({
-                        "service": service.metadata.name.clone(),
+                        "service": service_key.to_ustr(),
+                        "id": service.id.0,
+                        "action": ServiceEventKind::Started
+                      }),
+                    );
+
+                    let _ = dispatch.dispatch(
+                      "timer",
+                      "reconcile_timers",
+                      rpayload!({
+                        "service": service_key.to_ustr(),
                         "id": service.id.0,
                         "action": ServiceEventKind::Started
                       }),
@@ -2040,8 +2017,8 @@ impl Runtime for ServiceRuntime {
           .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
             (StateMachine::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, _)| {
-              let service =
-                registry.instantiate_one::<Service>("units", name, |x| Ok(Service::new(x)))?;
+              let service = registry
+                .instantiate_one::<Service>("units", name.clone(), |x| Ok(Service::new(x)))?;
               let only_user = payload.get::<Ustr>("only_user").ok();
 
               self.stop_service(
@@ -2053,6 +2030,7 @@ impl Runtime for ServiceRuntime {
                 None,
                 only_user,
                 index,
+                Some(&name),
               );
               Ok(())
             },
@@ -2082,7 +2060,17 @@ impl Runtime for ServiceRuntime {
                 if let Some(instances) = registry.instances.get_mut(&key) {
                   for instance in instances.iter_mut() {
                     if let Some(service) = instance.downcast_mut::<Service>() {
-                      self.stop_service(service, mode, log, dispatch, Some(sm), None, None, None);
+                      self.stop_service(
+                        service,
+                        mode,
+                        log,
+                        dispatch,
+                        Some(sm),
+                        None,
+                        None,
+                        None,
+                        Some(&key),
+                      );
                     }
                   }
                 }
@@ -2188,7 +2176,7 @@ impl Runtime for ServiceRuntime {
         }
       }
       "reconcile_stacks" => {
-        let service = payload.get::<Ustr>("service")?;
+        let service = normalize_uaddr(payload.get::<Ustr>("service")?, "units@");
         let action = payload.get::<ServiceEventKind>("action")?;
 
         let metadata = ctx
@@ -2240,6 +2228,7 @@ impl Runtime for ServiceRuntime {
                         None,
                         None,
                         None,
+                        Some(&dependent),
                       );
                     }
                   }
@@ -2336,7 +2325,16 @@ impl Runtime for ServiceRuntime {
                               "services",
                               "reconcile_stacks",
                               rpayload!({
-                                "service": service.metadata.name.clone(),
+                                "service": service_key.clone(),
+                                "id": service.id.0,
+                                "action": ServiceEventKind::Exited { code }
+                              }),
+                            );
+                            let _ = dispatch.dispatch(
+                              "timer",
+                              "reconcile_timers",
+                              rpayload!({
+                                "service": service_key.clone(),
                                 "id": service.id.0,
                                 "action": ServiceEventKind::Exited { code }
                               }),

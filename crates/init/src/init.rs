@@ -14,7 +14,7 @@ use rind_base::networking::NetworkingRuntime;
 use rind_base::reaper::ReaperRuntime;
 use rind_base::services::ServiceRuntime;
 use rind_base::sockets::SocketRuntime;
-use rind_base::timer::TimerRuntime;
+use rind_base::timers::TimerRuntime;
 use rind_base::transport::TransportRuntime;
 use rind_base::units::UnitsOrchestrator;
 use rind_base::user::UserRuntime;
@@ -380,7 +380,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         EpollEvent::new(EpollFlags::EPOLLIN, fd as u64 + 100),
       ) {
         Ok(_) | Err(nix::Error::EEXIST) => {
-          println!("watching {fd}");
           resources.watch(fd);
         }
         Err(e) => log.log(

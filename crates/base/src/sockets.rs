@@ -1,6 +1,6 @@
 use rind_ipc::payloads::SSPayload;
 use std::collections::HashMap;
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
@@ -52,7 +52,6 @@ pub struct Socket {
   pub lifecycle: SocketServiceLifecycle,
 
   pub fd: RawFd,
-  pub owned_fd: OwnedFd,
   pub active: bool,
 }
 
@@ -77,6 +76,17 @@ impl Default for SocketRuntime {
 }
 
 impl SocketRuntime {
+  fn get_socket_path(&self, listen: &str, create: bool) -> anyhow::Result<PathBuf> {
+    let path = PathBuf::from("/var/sock").join(listen);
+    if let (Some(p), true) = (path.parent(), create) {
+      std::fs::create_dir_all(p)?;
+    }
+    if path.exists() {
+      let _ = std::fs::remove_file(&path);
+    }
+    Ok(path)
+  }
+
   fn create_socket(&self, meta: &SocketMetadata) -> anyhow::Result<std::os::fd::OwnedFd> {
     let fd = match meta.r#type {
       SocketType::Tcp => {
@@ -103,13 +113,7 @@ impl SocketRuntime {
         fd
       }
       SocketType::Uds => {
-        let path = PathBuf::from("/var/sock").join(&meta.listen);
-        if let Some(p) = path.parent() {
-          std::fs::create_dir_all(p)?;
-        }
-        if path.exists() {
-          let _ = std::fs::remove_file(&path);
-        }
+        let path = self.get_socket_path(&meta.listen, true)?;
 
         let fd = socket(
           AddressFamily::Unix,
@@ -207,16 +211,18 @@ impl SocketRuntime {
         .create_socket(&metadata)
         .map_err(|e| CoreError::Custom(format!("failed to create socket {name}: {e}")))?;
       let fd = owned_fd.as_raw_fd();
+
+      resources.own(fd, owned_fd);
+      resources.action(fd, ("sockets", "drain_incoming"));
+
       Ok(Socket {
         metadata,
         fd,
-        owned_fd,
         active: true,
       })
     })?;
 
-    resources.action(sock.fd, ("sockets", "drain_incoming"));
-
+    resources.resume(sock.fd);
     self.instances.insert(sock.fd, name);
 
     if let Some(owner) = sock.metadata.owner.as_ref() {
@@ -237,12 +243,16 @@ impl SocketRuntime {
     registry: &mut InstanceRegistry,
     sr: &mut SocketRegistry,
   ) -> CoreResult<()> {
-    let socket = registry.as_one_mut::<Socket>("units", name.clone())?;
+    let socket = registry.uninstantiate_one::<Socket>("units", name.clone())?;
     let fd = socket.fd;
 
     resources.terminate(fd);
     self.instances.remove(&fd);
     self.owner.remove(&fd);
+
+    if socket.metadata.r#type == SocketType::Uds {
+      self.get_socket_path(&socket.metadata.listen, false)?;
+    }
 
     if let Some(owner) = &socket.metadata.owner {
       if let Some(paused) = self.paused.get_mut(owner) {
@@ -250,8 +260,6 @@ impl SocketRuntime {
       }
       sr.owners.remove(owner);
     }
-
-    socket.active = false;
 
     Ok(())
   }
@@ -277,7 +285,7 @@ impl Runtime for SocketRuntime {
     mut payload: RuntimePayload,
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
-    _log: &LogHandle,
+    log: &LogHandle,
   ) -> Result<Option<RuntimePayload>, CoreError> {
     match action {
       "bootstrap" => {
@@ -460,10 +468,6 @@ impl Runtime for SocketRuntime {
             |registry, (sr, _)| self.start_socket(name, ctx.resources, registry, sr),
           )?;
       }
-      "resume_fd" => {
-        let fd = payload.get::<i32>("fd")? as RawFd;
-        ctx.resources.resume(fd);
-      }
       "reset_fds" | "resume_fds" => {
         let owner = payload.get::<Ustr>("name")?;
         if let Some(fds) = self.paused.remove(&owner) {
@@ -482,6 +486,13 @@ impl Runtime for SocketRuntime {
         ))?;
         let socket = ctx.registry.as_one::<Socket>("units", name.clone())?;
         ctx.resources.pause(fd);
+
+        log.log(
+          LogLevel::Trace,
+          "sockets",
+          "socket accessed",
+          [("name".to_string(), name.to_string())].into(),
+        );
 
         if let Some(owner) = socket.metadata.owner.clone() {
           self.paused.entry(owner.clone()).or_default().push(fd);

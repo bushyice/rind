@@ -7,6 +7,7 @@ use crate::networking::NetworkConfig;
 use crate::permissions::{PERM_LOGIN, PERM_RUN0, PERM_SYSTEM_SERVICES, Permission};
 use crate::services::Service;
 use crate::sockets::Socket;
+use crate::timers::Timer;
 use crate::user::Run0QueueState;
 use crate::variables::{Variable, VariableHeap, variables_path};
 use rind_core::prelude::*;
@@ -84,6 +85,7 @@ impl UnitsOrchestrator {
   ) -> Result<(), CoreError> {
     let mut metadata = Metadata::new(UNITS_META)
       .of::<Service>("service")
+      .of::<Timer>("timer")
       .of::<Mount>("mount")
       .of::<Socket>("socket")
       .of::<NetworkConfig>("network")
@@ -158,10 +160,12 @@ impl UnitsOrchestrator {
         continue;
       }
 
-      let group = Ustr::from(path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("unknown"));
+      let group = Ustr::from(
+        path
+          .file_stem()
+          .and_then(|s| s.to_str())
+          .unwrap_or("unknown"),
+      );
 
       let content = std::fs::read_to_string(&path).map_err(|e| {
         CoreError::Custom(format!("failed to read unit file {}: {e}", path.display()))
@@ -197,6 +201,7 @@ impl UnitsOrchestrator {
     ctx.metadata.ensure_index_for_type::<Service>(UNITS_META)?;
     ctx.metadata.ensure_index_for_type::<Mount>(UNITS_META)?;
     ctx.metadata.ensure_index_for_type::<Socket>(UNITS_META)?;
+    ctx.metadata.ensure_index_for_type::<Timer>(UNITS_META)?;
     ctx.metadata.ensure_index_for_type::<State>(UNITS_META)?;
     ctx.metadata.ensure_index_for_type::<Signal>(UNITS_META)?;
 

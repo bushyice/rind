@@ -63,6 +63,10 @@ pub struct Trigger {
   pub args: Option<Vec<Ustr>>,
   pub state: Option<Ustr>,
   pub signal: Option<Ustr>,
+  pub service: Option<Ustr>,
+  pub timer: Option<Ustr>,
+  pub socket: Option<Ustr>,
+  pub stop: Option<bool>,
   pub payload: Option<serde_json::Value>,
 }
 

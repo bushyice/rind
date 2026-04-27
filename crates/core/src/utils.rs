@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::types::Ustr;
+
 pub fn read_env_file(path: &str) -> HashMap<String, String> {
   let mut out = HashMap::new();
   let Ok(content) = std::fs::read_to_string(path) else {
@@ -34,4 +36,13 @@ pub fn read_env_file(path: &str) -> HashMap<String, String> {
   }
 
   out
+}
+
+pub fn normalize_uaddr(addr: impl Into<Ustr>, prefix: &str) -> Ustr {
+  let addr = addr.into();
+  if addr.starts_with(prefix) {
+    Ustr::from(addr.strip_prefix(prefix).unwrap_or(""))
+  } else {
+    addr.clone()
+  }
 }

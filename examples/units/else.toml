@@ -12,7 +12,6 @@ name = "four"
 start-on = ["my_signal"]
 run.exec = "/usr/bin/example-inactive"
 run.args = ["arg1", "arg2"]
-run.timer = { duration = "5s", restart = true }
 singleton = true
 
 [[state]]
@@ -31,7 +30,6 @@ type = "uds"
 lifecycle = "owned"
 listen = "/var/sock/my.sock"
 owner = "else@four"
-signal = "else@my_signal_2"
 
 [[signal]]
 name = "my_signal"
@@ -40,3 +38,9 @@ payload = "string"
 [[signal]]
 name = "my_signal_2"
 payload = "json"
+
+[[timer]]
+name = "timeout_four"
+duration = "5s"
+after = ["else@four"]
+finish = [{ service = "else@four", stop = true }]

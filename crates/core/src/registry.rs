@@ -20,9 +20,7 @@ pub struct MetadataRegistry {
 impl MetadataRegistry {
   pub fn insert_metadata(&mut self, metadata: Metadata) {
     let name = metadata.name.clone();
-    self
-      .metadata
-      .insert(name, Arc::new(metadata));
+    self.metadata.insert(name, Arc::new(metadata));
   }
 
   pub fn load_group_from_toml(
@@ -120,7 +118,11 @@ impl MetadataRegistry {
       .map(|x| x.clone())
   }
 
-  pub fn lookup<T>(&self, metadata: impl Into<Ustr>, full_name: impl Into<Ustr>) -> Option<Arc<T::M>>
+  pub fn lookup<T>(
+    &self,
+    metadata: impl Into<Ustr>,
+    full_name: impl Into<Ustr>,
+  ) -> Option<Arc<T::M>>
   where
     T: Model + 'static,
   {
@@ -134,7 +136,11 @@ impl MetadataRegistry {
       .map(|x| x.clone())
   }
 
-  pub fn lookup_in_any_group<T>(&self, metadata: impl Into<Ustr>, item_name: &str) -> Option<Arc<T::M>>
+  pub fn lookup_in_any_group<T>(
+    &self,
+    metadata: impl Into<Ustr>,
+    item_name: &str,
+  ) -> Option<Arc<T::M>>
   where
     T: Model + 'static,
   {
@@ -192,7 +198,7 @@ impl<'a> InstanceRegistry<'a> {
     &mut self,
     metadata: impl Into<Ustr>,
     name: impl Into<Ustr>,
-    instantiate: impl Fn(Arc<T::M>) -> anyhow::Result<T>,
+    mut instantiate: impl FnMut(Arc<T::M>) -> anyhow::Result<T>,
   ) -> anyhow::Result<&mut T>
   where
     T: Model + 'static,
@@ -203,7 +209,9 @@ impl<'a> InstanceRegistry<'a> {
     let metadata_item = if name.as_str().contains('@') {
       self.metadata.lookup::<T>(metadata.clone(), name.clone())
     } else {
-      self.metadata.lookup_in_any_group::<T>(metadata.clone(), name.as_str())
+      self
+        .metadata
+        .lookup_in_any_group::<T>(metadata.clone(), name.as_str())
     }
     .ok_or(CoreError::MetadataNotFound(metadata.to_string()))?;
 
@@ -224,7 +232,7 @@ impl<'a> InstanceRegistry<'a> {
     &mut self,
     metadata: impl Into<Ustr>,
     name: impl Into<Ustr>,
-    instantiate: impl Fn(Arc<T::M>) -> anyhow::Result<T>,
+    instantiate: impl FnMut(Arc<T::M>) -> anyhow::Result<T>,
   ) -> anyhow::Result<&mut T>
   where
     T: Model + 'static,
@@ -251,7 +259,11 @@ impl<'a> InstanceRegistry<'a> {
     }
   }
 
-  pub fn instances<T>(&self, metadata: impl Into<Ustr>, name: impl Into<Ustr>) -> anyhow::Result<Vec<&T>>
+  pub fn instances<T>(
+    &self,
+    metadata: impl Into<Ustr>,
+    name: impl Into<Ustr>,
+  ) -> anyhow::Result<Vec<&T>>
   where
     T: Model + 'static,
   {
@@ -269,7 +281,46 @@ impl<'a> InstanceRegistry<'a> {
     )
   }
 
-  pub fn instances_mut<T>(&mut self, metadata: impl Into<Ustr>, name: impl Into<Ustr>) -> anyhow::Result<Vec<&mut T>>
+  pub fn uninstantiate<T>(
+    &mut self,
+    metadata: impl Into<Ustr>,
+    name: impl Into<Ustr>,
+  ) -> anyhow::Result<Vec<Box<T>>>
+  where
+    T: Model + 'static,
+  {
+    let metadata = metadata.into();
+    let name = name.into();
+    let full_name = Ustr::from(format!("{metadata}@{name}"));
+    Ok(
+      self
+        .instances
+        .remove(&full_name)
+        .ok_or(CoreError::MissingInstances(full_name.to_string()))?
+        .into_iter()
+        .map(|x| x.downcast::<T>().expect("instance type mismatch"))
+        .collect(),
+    )
+  }
+
+  pub fn uninstantiate_one<T>(
+    &mut self,
+    metadata: impl Into<Ustr>,
+    name: impl Into<Ustr>,
+  ) -> anyhow::Result<Box<T>>
+  where
+    T: Model + 'static,
+  {
+    self
+      .uninstantiate::<T>(metadata, name)
+      .map(|mut x| x.pop().expect("instance entry unexpectedly empty"))
+  }
+
+  pub fn instances_mut<T>(
+    &mut self,
+    metadata: impl Into<Ustr>,
+    name: impl Into<Ustr>,
+  ) -> anyhow::Result<Vec<&mut T>>
   where
     T: Model + 'static,
   {
@@ -308,7 +359,11 @@ impl<'a> InstanceRegistry<'a> {
     )
   }
 
-  pub fn as_one_mut<T>(&mut self, metadata: impl Into<Ustr>, name: impl Into<Ustr>) -> anyhow::Result<&mut T>
+  pub fn as_one_mut<T>(
+    &mut self,
+    metadata: impl Into<Ustr>,
+    name: impl Into<Ustr>,
+  ) -> anyhow::Result<&mut T>
   where
     T: Model + 'static,
   {
@@ -330,7 +385,11 @@ impl<'a> InstanceRegistry<'a> {
   }
 
   pub fn singleton<T: 'static>(&self, key: impl Into<Ustr>) -> Option<&T> {
-    self.instances.get(&key.into())?.first()?.downcast_ref::<T>()
+    self
+      .instances
+      .get(&key.into())?
+      .first()?
+      .downcast_ref::<T>()
   }
 
   pub fn singleton_mut<T: 'static>(&mut self, key: impl Into<Ustr>) -> Option<&mut T> {

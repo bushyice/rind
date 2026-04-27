@@ -94,12 +94,16 @@ pub fn print_unit(unit_name: &String, unit: &UnitItemsSerialized) {
   }
 
   if !unit.sockets.is_empty() {
-    println!("{}", " Services ".on_bright_blue().bold().white());
+    println!("{}", " Sockets ".on_bright_blue().bold().white());
     for s in &unit.sockets {
       println!(
         "  {:<20} {:<10} {:<5} {:<5} {:<}",
         s.name.to_string().bold().white(),
-        s.active.green(),
+        if s.active {
+          "Active".green().to_string()
+        } else {
+          "Inactive".white().to_string()
+        },
         s.triggers.yellow(),
         s.r#type.to_string().blue(),
         s.listen.to_string().yellow(),

@@ -13,14 +13,9 @@ kanban-plugin: board
 
 ## Doing
 
-- [ ] **Sockets, FDs and timers**: 
-	- [x] Socket-trigger-services
-	- [x] FD resource manager
-	- [x] Service timers
-	- [x] Socket transcendence
-	- [x] Socket branching
-	- [x] Socket piping
-	- [x] Socket state triggers
+- [ ] **Instance Deletion**: Remove items from instance registry.
+	- [ ] Socket Uninstantiation
+	- [ ] Service Uninstantiation
 - [ ] **Piping**: Piping and payloads into other states/signals.
 	- [x] Simple circumstantial piping
 	- [ ] General piping
@@ -50,7 +45,15 @@ kanban-plugin: board
 
 ## Testing
 
-- [ ] **Envs**: Loading `.env` files as user profile and as `rind` config source.
+- [ ] **TImers**: Timers to trigger events after a preset duration.
+- [ ] **Sockets, FDs and timers**: 
+	- [x] Socket-trigger-services
+	- [x] FD resource manager
+	- [x] Service timers
+	- [x] Socket transcendence
+	- [x] Socket branching
+	- [x] Socket piping
+	- [x] Socket state triggers
 - [ ] **Reaper**: Zombie process terminator.
 - [ ] **String Optimizations**: Use something like `strumbra` for strings.
 - [ ] **Userspace Services**: Isolate services for user and system.
@@ -70,6 +73,7 @@ kanban-plugin: board
 
 **Complete**
 - [ ] **Permissions**: Entity-based(users, groups) access control for internal actions.
+- [x] **Envs**: Loading `.env` files as user profile and as `rind` config source.
 - [x] **State Persistence**: Continuity of state across restarts.
 - [x] **Trigger Optimizations**: Keep an index of flow <-> service relationships.
 - [x] **Payload Optimizations**: Replace JSON with a faster payload for internal messaging.

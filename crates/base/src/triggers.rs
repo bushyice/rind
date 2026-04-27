@@ -184,6 +184,36 @@ pub fn trigger_events(
           p = p.insert("payload", payload.clone());
         }
         let _ = dispatch.dispatch("flow", "emit_signal", p);
+      } else if let Some(service) = &resolved_trigger.service {
+        let _ = dispatch.dispatch(
+          "services",
+          if let Some(true) = resolved_trigger.stop {
+            "stop"
+          } else {
+            "start"
+          },
+          rpayload!({ "name": service.clone() }),
+        );
+      } else if let Some(timer) = &resolved_trigger.timer {
+        let _ = dispatch.dispatch(
+          "timer",
+          if let Some(true) = resolved_trigger.stop {
+            "stop"
+          } else {
+            "start"
+          },
+          rpayload!({ "name": timer.clone() }),
+        );
+      } else if let Some(socket) = &resolved_trigger.socket {
+        let _ = dispatch.dispatch(
+          "sockets",
+          if let Some(true) = resolved_trigger.stop {
+            "stop"
+          } else {
+            "start"
+          },
+          rpayload!({ "name": socket.clone() }),
+        );
       }
     }
   }
