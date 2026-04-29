@@ -6,16 +6,12 @@ kanban-plugin: board
 
 ## Todos
 
-- [ ] **Permission Inheritance**: If user has PermissionA and PermissionB inherits PermissionA, then user has PermissionB.
 - [ ] **eBPF Loader**: (maybe?) Loading eBPF at system startup.
 - [ ] **cgroups**: Using linux cgroups for service resource management.
 
 
 ## Doing
 
-- [ ] **Little Tasks 1**:
-	- [ ] Fix the persistent socket issue
-	- [ ] Test sockets <-> services <-> timers.
 - [ ] **Piping**: Piping and payloads into other states/signals.
 	- [x] Simple circumstantial piping
 	- [ ] General piping
@@ -46,6 +42,9 @@ kanban-plugin: board
 ## Testing
 
 - [ ] **TImers**: Timers to trigger events after a preset duration.
+- [ ] **Little Tasks 1**:
+	- [x] Fix the persistent socket issue
+	- [x] Test sockets <-> services <-> timers.
 - [ ] **Sockets, FDs and timers**: 
 	- [x] Socket-trigger-services
 	- [x] FD resource manager
@@ -54,6 +53,7 @@ kanban-plugin: board
 	- [x] Socket branching
 	- [x] Socket piping
 	- [x] Socket state triggers
+- [ ] **Permission Inheritance**: If user has PermissionA and PermissionB inherits PermissionA, then user has PermissionB.
 - [ ] **Reaper**: Zombie process terminator.
 - [ ] **String Optimizations**: Use something like `strumbra` for strings.
 - [ ] **Userspace Services**: Isolate services for user and system.

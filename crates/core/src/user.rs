@@ -7,10 +7,11 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::error::CoreError;
+use crate::types::{ToUstr, Ustr};
 
 #[derive(Debug, Clone)]
 pub struct UserRecord {
-  pub username: String,
+  pub username: Ustr,
   pub uid: u32,
   pub gid: u32,
   pub gecos: String,
@@ -26,7 +27,7 @@ impl UserRecord {
       return None;
     }
     Some(Self {
-      username: parts[0].to_string(),
+      username: parts[0].to_ustr(),
       uid: parts[2].parse().ok()?,
       gid: parts[3].parse().ok()?,
       gecos: parts[4].to_string(),
@@ -43,7 +44,7 @@ impl UserRecord {
 
 #[derive(Debug, Clone)]
 pub struct ShadowEntry {
-  pub username: String,
+  pub username: Ustr,
   pub password_hash: String,
   pub last_changed: Option<i64>,
   pub min_days: Option<i64>,
@@ -61,7 +62,7 @@ impl ShadowEntry {
     }
     let parse_opt = |s: &str| -> Option<i64> { if s.is_empty() { None } else { s.parse().ok() } };
     Some(Self {
-      username: parts[0].to_string(),
+      username: parts[0].to_ustr(),
       password_hash: parts[1].to_string(),
       last_changed: parse_opt(parts[2]),
       min_days: parse_opt(parts[3]),
@@ -107,9 +108,9 @@ fn days_since_epoch() -> i64 {
 
 #[derive(Debug, Clone)]
 pub struct GroupEntry {
-  pub name: String,
+  pub name: Ustr,
   pub gid: u32,
-  pub members: Vec<String>,
+  pub members: Vec<Ustr>,
   pub permissions: Vec<u16>,
 }
 
@@ -120,12 +121,12 @@ impl GroupEntry {
       return None;
     }
     Some(Self {
-      name: parts[0].to_string(),
+      name: parts[0].to_ustr(),
       gid: parts[2].parse().ok()?,
       members: parts[3]
         .split(',')
         .filter(|s| !s.is_empty())
-        .map(|s| s.trim().to_string())
+        .map(|s| s.trim().to_ustr())
         .collect(),
       permissions: Vec::new(),
     })
@@ -137,7 +138,7 @@ pub struct UserStore {
   users: Vec<UserRecord>,
   shadows: Vec<ShadowEntry>,
   groups: Vec<GroupEntry>,
-  name_index: HashMap<String, usize>,
+  name_index: HashMap<Ustr, usize>,
   uid_index: HashMap<u32, usize>,
 }
 
@@ -273,28 +274,34 @@ impl UserStore {
   }
 
   pub fn group_by_name(&self, name: &str) -> Option<&GroupEntry> {
-    self.groups.iter().find(|g| g.name == name)
+    self.groups.iter().find(|g| g.name.as_str() == name)
   }
 
   pub fn shadow_for(&self, username: &str) -> Option<&ShadowEntry> {
-    self.shadows.iter().find(|s| s.username == username)
+    self
+      .shadows
+      .iter()
+      .find(|s| s.username.as_str() == username)
   }
 
-  pub fn groups_for(&self, user: &UserRecord) -> Vec<String> {
-    let mut result: Vec<String> = Vec::new();
+  pub fn groups_for(&self, user: &UserRecord) -> Vec<Ustr> {
+    let mut result: Vec<Ustr> = Vec::new();
     if let Some(primary) = self.groups.iter().find(|g| g.gid == user.gid) {
-      result.push(primary.name.clone());
+      result.push(primary.name.to_ustr());
     }
     for group in &self.groups {
       if group.members.iter().any(|m| m == &user.username) && !result.contains(&group.name) {
-        result.push(group.name.clone());
+        result.push(group.name.to_ustr());
       }
     }
     result
   }
 
   pub fn user_in_group(&self, user: &UserRecord, group_name: &str) -> bool {
-    self.groups_for(user).iter().any(|g| g == group_name)
+    self
+      .groups_for(user)
+      .iter()
+      .any(|g| g.as_str() == group_name)
   }
 
   pub fn users(&self) -> &[UserRecord] {
@@ -725,8 +732,8 @@ mod tests {
 
     let makano = store.lookup_by_name("makano").unwrap();
     let groups = store.groups_for(makano);
-    assert!(groups.contains(&"makano".to_string()));
-    assert!(groups.contains(&"wheel".to_string()));
+    assert!(groups.contains(&"makano".to_ustr()));
+    assert!(groups.contains(&"wheel".to_ustr()));
     assert!(store.user_in_group(makano, "wheel"));
     assert!(!store.user_in_group(makano, "root"));
 
@@ -750,7 +757,7 @@ mod tests {
     let pam = PamHandle::new(store);
 
     let user = pam.pam_authenticate("makano", "test123").unwrap();
-    assert_eq!(user.username, "makano");
+    assert_eq!(user.username.as_str(), "makano");
 
     let _ = fs::remove_dir_all(dir);
   }
@@ -820,7 +827,7 @@ mod tests {
     let pam = PamHandle::new(store);
 
     let user = pam.pam_authenticate_auto("makano").unwrap();
-    assert_eq!(user.username, "makano");
+    assert_eq!(user.username.as_str(), "makano");
 
     let result = pam.pam_authenticate_auto("locked");
     assert!(matches!(result, Err(PamError::AccountLocked)));
@@ -849,7 +856,7 @@ mod tests {
   #[test]
   fn shadow_entry_expiry_checks() {
     let entry = ShadowEntry {
-      username: "test".to_string(),
+      username: "test".to_ustr(),
       password_hash: "$6$salt$hash".to_string(),
       last_changed: Some(1),
       min_days: Some(0),

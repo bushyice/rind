@@ -6,9 +6,14 @@ use std::{
 
 use once_cell::sync::Lazy;
 
-use crate::{error::CoreError, user::UserStoreShared};
+use crate::{
+  error::CoreError,
+  types::{ToUstr, Ustr},
+  user::UserStoreShared,
+};
 
-static PERM_REGISTRY: Lazy<Mutex<HashMap<u16, String>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static PERM_REGISTRY: Lazy<Mutex<HashMap<u16, Ustr>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+static NAME_REGISTRY: Lazy<Mutex<HashMap<Ustr, u16>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub trait PermissionChecker<T> {
   fn check(&self, store: &PermissionStore, item: T) -> bool;
@@ -18,18 +23,20 @@ pub trait PermissionChecker<T> {
 pub struct PermissionId(pub u16);
 
 impl PermissionId {
-  pub fn new(name: impl Into<String>, id: u16) -> Result<Self, CoreError> {
+  pub fn new(name: impl Into<Ustr>, id: u16) -> Result<Self, CoreError> {
     let name = name.into();
     let mut reg = PERM_REGISTRY.lock().map_err(CoreError::custom)?;
+    let mut regn = NAME_REGISTRY.lock().map_err(CoreError::custom)?;
 
     if let Some(name) = reg.get(&id) {
       return Err(CoreError::DuplicatePermissions {
         id,
-        name: name.clone(),
+        name: name.to_string(),
       });
     }
 
-    reg.insert(id, name);
+    reg.insert(id, name.clone());
+    regn.insert(name, id);
 
     Ok(Self(id))
   }
@@ -47,6 +54,9 @@ pub struct PermissionStoreInner {
   overlay_uid_revokes: HashMap<u32, HashSet<u16>>,
   overlay_gid_grants: HashMap<u32, HashSet<u16>>,
   overlay_gid_revokes: HashMap<u32, HashSet<u16>>,
+
+  links: HashMap<u16, HashSet<u16>>,
+  groups: HashMap<u16, Ustr>,
 }
 
 #[derive(Default, Clone)]
@@ -57,7 +67,7 @@ pub enum PermissionExpr {
   Any(Vec<PermissionExpr>),
   Exact(Vec<PermissionExpr>),
 
-  Group(String),
+  Group(Ustr),
   Perm(PermissionId),
 }
 
@@ -69,6 +79,12 @@ impl From<PermissionId> for PermissionExpr {
 
 impl From<String> for PermissionExpr {
   fn from(value: String) -> Self {
+    Self::Group(value.to_ustr())
+  }
+}
+
+impl From<Ustr> for PermissionExpr {
+  fn from(value: Ustr) -> Self {
     Self::Group(value)
   }
 }
@@ -103,6 +119,12 @@ impl PermissionStore {
 
     let groups = self.users.groups_for(user);
 
+    if let Some(gs) = inner.groups.get(&perm.0) {
+      if groups.contains(gs) {
+        return true;
+      }
+    }
+
     let revoked = inner
       .overlay_uid_revokes
       .get(&uid)
@@ -112,7 +134,7 @@ impl PermissionStore {
       return false;
     }
 
-    user.permissions.contains(&perm.0)
+    (user.permissions.contains(&perm.0)
       || inner
         .overlay_uid_grants
         .get(&uid)
@@ -124,6 +146,10 @@ impl PermissionStore {
           .group_by_name(x)
           .map(|x| self.group_has(x.gid, perm))
           .unwrap_or(false)
+      }))
+      || inner.links.get(&perm.0).cloned().map_or(false, |x| {
+        drop(inner);
+        x.iter().any(|x| self.user_has(uid, (*x).into()))
       })
   }
 
@@ -142,7 +168,7 @@ impl PermissionStore {
     self.eval_expr(uid, expr, &groups)
   }
 
-  fn eval_expr(&self, uid: u32, expr: &PermissionExpr, groups: &Vec<String>) -> bool {
+  fn eval_expr(&self, uid: u32, expr: &PermissionExpr, groups: &Vec<Ustr>) -> bool {
     match expr {
       PermissionExpr::All => true,
 
@@ -154,6 +180,14 @@ impl PermissionStore {
 
       PermissionExpr::Exact(exprs) => exprs.iter().all(|e| self.eval_expr(uid, e, groups)),
     }
+  }
+
+  pub fn from_name(&self, name: &Ustr) -> Option<PermissionId> {
+    if name.as_str() == "any" {
+      return Some(PermissionId(0));
+    }
+    let regn = NAME_REGISTRY.lock().expect("permission store lock");
+    regn.get(name).map(|x| PermissionId(*x))
   }
 
   pub fn group_has(&self, gid: u32, perm: PermissionId) -> bool {
@@ -172,12 +206,34 @@ impl PermissionStore {
       return false;
     }
 
-    group.permissions.contains(&perm.0)
+    (group.permissions.contains(&perm.0)
       || inner
         .overlay_gid_grants
         .get(&gid)
         .map(|x| x.contains(&perm.0))
-        .unwrap_or(false)
+        .unwrap_or(false))
+      || inner.links.get(&perm.0).cloned().map_or(false, |x| {
+        drop(inner);
+        x.iter().any(|x| self.group_has(gid, (*x).into()))
+      })
+  }
+
+  pub fn link(&self, perm: u16, parent: u16) {
+    let mut inner = self.inner.write().expect("permission store lock");
+
+    if let Some(k) = inner.links.get(&parent) {
+      if k.contains(&perm) {
+        return;
+      }
+    }
+
+    inner.links.entry(perm).or_default().insert(parent);
+  }
+
+  pub fn or_group(&self, perm: u16, group: Ustr) {
+    let mut inner = self.inner.write().expect("permission store lock");
+
+    inner.groups.insert(perm, group);
   }
 
   pub fn grant_user(&self, uid: u32, perm: PermissionId) {
@@ -248,18 +304,18 @@ impl PermissionStore {
     )
   }
 
-  pub fn new_perm(&self, name: impl Into<String>, id: u16) -> Result<PermissionId, CoreError> {
+  pub fn new_perm(&self, name: impl Into<Ustr>, id: u16) -> Result<PermissionId, CoreError> {
     PermissionId::new(name, id)
   }
 
-  pub fn reg_perm(&self, perm: PermissionId, name: impl Into<String>) -> Result<&Self, CoreError> {
+  pub fn reg_perm(&self, perm: PermissionId, name: impl Into<Ustr>) -> Result<&Self, CoreError> {
     let id = perm.0;
     let mut reg = PERM_REGISTRY.lock().map_err(CoreError::custom)?;
 
     if let Some(name) = reg.get(&id) {
       return Err(CoreError::DuplicatePermissions {
         id,
-        name: name.clone(),
+        name: name.to_string(),
       });
     }
 

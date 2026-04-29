@@ -11,7 +11,7 @@ use nix::sys::socket::{
 use rind_core::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::flow::{FlowItem, StateMachine, Trigger};
+use crate::flow::{FlowItem, FlowRuntimePayload, StateMachine, Trigger};
 use crate::permissions::PERM_SYSTEM_SERVICES;
 use crate::prelude::{SocketActivation, VariableHeap, trigger_events};
 use rind_ipc::Message;
@@ -32,7 +32,7 @@ pub enum SocketServiceLifecycle {
   Owned,
 }
 
-#[model(meta_name = name, meta_fields(name, listen, r#type, owner, start_on, lifecycle, trigger, stop_on, on_start, on_stop, on_data), derive_metadata(Debug, Clone))]
+#[model(meta_name = name, meta_fields(name, listen, r#type, owner, start_on, lifecycle, trigger, stop_on, managed_by, on_start, on_stop, on_data, permissions), derive_metadata(Debug, Clone))]
 pub struct Socket {
   pub name: Ustr,
   pub listen: String,
@@ -50,6 +50,10 @@ pub struct Socket {
   pub on_stop: Option<Vec<Trigger>>,
   #[serde(default)]
   pub lifecycle: SocketServiceLifecycle,
+
+  #[serde(rename = "managed-by")]
+  pub managed_by: Option<Vec<Ustr>>,
+  pub permissions: Option<Vec<Ustr>>,
 
   pub fd: RawFd,
   pub active: bool,
@@ -542,12 +546,33 @@ impl Runtime for SocketRuntime {
         let socket = ctx.registry.as_one::<Socket>("units", name.clone())?;
         ctx.resources.pause(fd);
 
+        let pm = ctx
+          .registry
+          .singleton::<PermissionStore>(PermissionStore::KEY);
+
         log.log(
           LogLevel::Trace,
           "sockets",
           "socket accessed",
           [("name".to_string(), name.to_string())].into(),
         );
+
+        if let Some(ref permissions) = socket.metadata.permissions
+          && let Some(pm) = pm
+        {
+          let Ok(cred) = get_peer_cred(fd) else {
+            self.clear_socket(socket);
+            return Ok(None);
+          };
+
+          if !permissions
+            .iter()
+            .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(cred.uid, x)))
+          {
+            self.clear_socket(socket);
+            return Ok(None);
+          }
+        }
 
         if let Some(owner) = socket.metadata.owner.clone() {
           self.paused.entry(owner.clone()).or_default().push(fd);
@@ -587,7 +612,7 @@ impl Runtime for SocketRuntime {
 }
 
 fn ipc_owner_has_access(_owner: &Ustr, _user: &UserRecord) -> bool {
-  true
+  false
 }
 
 pub fn handle_ipc_start_socket(
@@ -615,10 +640,16 @@ pub fn handle_ipc_start_socket(
   let can_manage = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
     true
   } else if let (Some(user), Some(sock)) = (caller, sock.as_ref()) {
-    sock
-      .owner
-      .as_ref()
-      .map_or(false, |owner| ipc_owner_has_access(owner, user))
+    if let Some(ref perms) = sock.managed_by {
+      perms
+        .iter()
+        .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(uid, x)))
+    } else {
+      sock
+        .owner
+        .as_ref()
+        .map_or(false, |owner| ipc_owner_has_access(owner, user))
+    }
   } else {
     false
   };
@@ -637,7 +668,9 @@ pub fn handle_ipc_start_socket(
     let _ = dispatch.dispatch(
       "flow",
       "set_state",
-      rpayload!({ "name": "rind@active", "payload": payload.name.clone() }),
+      FlowRuntimePayload::new("rind@active")
+        .payload(payload.name.clone())
+        .into(),
     );
   }
 
@@ -669,10 +702,16 @@ pub fn handle_ipc_stop_socket(
   let can_manage = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
     true
   } else if let (Some(user), Some(sock)) = (caller, sock.as_ref()) {
-    sock
-      .owner
-      .as_ref()
-      .map_or(false, |owner| ipc_owner_has_access(owner, user))
+    if let Some(ref perms) = sock.managed_by {
+      perms
+        .iter()
+        .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(uid, x)))
+    } else {
+      sock
+        .owner
+        .as_ref()
+        .map_or(false, |owner| ipc_owner_has_access(owner, user))
+    }
   } else {
     false
   };
@@ -691,7 +730,9 @@ pub fn handle_ipc_stop_socket(
     let _ = dispatch.dispatch(
       "flow",
       "remove_state",
-      rpayload!({ "name": "rind@active", "payload": payload.name.clone() }),
+      FlowRuntimePayload::new("rind@active")
+        .payload(payload.name.clone())
+        .into(),
     );
   }
 

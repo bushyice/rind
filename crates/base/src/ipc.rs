@@ -1,11 +1,9 @@
-use libc::{SO_PEERCRED, SOL_SOCKET, getsockopt, ucred};
 use rind_ipc::payloads::ListPayload;
 use rind_ipc::recv::IpcSourcemap;
 use rind_ipc::ser::{NetworkStatusSerialized, SignalSerialized, SocketSerialized, StateSerialized};
 use rind_ipc::{Message, MessageType};
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 
@@ -644,29 +642,6 @@ impl Runtime for IpcRuntime {
   }
 }
 
-pub fn get_peer_cred(stream: &UnixStream) -> std::io::Result<ucred> {
-  let fd = stream.as_raw_fd();
-
-  let mut cred: ucred = unsafe { std::mem::zeroed() };
-  let mut len = std::mem::size_of::<ucred>() as libc::socklen_t;
-
-  let ret = unsafe {
-    getsockopt(
-      fd,
-      SOL_SOCKET,
-      SO_PEERCRED,
-      &mut cred as *mut _ as *mut _,
-      &mut len,
-    )
-  };
-
-  if ret == -1 {
-    return Err(std::io::Error::last_os_error());
-  }
-
-  Ok(cred)
-}
-
 use rind_core::notifier::Notifier;
 
 fn handle_client_connection(
@@ -674,7 +649,7 @@ fn handle_client_connection(
   parent_tx: Sender<IpcRequest>,
   notifier: Option<Notifier>,
 ) {
-  let cred = get_peer_cred(&stream).expect("failed to get cred");
+  let cred = get_peer_cred_stream(&stream).expect("failed to get cred");
   loop {
     let mut len_buf = [0u8; 4];
     if stream.read_exact(&mut len_buf).is_err() {

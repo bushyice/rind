@@ -1,5 +1,7 @@
-use std::collections::HashMap;
+use libc::{SO_PEERCRED, SOL_SOCKET, getsockopt, ucred};
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::{collections::HashMap, os::fd::AsRawFd};
 
 use crate::types::Ustr;
 
@@ -45,4 +47,29 @@ pub fn normalize_uaddr(addr: impl Into<Ustr>, prefix: &str) -> Ustr {
   } else {
     addr.clone()
   }
+}
+
+pub fn get_peer_cred_stream(stream: &UnixStream) -> std::io::Result<ucred> {
+  get_peer_cred(stream.as_raw_fd())
+}
+
+pub fn get_peer_cred(fd: i32) -> std::io::Result<ucred> {
+  let mut cred: ucred = unsafe { std::mem::zeroed() };
+  let mut len = std::mem::size_of::<ucred>() as libc::socklen_t;
+
+  let ret = unsafe {
+    getsockopt(
+      fd,
+      SOL_SOCKET,
+      SO_PEERCRED,
+      &mut cred as *mut _ as *mut _,
+      &mut len,
+    )
+  };
+
+  if ret == -1 {
+    return Err(std::io::Error::last_os_error());
+  }
+
+  Ok(cred)
 }

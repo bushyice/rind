@@ -241,7 +241,7 @@ pub struct State {
   pub auto_payload: Option<AutoPayloadConfig>,
   pub subscribers: Option<Vec<TransportMethod>>,
   pub broadcast: Option<Vec<Ustr>>,
-  pub permissions: Option<Vec<u16>>,
+  pub permissions: Option<Vec<Ustr>>,
 }
 
 #[model(
@@ -256,7 +256,7 @@ pub struct Signal {
   pub branch: Option<Vec<Ustr>>,
   pub subscribers: Option<Vec<TransportMethod>>,
   pub broadcast: Option<Vec<Ustr>>,
-  pub permissions: Option<Vec<u16>>,
+  pub permissions: Option<Vec<Ustr>>,
 }
 
 #[derive(Clone)]
@@ -330,12 +330,15 @@ impl FlowRuntime {
   ) {
     if Self::transport_id(subscriber) == "uds" {
       // println!("{:?} {:?}", subscriber, subscriber.get_permissions());
+      let payload = RuntimePayload::default().insert("endpoint", endpoint.to_ustr());
       let _ = dispatch.dispatch(
         "transport",
         "setup_uds",
-        RuntimePayload::default()
-          .insert("endpoint", endpoint.to_ustr())
-          .insert("permissions", subscriber.get_permissions()),
+        if let Some(perms) = subscriber.get_permissions() {
+          payload.insert("permissions", perms)
+        } else {
+          payload
+        },
       );
     }
   }
@@ -1133,13 +1136,13 @@ impl<'a> FlowRuntimePayload<'a> {
     }
   }
 
-  pub fn payload(mut self, v: serde_json::Value) -> Self {
-    self.payload = Some(v);
+  pub fn payload(mut self, v: impl Into<serde_json::Value>) -> Self {
+    self.payload = Some(v.into());
     self
   }
 
-  pub fn filter(mut self, v: serde_json::Value) -> Self {
-    self.filter = Some(v);
+  pub fn filter(mut self, v: impl Into<serde_json::Value>) -> Self {
+    self.filter = Some(v.into());
     self
   }
 }

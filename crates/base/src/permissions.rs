@@ -1,7 +1,10 @@
 // Permissions have partially been impl'd BUT-
 // - kinda lacks proper permission validation because each module/concept has to handle it separately
 
-use rind_core::prelude::{Model, NamedItem, PermissionId, model};
+use rind_core::{
+  prelude::{Model, NamedItem, PermissionId, model},
+  types::Ustr,
+};
 
 pub static PERM_SYSTEM_SERVICES: PermissionId = PermissionId(1000);
 pub static PERM_LOGIN: PermissionId = PermissionId(1001);
@@ -15,6 +18,8 @@ pub static PERM_NETWORK: PermissionId = PermissionId(1003);
   )
 )]
 pub struct Permission {
-  pub name: String,
+  pub name: Ustr,
   pub id: u16,
+  pub links: Option<Vec<u16>>,
+  pub group: Option<Ustr>,
 }

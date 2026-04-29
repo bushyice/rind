@@ -1,22 +1,20 @@
-/// mostly by: GPT-5 Mini
 use std::{
   collections::BTreeSet,
   collections::HashMap,
   ffi::CString,
   fs,
-  io::ErrorKind,
+  io::{Read, Seek, SeekFrom},
   path::{Path, PathBuf},
   process::{exit, Command},
 };
 
 use std::os::unix::fs::MetadataExt;
-use std::os::unix::fs::PermissionsExt;
 
-use ext4_lwext4::{mkfs, Ext4Fs, FileBlockDevice, MkfsOptions, OpenFlags};
-use fs_extra::dir::CopyOptions;
-use nix::sys::stat::{makedev, mknod, Mode, SFlag};
+use ext4_lwext4::{Ext4Fs, FileBlockDevice, OpenFlags};
+use flate2::read::GzDecoder;
 use reqwest::blocking::get;
 use serde::Deserialize;
+use xz2::read::XzDecoder;
 
 fn set_ext4_mtime(target_path: &str, mtime: u64) {
   let mtime = if mtime > u32::MAX as u64 {
@@ -24,31 +22,27 @@ fn set_ext4_mtime(target_path: &str, mtime: u64) {
   } else {
     mtime as u32
   };
-
-  // ext4-lwext4 keeps an internal mountpoint table (/mp0/, /mp1/, ...).
-  // We don't have access to the selected mountpoint from the safe wrapper,
-  // so probe a small range and stop on first success.
   for mp_idx in 0..16 {
     let full_path = format!("/mp{}{}", mp_idx, target_path);
     let Ok(c_path) = CString::new(full_path) else {
       continue;
     };
-
-    let rc = unsafe { ext4_lwext4_sys::ext4_mtime_set(c_path.as_ptr(), mtime) };
-    if rc == 0 {
+    if unsafe { ext4_lwext4_sys::ext4_mtime_set(c_path.as_ptr(), mtime) } == 0 {
       return;
     }
   }
-
-  eprintln!(
-    "[!] Warning: failed to set ext4 mtime for {} (ts={})",
-    target_path, mtime
-  );
 }
 
 #[derive(Debug, Deserialize)]
 struct RinbConfig {
   profile: HashMap<String, Profile>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum UserGroup {
+  Simple(String),
+  Detailed { gid: u32, name: String },
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,7 +53,7 @@ struct UserConfig {
   gid: u32,
   home: String,
   shell: String,
-  groups: Option<Vec<String>>,
+  groups: Option<Vec<UserGroup>>,
   env: Option<EnvConfig>,
 }
 
@@ -92,20 +86,21 @@ impl EnvConfig {
 struct Profile {
   build_command: Option<String>,
   binary_target: Option<String>,
-  bins_dir: Option<String>, // "/bin" or "/usr/bin"
+  bins_dir: Option<String>,
   binaries: Option<Vec<String>>,
-  files: Option<Vec<String>>, // "src:dst"
+  files: Option<Vec<String>>,
   libs: Option<Vec<String>>,
-  install: Option<Vec<String>>, // "url" or "alias:url"
-  disk_mode: Option<String>,    // "cpio" or "image"
-  linux_image: Option<String>,  // e.g., "bzImage:https://..."
+  install: Option<Vec<String>>,
+  // disk_mode: Option<String>,
+  disk_size: Option<u64>,
+  linux_image: Option<String>,
   run_options: Option<Vec<String>>,
   qemu_options: Option<QemuOptions>,
   nodes: Option<Vec<NodeConfig>>,
   busybox_url: Option<String>,
   busybox_applets: Option<Vec<String>>,
-  symlinks: Option<Vec<String>>, // "target:link"
-  ldd_bins: Option<Vec<String>>, // absolute binary paths in rootfs
+  symlinks: Option<Vec<String>>,
+  ldd_bins: Option<Vec<String>>,
   #[serde(alias = "root_envs")]
   root_env: Option<EnvConfig>,
   user: Option<Vec<UserConfig>>,
@@ -140,8 +135,7 @@ fn render_env_lines(map: &HashMap<String, String>) -> String {
   keys.sort();
   let mut out = String::new();
   for k in keys {
-    let v = map.get(k).unwrap();
-    out.push_str(&format!("{k}={v}\n"));
+    out.push_str(&format!("{}={}\n", k, map.get(k).unwrap()));
   }
   out
 }
@@ -154,179 +148,246 @@ fn cached_download(url: &str, name: Option<&str>) -> PathBuf {
   };
   let path = artifact_path().join(filename);
   if path.exists() {
-    println!("[*] Using cached: {}", filename);
+    println!("[*] Using cached {}", path.display());
     return path;
   }
-
-  println!("[*] Downloading: {} into {}", url, filename);
   fs::create_dir_all(artifact_path()).unwrap();
+  println!("[*] Downloading {url} -> {}", path.display());
   let resp = get(url).unwrap().bytes().unwrap();
   fs::write(&path, &resp).unwrap();
   path
 }
 
 fn parse_install_entry(entry: &str) -> (String, String) {
-  if entry.starts_with("http://") || entry.starts_with("https://") {
+  if entry.starts_with("http") {
     let alias = entry
       .split('/')
       .last()
-      .unwrap_or(entry)
-      .trim_end_matches(".tar.gz")
-      .trim_end_matches(".tgz")
-      .trim_end_matches(".tar.xz")
-      .trim_end_matches(".tar.zst")
-      .trim_end_matches(".pkg.tar.zst")
-      .trim_end_matches(".pkg.tar.xz")
-      .trim_end_matches(".pkg.tar.gz")
-      .trim_end_matches(".tar")
+      .unwrap()
+      .split('.')
+      .next()
+      .unwrap()
       .to_string();
     return (alias, entry.to_string());
   }
-
-  let Some((alias, url)) = entry.split_once(':') else {
-    panic!("Invalid install entry. Use url or alias:url. Got: {entry}");
-  };
-  if !(url.starts_with("http://") || url.starts_with("https://")) {
-    panic!("Invalid install url in entry: {entry}");
-  }
+  let (alias, url) = entry.split_once(':').expect("Invalid install entry");
   (alias.to_string(), url.to_string())
 }
 
-fn remove_existing(path: &Path) -> std::io::Result<()> {
-  match fs::symlink_metadata(path) {
-    Ok(meta) => {
-      if meta.file_type().is_dir() {
-        fs::remove_dir_all(path)
-      } else {
-        fs::remove_file(path)
-      }
+fn read_ext4_text_file(fs_ext4: &mut Ext4Fs, path: &str) -> String {
+  if !fs_ext4.exists(path) {
+    return String::new();
+  }
+  let mut out = String::new();
+  if let Ok(mut f) = fs_ext4.open(path, OpenFlags::READ) {
+    f.read_to_string(&mut out).ok();
+  }
+  out
+}
+
+fn write_ext4_text_file(fs_ext4: &mut Ext4Fs, path: &str, content: &str) {
+  if let Some(parent) = Path::new(path).parent() {
+    let parent = parent.to_str().unwrap();
+    if !parent.is_empty() && !fs_ext4.exists(parent) {
+      fs_ext4.mkdir(parent, 0o755).ok();
     }
-    Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
-    Err(e) => Err(e),
+  }
+  if let Ok(mut f) = fs_ext4.open(
+    path,
+    OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+  ) {
+    println!("[*] Saving extraction into the lock file");
+    f.write_all(content.as_bytes()).ok();
   }
 }
 
-fn extract_from_archive(archive: &Path, member: &str, dst: &Path) {
-  let member = member.trim_start_matches('/');
-  let unpack_root = artifact_path().join("unpack");
-  let archive_key = archive
-    .file_name()
-    .unwrap()
-    .to_string_lossy()
-    .replace('/', "_");
-  let unpack_dir = unpack_root.join(&archive_key);
-  let stamp = unpack_dir.join(".unpacked_from");
-
-  let archive_id = format!(
-    "{}:{}",
-    archive.display(),
-    fs::metadata(archive)
-      .and_then(|m| m.modified())
-      .map(|m| format!("{m:?}"))
-      .unwrap_or_default()
-  );
-
-  let mut needs_unpack = true;
-  if unpack_dir.exists() {
-    if let Ok(prev) = fs::read_to_string(&stamp) {
-      if prev == archive_id {
-        needs_unpack = false;
-      }
+fn read_builder_lock(fs_ext4: &mut Ext4Fs) -> HashMap<String, u64> {
+  let mut map = HashMap::new();
+  for line in read_ext4_text_file(fs_ext4, "/etc/builder.lock").lines() {
+    let Some((key, value)) = line.rsplit_once('\t') else {
+      continue;
+    };
+    if let Ok(ts) = value.parse::<u64>() {
+      map.insert(key.to_string(), ts);
     }
   }
+  map
+}
 
-  if needs_unpack {
-    remove_existing(&unpack_dir).ok();
-    fs::create_dir_all(&unpack_dir).unwrap();
-
-    let status = Command::new("tar")
-      .arg("-xf")
-      .arg(archive)
-      .arg("-C")
-      .arg(&unpack_dir)
-      .status()
-      .unwrap();
-    if !status.success() {
-      panic!("Failed to unpack archive {}", archive.display());
-    }
-
-    fs::write(&stamp, archive_id).unwrap();
+fn write_builder_lock(fs_ext4: &mut Ext4Fs, lock: &HashMap<String, u64>) {
+  let mut keys: Vec<&String> = lock.keys().collect();
+  keys.sort();
+  let mut content = String::new();
+  for key in keys {
+    content.push_str(&format!("{key}\t{}\n", lock.get(key).unwrap()));
   }
+  write_ext4_text_file(fs_ext4, "/etc/builder.lock", &content);
+}
 
-  let extracted = unpack_dir.join(member);
-  if !extracted.exists() {
-    panic!(
-      "Archive member '{member}' not found in unpacked archive {}",
-      archive.display()
-    );
-  }
-
-  if let Some(parent) = dst.parent() {
-    fs::create_dir_all(parent).unwrap();
-  };
-
-  // remove_existing(dst).ok();
-
-  // Preserve mode/timestamps/symlinks/hardlinks while avoiding ownership failures as non-root.
-  let status = Command::new("cp")
-    .arg("-a")
-    .arg("-r")
-    .arg("--no-preserve=ownership")
-    .arg("-T")
-    .arg(&extracted)
-    .arg(dst)
-    .status()
-    .unwrap();
-
-  if !status.success() {
-    panic!(
-      "Failed to copy extracted member '{}' to {}",
+fn extract_archive_to_ext4(
+  fs_ext4: &mut Ext4Fs,
+  archive: &Path,
+  member: &str,
+  dst_root: &str,
+  lock: &mut HashMap<String, u64>,
+) {
+  let archive_mtime = fs::metadata(archive)
+    .ok()
+    .and_then(|m| m.modified().ok())
+    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+    .map(|d| d.as_secs())
+    .unwrap_or(0);
+  let lock_key = format!("{}\t{}\t{}", archive.display(), member, dst_root);
+  if lock.get(&lock_key).copied() == Some(archive_mtime) {
+    println!(
+      "[*] Skipping extract (up-to-date): {} [{} -> {}]",
+      archive.display(),
       member,
-      dst.display()
+      dst_root
     );
-  }
-}
-
-fn apply_symlinks(profile: &Profile, rootfs: &Path) {
-  let Some(symlinks) = &profile.symlinks else {
     return;
+  }
+
+  let mut file = fs::File::open(archive).expect("Failed to open archive");
+  let mut magic = [0u8; 4];
+  let _ = file.read(&mut magic);
+  file.seek(SeekFrom::Start(0)).unwrap();
+
+  let reader: Box<dyn Read> = if magic[0..2] == [0x1f, 0x8b] {
+    Box::new(GzDecoder::new(file))
+  } else if magic[0..4] == [0xfd, 0x37, 0x7a, 0x58] {
+    Box::new(XzDecoder::new(file))
+  } else if magic[0..4] == [0x28, 0xb5, 0x2f, 0xfd] {
+    Box::new(zstd::stream::read::Decoder::new(file).expect("Failed to create zstd decoder"))
+  } else {
+    Box::new(file)
   };
 
-  for mapping in symlinks {
-    let parts: Vec<&str> = mapping.splitn(2, ':').collect();
-    if parts.len() != 2 {
-      eprintln!("Invalid symlink mapping: {}", mapping);
+  println!("[*] Extracting: {member} from {}", archive.display());
+
+  let mut archive = tar::Archive::new(reader);
+  let member = member.trim_start_matches('/');
+  let dst_root = dst_root.trim_end_matches('/');
+
+  for entry in archive.entries().expect("Failed to read archive entries") {
+    let mut entry = entry.expect("Failed to read entry");
+    let path = entry
+      .path()
+      .expect("Failed to get entry path")
+      .to_path_buf();
+    let path_str = path.to_str().unwrap();
+    if !path_str.starts_with(member) {
       continue;
     }
+    let rel_path = &path_str[member.len()..].trim_start_matches('/');
+    let target_path = if rel_path.is_empty() {
+      dst_root.to_string()
+    } else {
+      format!("{}/{}", dst_root, rel_path)
+    };
 
-    let target = parts[0]; //rootfs.join(parts[0].trim_start_matches('/'));
-    let link = rootfs.join(parts[1].trim_start_matches('/'));
-    if let Some(parent) = link.parent() {
-      fs::create_dir_all(parent).unwrap();
+    if entry.header().entry_type().is_dir() {
+      if !fs_ext4.exists(&target_path) {
+        fs_ext4.mkdir(&target_path, 0o755).ok();
+      }
+    } else if entry.header().entry_type().is_file() {
+      if let Some(parent) = Path::new(&target_path).parent() {
+        if !fs_ext4.exists(parent.to_str().unwrap()) {
+          fs_ext4.mkdir(parent.to_str().unwrap(), 0o755).ok();
+        }
+      }
+      let mut content = Vec::new();
+      entry.read_to_end(&mut content).ok();
+      if let Ok(mut f) = fs_ext4.open(
+        &target_path,
+        OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+      ) {
+        f.write_all(&content).ok();
+        fs_ext4
+          .set_permissions(&target_path, entry.header().mode().unwrap_or(0o644))
+          .ok();
+        if let Ok(mtime) = entry.header().mtime() {
+          set_ext4_mtime(&target_path, mtime);
+        }
+      }
+    } else if entry.header().entry_type().is_symlink() {
+      if let Ok(Some(link)) = entry.link_name() {
+        fs_ext4.symlink(link.to_str().unwrap(), &target_path).ok();
+      }
     }
+  }
+  lock.insert(lock_key, archive_mtime);
+}
 
-    if let Err(e) = remove_existing(&link) {
-      eprintln!("Failed to reset existing path {}: {e}", link.display());
-      continue;
+fn copy_host_path_to_ext4(
+  fs_ext4: &mut Ext4Fs,
+  src: &Path,
+  dst: &str,
+  disk_perms: &HashMap<String, (u32, u32, u32)>,
+) {
+  let meta = match fs::symlink_metadata(src) {
+    Ok(m) => m,
+    Err(_) => return,
+  };
+  if meta.file_type().is_symlink() {
+    fs_ext4
+      .symlink(fs::read_link(src).unwrap().to_str().unwrap(), dst)
+      .ok();
+    return;
+  }
+  if meta.is_dir() {
+    if !fs_ext4.exists(dst) {
+      fs_ext4.mkdir(dst, 0o755).ok();
     }
-
-    std::os::unix::fs::symlink(&target, &link).unwrap();
-    println!("[*] Symlink: {} -> {}", link.display(), target);
+    for entry in fs::read_dir(src).unwrap() {
+      let entry = entry.unwrap();
+      copy_host_path_to_ext4(
+        fs_ext4,
+        &entry.path(),
+        &format!(
+          "{}/{}",
+          dst.trim_end_matches('/'),
+          entry.file_name().to_str().unwrap()
+        ),
+        disk_perms,
+      );
+    }
+    return;
+  }
+  let src_mtime = meta
+    .modified()
+    .unwrap()
+    .duration_since(std::time::UNIX_EPOCH)
+    .unwrap()
+    .as_secs();
+  if fs_ext4.exists(dst) && src_mtime <= fs_ext4.metadata(dst).unwrap().mtime {
+    return;
+  }
+  if let Ok(mut f) = fs_ext4.open(
+    dst,
+    OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+  ) {
+    println!("[*] Updating file: {dst}");
+    f.write_all(&fs::read(src).unwrap()).ok();
+    set_ext4_mtime(dst, src_mtime);
+    let (uid, gid, mode) = match disk_perms.get(dst) {
+      Some((u, g, m)) => {
+        println!("  -> perm override {u}, {g}, {m}");
+        (*u, *g, *m)
+      }
+      None => (0, 0, meta.mode()),
+    };
+    fs_ext4.set_owner(dst, uid, gid).ok();
+    fs_ext4.set_permissions(dst, mode).ok();
   }
 }
 
 fn parse_ldd_output(line: &str) -> Option<String> {
   let trimmed = line.trim();
-  if trimmed.is_empty()
-    || trimmed.starts_with("linux-vdso.so")
-    || trimmed.contains("statically linked")
-    || trimmed.contains("not a dynamic executable")
-    || trimmed.contains("=> not found")
-  {
+  if trimmed.is_empty() || trimmed.contains("statically linked") || trimmed.contains("not found") {
     return None;
   }
-
-  if let Some((_left, right)) = trimmed.split_once("=>") {
+  if let Some((_, right)) = trimmed.split_once("=>") {
     let rhs = right.trim();
     if let Some(path) = rhs.split_whitespace().next() {
       if path.starts_with('/') {
@@ -335,502 +396,61 @@ fn parse_ldd_output(line: &str) -> Option<String> {
     }
     return None;
   }
-
-  if let Some(path) = trimmed.split_whitespace().next() {
-    if path.starts_with('/') {
-      return Some(path.to_string());
-    }
+  let path = trimmed.split_whitespace().next()?;
+  if path.starts_with('/') {
+    Some(path.to_string())
+  } else {
+    None
   }
-
-  None
 }
 
-fn copy_host_path_into_rootfs(src: &Path, rootfs: &Path) {
+fn copy_host_path_into_ext4(
+  fs_ext4: &mut Ext4Fs,
+  src: &Path,
+  disk_perms: &HashMap<String, (u32, u32, u32)>,
+) {
   if !src.is_absolute() {
     return;
   }
   let meta = match fs::symlink_metadata(src) {
-    Ok(meta) => meta,
+    Ok(m) => m,
     Err(_) => return,
   };
-  let dst = rootfs.join(src.strip_prefix("/").unwrap());
-  if let Some(parent) = dst.parent() {
-    fs::create_dir_all(parent).unwrap();
-  }
-
+  let dst = src.to_str().unwrap();
   if meta.file_type().is_symlink() {
-    let target = fs::read_link(src).unwrap();
-    remove_existing(&dst).ok();
-    std::os::unix::fs::symlink(&target, &dst).unwrap();
-    let resolved = if target.is_absolute() {
-      target
-    } else {
-      src.parent().unwrap().join(target)
-    };
-    copy_host_path_into_rootfs(&resolved, rootfs);
+    let link = fs::read_link(src).unwrap();
+    fs_ext4.symlink(link.to_str().unwrap(), dst).ok();
+    copy_host_path_into_ext4(
+      fs_ext4,
+      &if link.is_absolute() {
+        link
+      } else {
+        src.parent().unwrap().join(link)
+      },
+      disk_perms,
+    );
     return;
   }
-
-  let should_copy = !dst.exists()
-    || fs::metadata(src).unwrap().modified().unwrap()
-      > fs::metadata(&dst).unwrap().modified().unwrap();
-  if should_copy {
-    fs::copy(src, &dst).unwrap();
-    let mut perms = fs::metadata(src).unwrap().permissions();
-    perms.set_mode(fs::metadata(src).unwrap().permissions().mode());
-    fs::set_permissions(&dst, perms).unwrap();
-    println!("[*] Copied ldd dep: {} -> {}", src.display(), dst.display());
-  }
-}
-
-fn copy_ldd_dependencies(profile: &Profile, rootfs: &Path) {
-  let Some(bins) = &profile.ldd_bins else {
-    return;
-  };
-
-  let mut deps = BTreeSet::new();
-  for bin in bins {
-    let bin_path = rootfs.join(bin.trim_start_matches('/'));
-    if !bin_path.exists() {
-      eprintln!("[!] ldd target missing in rootfs: {}", bin_path.display());
-      continue;
-    }
-
-    let output = Command::new("ldd").arg(&bin_path).output();
-    let output = match output {
-      Ok(output) => output,
-      Err(e) => {
-        eprintln!("[!] Failed to run ldd on {}: {e}", bin_path.display());
-        continue;
-      }
-    };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{stdout}\n{stderr}");
-    for line in combined.lines() {
-      if let Some(path) = parse_ldd_output(line) {
-        deps.insert(path);
-      }
-    }
-  }
-
-  for dep in deps {
-    copy_host_path_into_rootfs(Path::new(&dep), rootfs);
-  }
+  copy_host_path_to_ext4(fs_ext4, src, dst, disk_perms);
 }
 
 fn builder_b(profile: &Profile) {
   if let Some(cmd) = &profile.build_command {
     println!("[*] Running build command: {}", cmd);
-    let status = if cfg!(target_os = "windows") {
-      Command::new("cmd").args(&["/C", cmd]).status().unwrap()
-    } else {
-      Command::new("sh").args(&["-c", cmd]).status().unwrap()
-    };
+    let status = Command::new("sh").args(&["-c", cmd]).status().unwrap();
     if !status.success() {
-      eprintln!("Build command failed");
       exit(1);
     }
   }
 }
 
-/// mostly by me
-fn prepare_rootfs(profile: &Profile, rootfs: &Path) {
-  fs::create_dir_all(rootfs).unwrap();
-  fs::create_dir_all(rootfs.join("etc")).unwrap();
-  fs::create_dir_all(rootfs.join("usr")).unwrap();
-  fs::create_dir_all(rootfs.join(configured_bins_dir(profile).trim_start_matches('/'))).unwrap();
-  fs::create_dir_all(rootfs.join("var")).unwrap();
-
-  if let Some(binaries) = &profile.binaries {
-    for bin in binaries {
-      let (bin_name, bin_dst_override): (&str, Option<String>) =
-        if let Some((left, right)) = bin.split_once(':') {
-          let left_trim = left.trim_start_matches('/');
-          if left_trim == "bin" || left_trim == "usr/bin" {
-            (right, Some(format!("/{left_trim}/{right}")))
-          } else {
-            (left, Some(right.to_string()))
-          }
-        } else {
-          (bin.as_str(), None)
-        };
-      let src = Path::new(
-        &profile
-          .binary_target
-          .clone()
-          .unwrap_or("target/x86_64-unknown-linux-musl/release".to_string()),
-      )
-      .join(bin_name);
-      let dst = if let Some(abs_path) = bin_dst_override {
-        let abs_path = if abs_path.starts_with('/') {
-          abs_path
-        } else {
-          format!("/{abs_path}")
-        };
-        rootfs.join(abs_path.trim_start_matches('/'))
-      } else if bin_name == "initd" {
-        rootfs.join(bin_name)
-      } else {
-        rootfs
-          .join(configured_bins_dir(profile).trim_start_matches('/'))
-          .join(bin_name)
-      };
-      if !dst.exists()
-        || fs::metadata(&src).unwrap().modified().unwrap()
-          > fs::metadata(&dst).unwrap().modified().unwrap()
-      {
-        println!("[*] Updating binary: {} -> {}", bin_name, dst.display());
-        if let Some(parent) = dst.parent() {
-          fs::create_dir_all(parent).unwrap();
-        }
-        fs::copy(&src, &dst).unwrap();
-      }
-    }
-  }
-
-  if let Some(libs) = &profile.libs {
-    let incl_dst = rootfs.join("usr/include");
-    let lib_dst = rootfs.join("usr/lib");
-    fs::create_dir_all(&incl_dst).unwrap();
-    fs::create_dir_all(&lib_dst).unwrap();
-
-    for lib in libs {
-      let is_so = lib.starts_with("C");
-      let parts: Vec<&str> = lib.trim_start_matches("C").splitn(3, ':').collect();
-      if parts.len() != 3 {
-        eprintln!("Invalid library mapping: {}", lib);
-        continue;
-      }
-      let libname = format!(
-        "lib{}.{}",
-        parts[0].replace("-", "_"),
-        if is_so { "so" } else { "a" }
-      );
-      let src = Path::new(
-        &profile
-          .binary_target
-          .clone()
-          .unwrap_or("target/x86_64-unknown-linux-musl/release".to_string()),
-      )
-      .join(libname.clone());
-      let dst = lib_dst.join(libname);
-
-      if !dst.exists()
-        || fs::metadata(&src).unwrap().modified().unwrap()
-          > fs::metadata(&dst).unwrap().modified().unwrap()
-      {
-        println!("[*] Updating library: {}", lib);
-
-        fs::copy(&src, &dst).unwrap();
-
-        let mit_header = "/*
- * Copyright (c) 2026 rind contributors
- *
- * This header is provided under the MIT License.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the \"Software\"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in all
- * copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
- * SOFTWARE.
- */";
-
-        cbindgen::Builder::new()
-          .with_crate(parts[2])
-          .with_language(cbindgen::Language::C)
-          .with_header(mit_header)
-          .with_pragma_once(true)
-          .with_cpp_compat(false)
-          .generate()
-          .expect("Unable to generate bindings")
-          .write_to_file(incl_dst.join(format!("{}.h", parts[1])));
-      }
-    }
-  }
-
-  if let Some(files) = &profile.files {
-    for mapping in files {
-      if mapping.starts_with('@') {
-        continue;
-      }
-
-      let parts: Vec<&str> = mapping.splitn(2, ':').collect();
-      if parts.len() != 2 {
-        eprintln!("Invalid file mapping: {}", mapping);
-        continue;
-      }
-      let src = Path::new(parts[0]);
-      if !src.exists() {
-        eprintln!("File does not exist: {}", mapping);
-        continue;
-      }
-      let dst = rootfs.join(parts[1].trim_start_matches('/'));
-
-      if !dst.exists()
-        || fs::metadata(&src).unwrap().modified().unwrap()
-          > fs::metadata(&dst).unwrap().modified().unwrap()
-      {
-        println!("[*] Updating file: {} -> {}", src.display(), dst.display());
-        fs::create_dir_all(dst.parent().unwrap()).unwrap();
-        if dst.exists() {
-          fs::remove_file(&dst).ok();
-        }
-        if src.is_dir() {
-          fs_extra::dir::copy(
-            src,
-            dst.parent().unwrap(),
-            &CopyOptions::new().overwrite(true).copy_inside(true),
-          )
-          .unwrap();
-        } else {
-          fs::copy(src, &dst).unwrap();
-        }
-      }
-    }
-  }
-
-  apply_symlinks(profile, rootfs);
-  copy_ldd_dependencies(profile, rootfs);
-}
-
-fn builder_n(profile: &Profile, rootfs: &Path) {
-  if let Some(nodes) = &profile.nodes {
-    println!("[*] Creating device nodes...");
-    for node in nodes {
-      let full_path = rootfs.join(node.path.trim_start_matches('/'));
-      if full_path.exists() {
-        println!("[*] Node exists, skipping: {}", node.path);
-        continue;
-      }
-      fs::create_dir_all(full_path.parent().unwrap()).unwrap();
-      mknod(
-        &full_path,
-        SFlag::from_bits_truncate(match node.node_type.as_str() {
-          "c" => SFlag::S_IFCHR.bits(),
-          "b" => SFlag::S_IFBLK.bits(),
-          _ => panic!("Unknown node type"),
-        }),
-        Mode::from_bits_truncate(node.mode),
-        makedev(node.major, node.minor),
-      )
-      .unwrap();
-    }
-  }
-}
-
-fn builder_i(profile: &Profile, rootfs: &Path) {
-  let mut archive_cache: HashMap<String, PathBuf> = HashMap::new();
-
-  if let Some(installs) = &profile.install {
-    for entry in installs {
-      let (alias, url) = parse_install_entry(entry);
-      let source_name = url.split('/').last().unwrap_or(&alias);
-      let cache_name = format!("{alias}__{source_name}");
-      let archive = cached_download(&url, Some(&cache_name));
-      archive_cache.insert(alias, archive);
-    }
-  }
-
-  if let Some(files) = &profile.files {
-    for mapping in files {
-      if !mapping.starts_with('@') {
-        continue;
-      }
-
-      let parts: Vec<&str> = mapping.splitn(3, ':').collect();
-      if parts.len() != 3 {
-        eprintln!(
-          "Invalid archive file mapping: {} (expected @alias:member:/dst)",
-          mapping
-        );
-        continue;
-      }
-
-      let alias = parts[0].trim_start_matches('@');
-      let member = parts[1];
-      let dst = rootfs.join(parts[2].trim_start_matches('/'));
-      let Some(archive) = archive_cache.get(alias) else {
-        eprintln!(
-          "Archive alias not found for mapping '{}': {}",
-          alias, mapping
-        );
-        continue;
-      };
-      println!(
-        "[*] Extracting {} from {} -> {}",
-        member,
-        archive.display(),
-        dst.display()
-      );
-      extract_from_archive(archive, member, &dst);
-    }
-  }
-
-  if let Some(kernel_url) = &profile.linux_image {
-    let (name, url) = kernel_url
-      .split_once(":")
-      .expect("Invalid linux_image format. Expected name:url");
-    cached_download(url, Some(name));
-  }
-
-  if let Some(url) = &profile.busybox_url {
-    let bb_path = cached_download(url, None);
-
-    let bin_dir = rootfs.join(configured_bins_dir(profile).trim_start_matches('/'));
-    fs::create_dir_all(&bin_dir).unwrap();
-
-    let busybox_dst = bin_dir.join("busybox");
-    fs::copy(&bb_path, &busybox_dst).unwrap();
-
-    let mut perms = fs::metadata(&busybox_dst).unwrap().permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(&busybox_dst, perms).unwrap();
-
-    let applets = profile.busybox_applets.clone().unwrap_or(vec![
-      "sh".into(),
-      "ls".into(),
-      "cp".into(),
-      "mkdir".into(),
-      "echo".into(),
-      "cat".into(),
-      "rm".into(),
-      "ln".into(),
-    ]);
-
-    for app in &applets {
-      let link_path = bin_dir.join(app);
-      if !link_path.exists() {
-        std::os::unix::fs::symlink("busybox", link_path).unwrap();
-      }
-    }
-
-    println!(
-      "[*] BusyBox installed at /bin/busybox with applets: {:?}",
-      applets
-    );
-  }
-}
-
-fn builder_u(profile: &Profile, rootfs: &Path) {
-  let etc_dir = rootfs.join("etc");
-  fs::create_dir_all(&etc_dir).unwrap();
-  fs::create_dir_all(&rootfs.join("root")).unwrap();
-
-  let mut passwd = String::new();
-  let mut shadow = String::new();
-  let mut group_map: HashMap<String, (u32, Vec<String>)> = HashMap::new();
-
-  passwd.push_str("root:x:0:0:root:/root:/bin/sh\n");
-  shadow.push_str("root:*:19000:0:99999:7:::\n");
-  group_map.insert("root".into(), (0, vec!["root".into()]));
-  group_map.insert("wheel".into(), (10, vec!["root".into()]));
-
-  if let Some(root_env) = &profile.root_env {
-    let root_env_map = root_env.to_map();
-    fs::write(etc_dir.join(".env"), render_env_lines(&root_env_map)).unwrap();
-  }
-
-  if let Some(users) = &profile.user {
-    println!("[*] Generating user databases...");
-
-    for user in users {
-      let home_path = if user.username == "root" {
-        rootfs.join("root")
-      } else {
-        rootfs.join(user.home.trim_start_matches('/'))
-      };
-      fs::create_dir_all(&home_path).unwrap();
-
-      if let Some(env) = &user.env {
-        let env_map = env.to_map();
-        fs::write(home_path.join(".env"), render_env_lines(&env_map)).unwrap();
-      }
-
-      if user.username == "root" {
-        continue;
-      }
-
-      unsafe {
-        use std::ffi::CString;
-        use std::os::unix::ffi::OsStrExt;
-
-        let path_c = CString::new(home_path.as_os_str().as_bytes()).unwrap();
-
-        if libc::chown(path_c.as_ptr(), user.uid, user.gid) != 0 {
-          panic!("failed to chown {}", home_path.display());
-        }
-      }
-
-      passwd.push_str(&format!(
-        "{}:x:{}:{}:Linux User:{}:{}\n",
-        user.username, user.uid, user.gid, user.home, user.shell
-      ));
-
-      let hash = if let Some(pass) = &user.password {
-        sha_crypt::sha512_simple(pass, &sha_crypt::Sha512Params::new(5000).unwrap())
-          .unwrap_or("*".to_string())
-      } else {
-        "*".to_string()
-      };
-
-      shadow.push_str(&format!("{}:{}:19000:0:99999:7:::\n", user.username, hash));
-
-      let primary_group = user.username.clone();
-      group_map
-        .entry(primary_group)
-        .or_insert((user.gid, Vec::new()))
-        .1
-        .push(user.username.clone());
-
-      if let Some(groups) = &user.groups {
-        for g in groups {
-          group_map
-            .entry(g.clone())
-            .or_insert((1000, Vec::new()))
-            .1
-            .push(user.username.clone());
-        }
-      }
-    }
-  }
-
-  let mut group_str = String::new();
-  for (name, (gid, members)) in group_map {
-    group_str.push_str(&format!("{}:x:{}:{}\n", name, gid, members.join(",")));
-  }
-
-  fs::write(etc_dir.join("passwd"), passwd).unwrap();
-  fs::write(etc_dir.join("shadow"), shadow).unwrap();
-  fs::write(etc_dir.join("group"), group_str).unwrap();
-
-  let mut perms = fs::metadata(etc_dir.join("shadow")).unwrap().permissions();
-  perms.set_mode(0o600);
-  fs::set_permissions(etc_dir.join("shadow"), perms).unwrap();
-}
-
 fn parse_disk_perms(perms: &Vec<String>) -> HashMap<String, (u32, u32, u32)> {
   let mut map = HashMap::new();
   for perm in perms {
-    let parts: Vec<&str> = perm.split(":").collect();
-
+    let parts: Vec<&str> = perm.split(':').collect();
     if parts.len() < 3 {
       continue;
     }
-
     map.insert(
       parts[0].to_string(),
       (
@@ -846,255 +466,676 @@ fn parse_disk_perms(perms: &Vec<String>) -> HashMap<String, (u32, u32, u32)> {
   map
 }
 
-fn builder_d(profile: &Profile, rootfs: &Path, no_overwrite: bool) {
+fn prepare_rootfs(profile: &Profile, fs_ext4: &mut Ext4Fs) {
   let disk_perms = parse_disk_perms(profile.disk_permissions.as_ref().unwrap_or(&Vec::new()));
-  match profile.disk_mode.as_deref().unwrap_or("cpio") {
-    "cpio" => {
-      let output = artifact_path().join("rootfs.cpio.gz");
-      if output.exists() {
-        println!("[*] Updating existing initramfs");
-        fs::remove_file(&output).unwrap();
-      }
-      println!("[*] Generating initramfs from: {}", rootfs.display());
-      let status = Command::new("sh")
-        .arg("-c")
-        .arg(format!(
-          "cd {} && find . | cpio -H newc -o | gzip > ../../{}",
-          rootfs.display(),
-          output.display()
-        ))
-        .status()
-        .unwrap();
-      if !status.success() {
-        eprintln!("Failed to generate initramfs");
-        exit(1);
-      }
-    }
-    "image" => {
-      let output = artifact_path().join("rootfs.img");
-      if output.exists() {
-        println!("[*] Updating existing disk image");
-        if !no_overwrite {
-          fs::remove_file(&output).unwrap();
-        }
-      }
-
-      if !no_overwrite {
-        let size_bytes = 1024 * 1024 * 1024;
-        println!("[*] Creating ext4 disk image of size {} bytes", size_bytes);
-
-        let _ =
-          FileBlockDevice::create(&output, size_bytes).expect("Failed to create block device");
-
-        Command::new("mkfs.ext4")
-          .args(&[
-            "-F",
-            "-O",
-            "^64bit,^metadata_csum,^flex_bg,^huge_file,^dir_index,^extent",
-            "-E",
-            "lazy_itable_init=0,lazy_journal_init=0",
-            "-m",
-            "0",
-            output.to_str().unwrap(),
-          ])
-          .status()
-          .unwrap();
-      }
-
-      let mut fs = {
-        // Auto check (because there's no graceful exit)
-        let _ = Command::new("e2fsck")
-          .arg("-p")
-          .arg("-f")
-          .arg(&output)
-          .status();
-
-        let device = FileBlockDevice::open(&output).expect("Failed to open image");
-        let fs = Ext4Fs::mount(device, false).expect("Failed to mount device");
-
-        if fs.is_read_only() {
-          eprintln!(
-            "[!] ext4 image mounted read-only. Trying repair with e2fsck: {}",
-            output.display()
-          );
-          let _ = fs.umount();
-
-          let status = Command::new("e2fsck")
-            .arg("-p")
-            .arg("-f")
-            .arg(&output)
-            .status();
-
-          match status {
-            Ok(s) if s.success() => {
-              let device = FileBlockDevice::open(&output).expect("Failed to reopen image");
-              let remounted = Ext4Fs::mount(device, false).expect("Failed to remount device");
-              if remounted.is_read_only() {
-                panic!(
-                  "image still mounted read-only after fsck: {}. recreate the image with `builder d` (without x).",
-                  output.display()
-                );
-              }
-              remounted
-            }
-            Ok(s) => {
-              panic!("e2fsck failed with status {} for {}", s, output.display());
-            }
-            Err(e) => {
-              panic!(
-                "failed to run e2fsck for {}: {} (install e2fsprogs)",
-                output.display(),
-                e
-              );
-            }
-          }
-        } else {
-          fs
-        }
-      };
-
-      copy_into_ext4(&mut fs, rootfs, rootfs, &disk_perms)
-        .expect("Failed to copy rootfs recursively");
-
-      let _ = fs.umount();
-      println!("[*] Disk image created at {}", output.display());
-    }
-    other => panic!("Unknown disk_mode: {}", other),
-  };
-}
-
-fn copy_into_ext4(
-  fs: &mut Ext4Fs,
-  rootfs: &Path,
-  current: &Path,
-  disk_perms: &HashMap<String, (u32, u32, u32)>,
-) -> std::io::Result<()> {
-  let entries = match fs::read_dir(current) {
-    Ok(e) => e,
-    Err(e) => {
-      eprintln!("Failed to read {current:?}: {e}");
-      return Err(e);
-    }
-  };
-  for entry in entries {
-    let entry = entry?;
-    let path = entry.path();
-
-    let rel_path = path.strip_prefix(rootfs).unwrap();
-    let target_path = format!("/{}", rel_path.display());
-
-    let Ok(meta) = std::fs::symlink_metadata(&path) else {
-      println!("Skipping: {:?}", path);
-      continue;
-    };
-    let file_type = meta.file_type();
-    let mode = meta.mode();
-    let uid = meta.uid();
-    let gid = meta.gid();
-
-    if file_type.is_symlink() {
-      let link_target = std::fs::read_link(&path)?;
-      let link_target = link_target.to_string_lossy().to_string();
-      fs.symlink(&link_target, &target_path)
-        .expect("Failed to create symlink");
-      fs.set_owner(&target_path, uid, gid)
-        .expect("Failed to set symlink owner");
-    } else if file_type.is_dir() {
-      if !fs.exists(&target_path) {
-        fs.mkdir(&target_path, mode)
-          .expect("Failed to create directory");
-        fs.set_owner(&target_path, uid, gid)
-          .expect("Failed to set directory owner");
-        fs.set_permissions(&target_path, mode)
-          .expect("Failed to set directory mode");
-      }
-
-      copy_into_ext4(fs, rootfs, &path, &disk_perms)?;
-    } else {
-      let src_mtime = fs::metadata(&path)
-        .unwrap()
-        .modified()
-        .unwrap()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-      if fs.exists(&target_path) {
-        if src_mtime <= fs.metadata(&target_path).unwrap().mtime {
-          continue;
-        }
-        println!("Updating file: {:?}", target_path);
-      } else {
-        println!("Copying new file: {path:?} -> {target_path:?}");
-      }
-
-      let bytes = match fs::read(&path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == ErrorKind::PermissionDenied => {
-          let original_mode = mode;
-          let tmp_mode = original_mode | 0o400;
-
-          let mut perms = std::fs::metadata(&path)?.permissions();
-          perms.set_mode(tmp_mode);
-          std::fs::set_permissions(&path, perms)?;
-
-          let read_res = fs::read(&path);
-
-          let mut restore = std::fs::metadata(&path)?.permissions();
-          restore.set_mode(original_mode);
-          if let Err(err) = std::fs::set_permissions(&path, restore) {
-            eprintln!(
-              "[!] Warning: failed to restore mode on {}: {err}",
-              path.display()
-            );
-          }
-
-          read_res?
-        }
-        Err(e) => {
-          eprintln!("Failed to read {path:?}: {e}");
-          return Err(e);
-        }
-      };
-
-      let mut file = fs
-        .open(
-          &target_path,
-          OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
-        )
-        .expect("Failed to open file");
-
-      file.write_all(&bytes).expect("Failed to write file");
-      set_ext4_mtime(&target_path, src_mtime);
-
-      let (uid, gid, mode) = match disk_perms.get(&target_path) {
-        Some((uid, gid, mode)) => {
-          println!("  Found perm override: {uid}, {gid}, {mode}");
-          (*uid, *gid, *mode)
-        }
-        None => (uid, gid, mode),
-      };
-
-      fs.set_owner(&target_path, uid, gid)
-        .expect("Failed to set file owner");
-      fs.set_permissions(&target_path, mode)
-        .expect("Failed to set file mode");
+  for dir in &[
+    "/etc",
+    "/usr",
+    "/var",
+    "/root",
+    "/home",
+    "/tmp",
+    "/usr/bin",
+    "/usr/lib",
+    "/usr/include",
+  ] {
+    if !fs_ext4.exists(dir) {
+      fs_ext4.mkdir(dir, 0o755).ok();
     }
   }
+  let bins_dir = configured_bins_dir(profile);
+  if let Some(binaries) = &profile.binaries {
+    for bin in binaries {
+      let (bin_name, dst) = if let Some((left, right)) = bin.split_once(':') {
+        let left_trim = left.trim_start_matches('/');
+        if left_trim == "bin" || left_trim == "usr/bin" {
+          (right, format!("/{left_trim}/{right}"))
+        } else {
+          (left, right.to_string())
+        }
+      } else {
+        (bin.as_str(), format!("{}/{}", bins_dir, bin))
+      };
+      let src = Path::new(
+        &profile
+          .binary_target
+          .clone()
+          .unwrap_or("target/x86_64-unknown-linux-musl/release".to_string()),
+      )
+      .join(bin_name);
+      copy_host_path_to_ext4(fs_ext4, &src, &dst, &disk_perms);
+    }
+  }
+  if let Some(libs) = &profile.libs {
+    for lib in libs {
+      let is_so = lib.starts_with('C');
+      let parts: Vec<&str> = lib.trim_start_matches('C').splitn(3, ':').collect();
+      if parts.len() != 3 {
+        continue;
+      }
+      let libname = format!(
+        "lib{}.{}",
+        parts[0].replace('-', "_"),
+        if is_so { "so" } else { "a" }
+      );
+      let src = Path::new(
+        &profile
+          .binary_target
+          .clone()
+          .unwrap_or("target/x86_64-unknown-linux-musl/release".to_string()),
+      )
+      .join(&libname);
+      copy_host_path_to_ext4(fs_ext4, &src, &format!("/usr/lib/{}", libname), &disk_perms);
+      let mut buf = Vec::new();
+      cbindgen::Builder::new()
+        .with_crate(parts[2])
+        .with_language(cbindgen::Language::C)
+        .with_pragma_once(true)
+        .with_cpp_compat(false)
+        .generate()
+        .unwrap()
+        .write(&mut buf);
+      if let Ok(mut f) = fs_ext4.open(
+        &format!("/usr/include/{}.h", parts[1]),
+        OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+      ) {
+        f.write_all(&buf).ok();
+      }
+    }
+  }
+  if let Some(files) = &profile.files {
+    for mapping in files {
+      if mapping.starts_with('@') {
+        continue;
+      }
+      let parts: Vec<&str> = mapping.splitn(2, ':').collect();
+      if parts.len() != 2 {
+        continue;
+      }
+      let dst = if parts[1].starts_with('/') {
+        parts[1].to_string()
+      } else {
+        format!("/{}", parts[1])
+      };
+      copy_host_path_to_ext4(fs_ext4, Path::new(parts[0]), &dst, &disk_perms);
+    }
+  }
+  if let Some(symlinks) = &profile.symlinks {
+    for mapping in symlinks {
+      let parts: Vec<&str> = mapping.splitn(2, ':').collect();
+      if parts.len() == 2 {
+        if let Some(parent) = Path::new(parts[1]).parent() {
+          if !fs_ext4.exists(parent.to_str().unwrap()) {
+            fs_ext4.mkdir(parent.to_str().unwrap(), 0o755).ok();
+          }
+        }
+        fs_ext4.symlink(parts[0], parts[1]).ok();
+      }
+    }
+  }
+  if let Some(bins) = &profile.ldd_bins {
+    let mut deps: BTreeSet<String> = BTreeSet::new();
+    for bin in bins {
+      if let Ok(output) = Command::new("ldd").arg(bin).output() {
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+          if let Some(path) = parse_ldd_output(line) {
+            deps.insert(path);
+          }
+        }
+      }
+    }
+    for dep in deps {
+      copy_host_path_into_ext4(fs_ext4, Path::new(&dep), &disk_perms);
+    }
+  }
+}
 
-  Ok(())
+fn builder_n(profile: &Profile, fs_ext4: &mut Ext4Fs) {
+  if let Some(nodes) = &profile.nodes {
+    for node in nodes {
+      if fs_ext4.exists(&node.path) {
+        continue;
+      }
+      let mode = (match node.node_type.as_str() {
+        "c" => 0x2000,
+        "b" => 0x6000,
+        _ => 0,
+      }) | node.mode;
+      let dev = (node.major << 8) | node.minor;
+      unsafe {
+        ext4_lwext4_sys::ext4_mknod(
+          CString::new(format!("/mp0{}", node.path)).unwrap().as_ptr(),
+          mode as i32,
+          dev as u32,
+        );
+      }
+    }
+  }
+}
+
+fn builder_i(profile: &Profile, fs_ext4: &mut Ext4Fs) {
+  let mut extract_lock = read_builder_lock(fs_ext4);
+  let mut archive_cache: HashMap<String, PathBuf> = HashMap::new();
+  if let Some(installs) = &profile.install {
+    for entry in installs {
+      let (alias, url) = parse_install_entry(entry);
+      archive_cache.insert(
+        alias,
+        cached_download(
+          &url,
+          Some(&format!(
+            "{}__{}",
+            entry.split(':').next().unwrap(),
+            url.split('/').last().unwrap()
+          )),
+        ),
+      );
+    }
+  }
+  if let Some(files) = &profile.files {
+    for mapping in files {
+      if !mapping.starts_with('@') {
+        continue;
+      }
+      let parts: Vec<&str> = mapping.splitn(3, ':').collect();
+      if parts.len() == 3 {
+        let alias = parts[0].trim_start_matches('@');
+        let dst = if parts[2].starts_with('/') {
+          parts[2].to_string()
+        } else {
+          format!("/{}", parts[2])
+        };
+        if let Some(archive) = archive_cache.get(alias) {
+          extract_archive_to_ext4(fs_ext4, archive, parts[1], &dst, &mut extract_lock);
+        }
+      }
+    }
+  }
+  write_builder_lock(fs_ext4, &extract_lock);
+  if let Some(kernel_url) = &profile.linux_image {
+    cached_download(
+      kernel_url.split_once(':').unwrap().1,
+      Some(kernel_url.split_once(':').unwrap().0),
+    );
+  }
+  if let Some(url) = &profile.busybox_url {
+    let bb_path = cached_download(url, None);
+    let bins_dir = configured_bins_dir(profile);
+    let busybox_dst = format!("{}/busybox", bins_dir);
+    if let Ok(mut f) = fs_ext4.open(
+      &busybox_dst,
+      OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+    ) {
+      f.write_all(&fs::read(bb_path).unwrap()).ok();
+      fs_ext4.set_permissions(&busybox_dst, 0o755).ok();
+    }
+    for app in profile.busybox_applets.clone().unwrap_or_else(|| {
+      vec![
+        "[",
+        "[[",
+        "]]",
+        "]",
+        "acpid",
+        "add-shell",
+        "addgroup",
+        "adduser",
+        "adjtimex",
+        "arp",
+        "arping",
+        "ash",
+        "awk",
+        "base64",
+        "basename",
+        "beep",
+        "blkid",
+        "blockdev",
+        "bootchartd",
+        "brctl",
+        "bunzip2",
+        "bzcat",
+        "bzip2",
+        "cal",
+        "cat",
+        "catv",
+        "chat",
+        "chattr",
+        "chgrp",
+        "chmod",
+        "chown",
+        "chpasswd",
+        "chpst",
+        "chroot",
+        "chrt",
+        "chvt",
+        "cksum",
+        "clear",
+        "cmp",
+        "comm",
+        "cp",
+        "cpio",
+        "crond",
+        "crontab",
+        "cryptpw",
+        "cttyhack",
+        "cut",
+        "date",
+        "dc",
+        "dd",
+        "deallocvt",
+        "delgroup",
+        "deluser",
+        "depmod",
+        "devmem",
+        "df",
+        "dhcprelay",
+        "diff",
+        "dirname",
+        "dmesg",
+        "dnsd",
+        "dnsdomainname",
+        "dos2unix",
+        "du",
+        "dumpkmap",
+        "dumpleases",
+        "echo",
+        "ed",
+        "egrep",
+        "eject",
+        "env",
+        "envdir",
+        "envuidgid",
+        "ether-wake",
+        "expand",
+        "expr",
+        "fakeidentd",
+        "false",
+        "fbset",
+        "fbsplash",
+        "fdflush",
+        "fdformat",
+        "fdisk",
+        "fgconsole",
+        "fgrep",
+        "find",
+        "findfs",
+        "flock",
+        "fold",
+        "free",
+        "freeramdisk",
+        "fsck",
+        "fsck.minix",
+        "fsync",
+        "ftpd",
+        "ftpget",
+        "ftpput",
+        "fuser",
+        "getopt",
+        "getty",
+        "grep",
+        "groups",
+        "gunzip",
+        "gzip",
+        "halt",
+        "hd",
+        "hdparm",
+        "head",
+        "hexdump",
+        "hostid",
+        "hostname",
+        "httpd",
+        "hush",
+        "hwclock",
+        "id",
+        "ifconfig",
+        "ifdown",
+        "ifenslave",
+        "ifplugd",
+        "ifup",
+        "inetd",
+        "insmod",
+        "install",
+        "ionice",
+        "iostat",
+        "ip",
+        "ipaddr",
+        "ipcalc",
+        "ipcrm",
+        "ipcs",
+        "iplink",
+        "iproute",
+        "iprule",
+        "iptunnel",
+        "kbd_mode",
+        "kill",
+        "killall",
+        "killall5",
+        "klogd",
+        "last",
+        "less",
+        "linux32",
+        "linux64",
+        "linuxrc",
+        "ln",
+        "loadfont",
+        "loadkmap",
+        "logger",
+        "login",
+        "logname",
+        "logread",
+        "losetup",
+        "lpd",
+        "lpq",
+        "lpr",
+        "ls",
+        "lsattr",
+        "lsmod",
+        "lspci",
+        "lsusb",
+        "lzcat",
+        "lzma",
+        "lzop",
+        "lzopcat",
+        "makedevs",
+        "makemime",
+        "man",
+        "md5sum",
+        "mdev",
+        "mesg",
+        "microcom",
+        "mkdir",
+        "mkdosfs",
+        "mke2fs",
+        "mkfifo",
+        "mkfs.ext2",
+        "mkfs.minix",
+        "mkfs.vfat",
+        "mknod",
+        "mkpasswd",
+        "mkswap",
+        "mktemp",
+        "modinfo",
+        "modprobe",
+        "more",
+        "mount",
+        "mountpoint",
+        "mpstat",
+        "mt",
+        "mv",
+        "nameif",
+        "nbd-client",
+        "nc",
+        "netstat",
+        "nice",
+        "nmeter",
+        "nohup",
+        "nslookup",
+        "ntpd",
+        "od",
+        "openvt",
+        "passwd",
+        "patch",
+        "pgrep",
+        "pidof",
+        "ping",
+        "ping6",
+        "pipe_progress",
+        "pivot_root",
+        "pkill",
+        "pmap",
+        "popmaildir",
+        "poweroff",
+        "powertop",
+        "printenv",
+        "printf",
+        "ps",
+        "pscan",
+        "pstree",
+        "pwd",
+        "pwdx",
+        "raidautorun",
+        "rdate",
+        "rdev",
+        "readahead",
+        "readlink",
+        "readprofile",
+        "realpath",
+        "reboot",
+        "reformime",
+        "remove-shell",
+        "renice",
+        "reset",
+        "resize",
+        "rev",
+        "rm",
+        "rmdir",
+        "rmmod",
+        "route",
+        "rpm",
+        "rpm2cpio",
+        "rtcwake",
+        "run-parts",
+        "runlevel",
+        "runsv",
+        "runsvdir",
+        "rx",
+        "script",
+        "scriptreplay",
+        "sed",
+        "sendmail",
+        "seq",
+        "setarch",
+        "setconsole",
+        "setfont",
+        "setkeycodes",
+        "setlogcons",
+        "setserial",
+        "setsid",
+        "setuidgid",
+        "sh",
+        "sha1sum",
+        "sha256sum",
+        "sha512sum",
+        "showkey",
+        "slattach",
+        "sleep",
+        "smemcap",
+        "softlimit",
+        "sort",
+        "split",
+        "start-stop-daemon",
+        "stat",
+        "strings",
+        "stty",
+        "su",
+        "sulogin",
+        "sum",
+        "sv",
+        "svlogd",
+        "swapoff",
+        "swapon",
+        "switch_root",
+        "sync",
+        "sysctl",
+        "syslogd",
+        "tac",
+        "tail",
+        "tar",
+        "tcpsvd",
+        "tee",
+        "telnet",
+        "telnetd",
+        "test",
+        "tftp",
+        "tftpd",
+        "time",
+        "timeout",
+        "top",
+        "touch",
+        "tr",
+        "traceroute",
+        "traceroute6",
+        "true",
+        "tty",
+        "ttysize",
+        "tunctl",
+        "ubiattach",
+        "ubidetach",
+        "ubimkvol",
+        "ubirmvol",
+        "ubirsvol",
+        "ubiupdatevol",
+        "udhcpc",
+        "udhcpd",
+        "udpsvd",
+        "umount",
+        "uname",
+        "unexpand",
+        "uniq",
+        "unix2dos",
+        "unlzma",
+        "unlzop",
+        "unxz",
+        "unzip",
+        "uptime",
+        "users",
+        "usleep",
+        "uudecode",
+        "uuencode",
+        "vconfig",
+        "vi",
+        "vlock",
+        "volname",
+        "wall",
+        "watch",
+        "watchdog",
+        "wc",
+        "wget",
+        "which",
+        "who",
+        "whoami",
+        "whois",
+        "xargs",
+        "xz",
+        "xzcat",
+        "yes",
+        "zcat",
+        "zcip",
+      ]
+      .iter()
+      .map(|x| x.to_string())
+      .collect()
+    }) {
+      fs_ext4
+        .symlink("busybox", &format!("{}/{}", bins_dir, app))
+        .ok();
+    }
+  }
+}
+
+fn builder_u(profile: &Profile, fs_ext4: &mut Ext4Fs) {
+  let mut passwd = String::from("root:x:0:0:root:/root:/bin/sh\n");
+  let mut shadow = String::from("root:*:19000:0:99999:7:::\n");
+  let mut group_map: HashMap<String, (u32, Vec<String>)> = HashMap::new();
+  group_map.insert("root".into(), (0, vec!["root".into()]));
+  group_map.insert("wheel".into(), (10, vec!["root".into()]));
+  if let Some(root_env) = &profile.root_env {
+    if let Ok(mut f) = fs_ext4.open(
+      "/etc/.env",
+      OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+    ) {
+      f.write_all(render_env_lines(&root_env.to_map()).as_bytes())
+        .ok();
+    }
+  }
+  if let Some(users) = &profile.user {
+    for user in users {
+      let home = if user.username == "root" {
+        "/root".to_string()
+      } else {
+        user.home.clone()
+      };
+      if !fs_ext4.exists(&home) {
+        fs_ext4.mkdir(&home, 0o755).ok();
+      }
+      if let Some(env) = &user.env {
+        if let Ok(mut f) = fs_ext4.open(
+          &format!("{}/.env", home),
+          OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+        ) {
+          f.write_all(render_env_lines(&env.to_map()).as_bytes()).ok();
+        }
+      }
+      if user.username != "root" {
+        passwd.push_str(&format!(
+          "{}:x:{}:{}:User:{}:{}\n",
+          user.username, user.uid, user.gid, user.home, user.shell
+        ));
+        let hash = if let Some(p) = &user.password {
+          sha_crypt::sha512_simple(p, &sha_crypt::Sha512Params::new(5000).unwrap())
+            .unwrap_or_else(|_| "*".to_string())
+        } else {
+          "*".to_string()
+        };
+        shadow.push_str(&format!("{}:{}:19000:0:99999:7:::\n", user.username, hash));
+
+        group_map
+          .entry(user.username.clone())
+          .or_insert((user.gid, Vec::new()))
+          .1
+          .push(user.username.clone());
+
+        if let Some(groups) = &user.groups {
+          for g in groups {
+            let (g, gid) = match g {
+              UserGroup::Simple(g) => (g.clone(), 1000u32),
+              UserGroup::Detailed { gid, name } => (name.clone(), *gid),
+            };
+            group_map
+              .entry(g)
+              .or_insert((gid, Vec::new()))
+              .1
+              .push(user.username.clone());
+          }
+        }
+      }
+      fs_ext4.set_owner(&home, user.uid, user.gid).ok();
+    }
+  }
+  if let Ok(mut f) = fs_ext4.open(
+    "/etc/passwd",
+    OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+  ) {
+    f.write_all(passwd.as_bytes()).ok();
+  }
+  if let Ok(mut f) = fs_ext4.open(
+    "/etc/shadow",
+    OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+  ) {
+    f.write_all(shadow.as_bytes()).ok();
+    fs_ext4.set_permissions("/etc/shadow", 0o600).ok();
+  }
+  if let Ok(mut f) = fs_ext4.open(
+    "/etc/group",
+    OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
+  ) {
+    let mut group_str = String::new();
+    for (name, (gid, members)) in group_map {
+      group_str.push_str(&format!("{}:x:{}:{}\n", name, gid, members.join(",")));
+    }
+    f.write_all(group_str.as_bytes()).ok();
+  }
 }
 
 fn run(profile: &Profile) {
-  let kernel_path = if let Some(k) = &profile.linux_image {
-    let (name, _url) = k
-      .split_once(":")
-      .expect("Invalid linux_image format. Expected name:url");
-    artifact_path().join(name)
-  } else {
-    panic!("No kernel specified");
-  };
-
+  let kernel_path = artifact_path().join(
+    profile
+      .linux_image
+      .as_ref()
+      .unwrap()
+      .split(':')
+      .next()
+      .unwrap(),
+  );
   let qemu_options = if let Some(qemu_options) = &profile.qemu_options {
     qemu_options
   } else {
@@ -1109,63 +1150,99 @@ fn run(profile: &Profile) {
   } else {
     "qemu-system-x86_64".to_string()
   });
-  cmd.arg("-kernel").arg(kernel_path);
 
-  match profile.disk_mode.as_deref().unwrap_or("cpio") {
-    "cpio" => {
-      cmd
-        .arg("-initrd")
-        .arg(artifact_path().join("rootfs.cpio.gz"));
-    }
-    "image" => {
-      cmd.arg("-drive").arg(format!(
-        "file={},format=raw,if=virtio",
-        artifact_path().join("rootfs.img").display()
-      ));
-      // cmd.arg("-hda").arg(artifact_path().join("rootfs.img"));
-    }
-    _ => panic!("Unknown disk_mode"),
+  cmd
+    .arg("-kernel")
+    .arg(kernel_path)
+    .arg("-drive")
+    .arg(format!(
+      "file={},format=raw,if=virtio",
+      artifact_path().join("rootfs.img").display()
+    ));
+  if let Some(opt) = &profile.run_options {
+    cmd.arg("-append").arg(opt.join(" "));
   }
-
-  if let Some(options) = &profile.run_options {
-    cmd.arg("-append").arg(options.join(" "));
-  }
-
   if let Some(args) = &qemu_options.args {
     cmd.args(args);
   }
-
-  println!("[*] Launching QEMU...");
-
-  let status = cmd.status().unwrap();
-  if !status.success() {
-    eprintln!("QEMU failed");
-    exit(1);
-  }
+  cmd.status().ok();
 }
 
-fn handle_command(c: &str, profile: &Profile, rootfs: &Path, no_overwrite: bool) {
+fn handle_command(c: &str, profile: &Profile, fs_ext4: &mut Option<Ext4Fs>, no_overwrite: bool) {
   match c {
-    "b" => builder_b(profile),
-    "n" => builder_n(profile, &rootfs),
-    "i" => builder_i(profile, &rootfs),
-    "d" => builder_d(profile, &rootfs, no_overwrite),
-    "p" => prepare_rootfs(profile, &rootfs),
-    "u" => builder_u(profile, &rootfs),
-    "a" => {
-      builder_b(profile);
-      builder_i(profile, &rootfs);
-      prepare_rootfs(profile, &rootfs);
-      builder_n(profile, &rootfs);
-      builder_u(profile, &rootfs);
-      builder_d(profile, &rootfs, no_overwrite);
+    "b" => {
+      if let Some(cmd) = &profile.build_command {
+        println!("[*] Running build command: {}", cmd);
+        if !Command::new("sh")
+          .args(&["-c", cmd])
+          .status()
+          .unwrap()
+          .success()
+        {
+          exit(1);
+        }
+      }
     }
-    "r" => {
-      run(profile);
-    }
-    other => {
-      eprintln!("Unknown builder command: {}", other);
-      exit(1);
+    "r" => run(profile),
+    _ => {
+      if fs_ext4.is_none() {
+        let output = artifact_path().join("rootfs.img");
+        if !no_overwrite || !output.exists() {
+          println!("[*] Creating new ext4 disk image...");
+          FileBlockDevice::create(&output, 1024 * 1024 * profile.disk_size.unwrap_or(1024))
+            .expect("Failed to create image file");
+          let status = Command::new("mkfs.ext4")
+            .args(&[
+              "-F",
+              "-O",
+              "^64bit,^metadata_csum,^flex_bg,^huge_file,^dir_index,^extent",
+              "-E",
+              "lazy_itable_init=0,lazy_journal_init=0",
+              "-m",
+              "0",
+              output.to_str().unwrap(),
+            ])
+            .status()
+            .expect("Failed to execute mkfs.ext4. Is e2fsprogs installed?");
+          if !status.success() {
+            panic!("mkfs.ext4 failed with status: {}", status);
+          }
+        }
+        let device = FileBlockDevice::open(&output).expect("Failed to open image file");
+        let mut fs = Ext4Fs::mount(device, false)
+          .map_err(|e| {
+            eprintln!(
+              "[!] Failed to mount ext4 image: {:?}. Try deleting .artifacts/rootfs.img",
+              e
+            );
+            e
+          })
+          .expect("Mount failed");
+        if fs.is_read_only() {
+          let _ = fs.umount();
+          Command::new("e2fsck")
+            .args(&["-p", "-f", output.to_str().unwrap()])
+            .status()
+            .ok();
+          fs = Ext4Fs::mount(FileBlockDevice::open(&output).unwrap(), false).unwrap();
+        }
+        *fs_ext4 = Some(fs);
+      }
+      let fs = fs_ext4.as_mut().unwrap();
+      match c {
+        "n" => builder_n(profile, fs),
+        "i" => builder_i(profile, fs),
+        "p" => prepare_rootfs(profile, fs),
+        "u" => builder_u(profile, fs),
+        "a" => {
+          builder_b(profile);
+          builder_i(profile, fs);
+          prepare_rootfs(profile, fs);
+          builder_n(profile, fs);
+          builder_u(profile, fs);
+        }
+        _ => {}
+      }
     }
   }
 }
@@ -1174,7 +1251,7 @@ fn main() {
   let args: Vec<String> = std::env::args().collect();
   if args.len() < 2 {
     eprintln!("Usage: builder <builder_command>");
-    eprintln!("Commands: a, b, d, n, i, p, r, u");
+    eprintln!("Commands: a, b, n, i, p, r, u");
     eprintln!("Examples:");
     eprintln!("build all: a");
     eprintln!("build cargo: b");
@@ -1184,28 +1261,22 @@ fn main() {
     eprintln!("build disk: d");
     eprintln!("make users: u");
     eprintln!("run: r");
+    eprintln!("use existing disk: x");
     eprintln!(
-      "you can use multiple commands, for example this builds cargo, prepares disk and runs: bdr"
+      "you can use multiple commands, for example this builds cargo, prepares disk and runs: bpr"
     );
-    eprintln!("you can even do this lol: rind");
     exit(1);
   }
-
-  let config_data = fs::read_to_string("builder.toml").unwrap();
-  let config: RinbConfig = toml::from_str(&config_data).unwrap();
+  let config: RinbConfig = toml::from_str(&fs::read_to_string("builder.toml").unwrap()).unwrap();
   let profile = config.profile.get("main").unwrap();
-  let rootfs = artifact_path().join("rootfs");
-  fs::create_dir_all(&rootfs).unwrap();
-  let mut no_overwrite = false;
-
-  if args[1].contains("x") {
-    no_overwrite = true;
-  }
-
+  let mut fs_ext4: Option<Ext4Fs> = None;
   for c in args[1].chars() {
     if c == 'x' {
       continue;
     }
-    handle_command(&c.to_string(), profile, &rootfs, no_overwrite)
+    handle_command(&c.to_string(), profile, &mut fs_ext4, args[1].contains('x'));
+  }
+  if let Some(fs) = fs_ext4 {
+    let _ = fs.umount();
   }
 }

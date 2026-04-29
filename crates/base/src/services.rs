@@ -17,7 +17,9 @@ use std::time::{Duration, Instant};
 
 use rind_core::{notifier::Notifier, prelude::*};
 
-use crate::flow::{FlowInstance, FlowItem, FlowPayload, FlowType, StateMachine, Trigger};
+use crate::flow::{
+  FlowInstance, FlowItem, FlowPayload, FlowRuntimePayload, FlowType, StateMachine, Trigger,
+};
 use crate::permissions::PERM_SYSTEM_SERVICES;
 use crate::prelude::trigger_events;
 use crate::sockets::get_all_sockets;
@@ -231,7 +233,7 @@ pub enum ServiceSpace {
   meta_name = name,
   meta_fields(
     name, run, after, branching, restart, start_on, stop_on, on_start, on_stop,
-    transport, working_dir, space, user_source, singleton
+    transport, working_dir, space, user_source, singleton, managed_by
   ),
   derive_metadata(Debug)
 )]
@@ -259,6 +261,8 @@ pub struct Service {
   pub transport: Option<TransportMethod>,
   pub branching: Option<BranchingConfig>,
   pub restart: Option<RestartPolicy>,
+  #[serde(rename = "managed-by")]
+  pub managed_by: Option<Vec<Ustr>>,
 
   // Instance data
   pub id: ServiceId,
@@ -1490,10 +1494,16 @@ pub fn handle_ipc_start(
   let can_manage = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
     true
   } else if let (Some(caller), Some(svc)) = (caller, svc.as_ref()) {
-    match &svc.space {
-      ServiceSpace::User => true,
-      ServiceSpace::UserSelective { user } => user.as_str() == caller.username.as_str(),
-      ServiceSpace::System => false,
+    if let Some(ref perms) = svc.managed_by {
+      perms
+        .iter()
+        .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(uid, x)))
+    } else {
+      match &svc.space {
+        ServiceSpace::User => true,
+        ServiceSpace::UserSelective { user } => user.as_str() == caller.username.as_str(),
+        ServiceSpace::System => false,
+      }
     }
   } else {
     false
@@ -1519,7 +1529,9 @@ pub fn handle_ipc_start(
     let _ = dispatch.dispatch(
       "flow",
       "set_state",
-      rpayload!({ "name": "rind@active", "payload": payload.name.clone() }),
+      FlowRuntimePayload::new("rind@active")
+        .payload(payload.name.clone())
+        .into(),
     );
   }
 
@@ -1554,10 +1566,16 @@ pub fn handle_ipc_stop(
   let can_manage = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
     true
   } else if let (Some(caller), Some(svc)) = (caller, svc.as_ref()) {
-    match &svc.space {
-      ServiceSpace::User => true,
-      ServiceSpace::UserSelective { user } => user.as_str() == caller.username.as_str(),
-      ServiceSpace::System => false,
+    if let Some(ref perms) = svc.managed_by {
+      perms
+        .iter()
+        .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(uid, x)))
+    } else {
+      match &svc.space {
+        ServiceSpace::User => true,
+        ServiceSpace::UserSelective { user } => user.as_str() == caller.username.as_str(),
+        ServiceSpace::System => false,
+      }
     }
   } else {
     false
@@ -1583,7 +1601,9 @@ pub fn handle_ipc_stop(
     let _ = dispatch.dispatch(
       "flow",
       "remove_state",
-      rpayload!({ "name": "rind@active", "payload": payload.name.clone() }),
+      FlowRuntimePayload::new("rind@active")
+        .payload(payload.name.clone())
+        .into(),
     );
   }
 

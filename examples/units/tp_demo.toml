@@ -22,7 +22,7 @@ transport = { id = "args", options = ["--from-state", "state:tp_demo@transport_s
 [[state]]
 name = "transport_state"
 payload = "string"
-subscribers = [{ id = "uds", options = ["detached=true"], permissions = [0] }]
+subscribers = [{ id = "uds", options = ["detached=true"], permissions = ["any"] }]
 
 [[signal]]
 name = "demo_ping"

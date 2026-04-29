@@ -33,7 +33,7 @@ fxhash = "*"
 bitflags = "*"
 libloading = "*"
 
-[profile.release]
-lto = true
-panic = "abort"
-strip = true
+# [profile.release]
+# lto = true
+# panic = "abort"
+# strip = true

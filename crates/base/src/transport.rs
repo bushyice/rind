@@ -12,7 +12,6 @@ use rind_core::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::flow::{FlowMatchOperation, FlowPayload, Signal, State};
-use crate::ipc::get_peer_cred;
 use rind_core::notifier::Notifier;
 
 #[derive(Serialize, Deserialize, Copy, Clone)]
@@ -50,17 +49,17 @@ pub enum TransportMethod {
   Options {
     id: TransportProtocolId,
     options: Vec<Ustr>,
-    permissions: Option<Vec<u16>>,
+    permissions: Option<Vec<Ustr>>,
   },
   Object {
     id: TransportProtocolId,
     options: serde_json::Value,
-    permissions: Option<Vec<u16>>,
+    permissions: Option<Vec<Ustr>>,
   },
 }
 
 impl TransportMethod {
-  pub fn get_permissions(&self) -> Option<Vec<u16>> {
+  pub fn get_permissions(&self) -> Option<Vec<Ustr>> {
     match self.clone() {
       TransportMethod::Options {
         id: _,
@@ -81,7 +80,7 @@ pub trait TransportProtocol: Send + Sync {
   fn setup(
     &mut self,
     endpoint: &str,
-    permissions: Option<Vec<u16>>,
+    permissions: Option<Vec<Ustr>>,
     pm: Option<PermissionStore>,
     notifier: Option<Notifier>,
   );
@@ -117,7 +116,7 @@ impl UdsTransport {
   fn start_listener(
     &self,
     endpoint: Ustr,
-    permissions: Option<Vec<u16>>,
+    permissions: Option<Vec<Ustr>>,
     pm: Option<PermissionStore>,
     notifier: Option<Notifier>,
   ) {
@@ -151,15 +150,16 @@ impl UdsTransport {
         if let Some(ref permissions) = permissions
           && let Some(ref pm) = pm
         {
-          let Ok(cred) = get_peer_cred(&stream) else {
+          let Ok(cred) = get_peer_cred_stream(&stream) else {
             continue;
           };
           uid = cred.uid;
 
-          if permissions
+          if !permissions
             .iter()
-            .any(|x| !pm.user_has(cred.uid, PermissionId(*x)))
+            .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(cred.uid, x)))
           {
+            drop(stream);
             continue;
           }
         }
@@ -205,7 +205,7 @@ impl TransportProtocol for UdsTransport {
   fn setup(
     &mut self,
     endpoint: &str,
-    permissions: Option<Vec<u16>>,
+    permissions: Option<Vec<Ustr>>,
     pm: Option<PermissionStore>,
     notifier: Option<Notifier>,
   ) {
@@ -287,7 +287,7 @@ impl Runtime for TransportRuntime {
     match action {
       "setup_uds" => {
         let endpoint = payload.get::<Ustr>("endpoint")?;
-        let permissions = payload.get::<Vec<u16>>("permissions").ok();
+        let permissions = payload.get::<Vec<Ustr>>("permissions").ok();
 
         self.uds.setup(
           endpoint.as_str(),
@@ -351,7 +351,7 @@ impl Runtime for TransportRuntime {
                     // one-shot user-specific state defs
                     if let Some((username, _)) = name.as_str().split_once("/")
                       && let Some(user) = pm.users.lookup_by_uid(uid)
-                      && username != user.username
+                      && username != user.username.as_str()
                     {
                       continue;
                     }
@@ -359,7 +359,9 @@ impl Runtime for TransportRuntime {
                     // one-shot perms (is this good?)
                     if let Some(state) = ctx.registry.metadata.find::<State>("units", name.as_str())
                       && let Some(perms) = &state.permissions
-                      && perms.iter().any(|x| !pm.user_has(uid, PermissionId(*x)))
+                      && !perms
+                        .iter()
+                        .any(|x| pm.from_name(x).map_or(false, |x| !pm.user_has(uid, x)))
                     {
                       continue;
                     }
@@ -387,7 +389,9 @@ impl Runtime for TransportRuntime {
                   // same with state perms, one-shot
                   if let Some(state) = ctx.registry.metadata.find::<Signal>("units", name.as_str())
                     && let Some(perms) = &state.permissions
-                    && perms.iter().any(|x| !pm.user_has(uid, PermissionId(*x)))
+                    && !perms
+                      .iter()
+                      .any(|x| pm.from_name(x).map_or(false, |x| !pm.user_has(uid, x)))
                   {
                     continue;
                   }

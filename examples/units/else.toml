@@ -10,7 +10,7 @@ transport = ""
 [[service]]
 name = "four"
 start-on = ["my_signal"]
-run.exec = "/usr/bin/example-inactive"
+run.exec = "/usr/bin/ipc_so"
 run.args = ["arg1", "arg2"]
 on-start = [{ timer = "else@timeout_four" }]
 singleton = true
@@ -31,6 +31,7 @@ type = "uds"
 lifecycle = "owned"
 listen = "/var/sock/my.sock"
 owner = "else@four"
+permissions = ["any"]
 
 [[signal]]
 name = "my_signal"
