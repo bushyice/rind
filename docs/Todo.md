@@ -14,6 +14,8 @@ kanban-plugin: board
 
 ## Doing
 
+- [ ] **Signal Branching**
+- [ ] **Sophisticated timers**
 - [ ] **Memory Transport**
 - [ ] **Json Optimizations**
 - [ ] **Piping**: Piping and payloads into other states/signals.

@@ -360,25 +360,30 @@ fn copy_host_path_to_ext4(
     .duration_since(std::time::UNIX_EPOCH)
     .unwrap()
     .as_secs();
+
   if fs_ext4.exists(dst) && src_mtime <= fs_ext4.metadata(dst).unwrap().mtime {
     return;
   }
-  if let Ok(mut f) = fs_ext4.open(
+
+  match fs_ext4.open(
     dst,
     OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
   ) {
-    println!("[*] Updating file: {dst}");
-    f.write_all(&fs::read(src).unwrap()).ok();
-    set_ext4_mtime(dst, src_mtime);
-    let (uid, gid, mode) = match disk_perms.get(dst) {
-      Some((u, g, m)) => {
-        println!("  -> perm override {u}, {g}, {m}");
-        (*u, *g, *m)
-      }
-      None => (0, 0, meta.mode()),
-    };
-    fs_ext4.set_owner(dst, uid, gid).ok();
-    fs_ext4.set_permissions(dst, mode).ok();
+    Ok(mut f) => {
+      println!("[*] Updating file: {dst}");
+      f.write_all(&fs::read(src).unwrap()).ok();
+      set_ext4_mtime(dst, src_mtime);
+      let (uid, gid, mode) = match disk_perms.get(dst) {
+        Some((u, g, m)) => {
+          println!("  -> perm override {u}, {g}, {m}");
+          (*u, *g, *m)
+        }
+        None => (0, 0, meta.mode()),
+      };
+      fs_ext4.set_owner(dst, uid, gid).ok();
+      fs_ext4.set_permissions(dst, mode).ok();
+    }
+    Err(e) => println!("Failed to open file: {e}"),
   }
 }
 
@@ -477,10 +482,15 @@ fn prepare_rootfs(profile: &Profile, fs_ext4: &mut Ext4Fs) {
     "/tmp",
     "/usr/bin",
     "/usr/lib",
+    "/usr/lib/rind",
+    "/usr/lib/rind/plugins",
     "/usr/include",
   ] {
     if !fs_ext4.exists(dir) {
-      fs_ext4.mkdir(dir, 0o755).ok();
+      match fs_ext4.mkdir(dir, 0o755) {
+        Err(e) => println!("Failed to create folder: {e}"),
+        Ok(_) => {}
+      }
     }
   }
   let bins_dir = configured_bins_dir(profile);
@@ -491,7 +501,14 @@ fn prepare_rootfs(profile: &Profile, fs_ext4: &mut Ext4Fs) {
         if left_trim == "bin" || left_trim == "usr/bin" {
           (right, format!("/{left_trim}/{right}"))
         } else {
-          (left, right.to_string())
+          (
+            left,
+            if right.ends_with("/") {
+              format!("{right}{left}")
+            } else {
+              right.to_string()
+            },
+          )
         }
       } else {
         (bin.as_str(), format!("{}/{}", bins_dir, bin))

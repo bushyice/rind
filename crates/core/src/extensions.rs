@@ -5,7 +5,12 @@ use std::{
 
 use once_cell::unsync::OnceCell;
 
-use crate::error::CoreResult;
+use crate::{
+  error::CoreResult,
+  logging::LogHandle,
+  prelude::InstanceRegistry,
+  runtime::{RuntimeDispatcher, RuntimePayload},
+};
 
 thread_local! {
   pub static EXTENSIONS: OnceCell<ExtensionManager> = OnceCell::new();
@@ -16,6 +21,73 @@ pub type ExtensionEnquire<R> = fn(name: &str) -> CoreResult<R>;
 pub type ExtensionAct<T> = fn(name: &str, input: &mut T) -> CoreResult<()>;
 
 pub type ExtensionResolve<T> = fn(name: &str, input: T) -> CoreResult<T>;
+
+pub enum ExtensionResponseAction {
+  Dispatch {
+    runtime: &'static str,
+    action: &'static str,
+    payload: Option<RuntimePayload>,
+  },
+  Function(
+    Box<dyn Fn(&RuntimeDispatcher, &LogHandle, &mut InstanceRegistry<'_>) -> CoreResult<()>>,
+  ),
+}
+
+pub struct ExtensionExecutionCtx<T> {
+  pub target: T,
+  pub response: Option<ExtensionResponseAction>,
+}
+
+impl<T> ExtensionExecutionCtx<T> {
+  pub fn new(target: T) -> Self {
+    Self {
+      target,
+      response: None,
+    }
+  }
+
+  pub fn with_dispatch(
+    mut self,
+    runtime: &'static str,
+    action: &'static str,
+    payload: Option<RuntimePayload>,
+  ) -> Self {
+    self.response = Some(ExtensionResponseAction::Dispatch {
+      runtime,
+      action,
+      payload,
+    });
+    self
+  }
+
+  pub fn with_fn(
+    mut self,
+    f: Box<dyn Fn(&RuntimeDispatcher, &LogHandle, &mut InstanceRegistry<'_>) -> CoreResult<()>>,
+  ) -> Self {
+    self.response = Some(ExtensionResponseAction::Function(f));
+    self
+  }
+
+  pub fn dispatch(
+    self,
+    dispatch: &RuntimeDispatcher,
+    log: &LogHandle,
+    registry: &mut InstanceRegistry<'_>,
+  ) -> CoreResult<()> {
+    if let Some(action) = self.response {
+      match action {
+        ExtensionResponseAction::Dispatch {
+          runtime,
+          action,
+          payload,
+        } => dispatch.dispatch(runtime, action, payload.unwrap_or_default())?,
+        ExtensionResponseAction::Function(f) => f(dispatch, log, registry)?,
+      }
+    }
+
+    Ok(())
+  }
+}
 
 pub enum Extension<T> {
   Enquire(ExtensionEnquire<T>),

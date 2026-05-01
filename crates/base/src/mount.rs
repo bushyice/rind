@@ -29,7 +29,13 @@ impl MountRuntime {
     umount(target.target.as_str()).ok();
   }
 
-  pub fn mount_target(&self, target: Arc<MountMetadata>, log: &LogHandle) {
+  pub fn mount_target(
+    &self,
+    target: Arc<MountMetadata>,
+    log: &LogHandle,
+    dispatch: &RuntimeDispatcher,
+    registry: &mut InstanceRegistry<'_>,
+  ) -> CoreResult<()> {
     if let Some(true) = target.create {
       std::fs::create_dir_all(target.target.as_str()).ok();
     }
@@ -66,9 +72,26 @@ impl MountRuntime {
         fields,
       );
     }
+
+    EXTENSIONS
+      .with(|extensions| {
+        extensions
+          .get()
+          .expect("extension manager not initialized")
+          .resolve("mount", ExtensionExecutionCtx::new(target.clone()))
+      })?
+      .dispatch(dispatch, log, registry)?;
+
+    Ok(())
   }
 
-  pub fn mount_units(&self, mounts: Vec<(String, Arc<MountMetadata>)>, log: &LogHandle) {
+  pub fn mount_units(
+    &self,
+    mounts: Vec<(String, Arc<MountMetadata>)>,
+    log: &LogHandle,
+    dispatch: &RuntimeDispatcher,
+    registry: &mut InstanceRegistry<'_>,
+  ) -> CoreResult<()> {
     let mut mounted: HashSet<String> = HashSet::new();
     let mut pending = Vec::new();
 
@@ -77,7 +100,7 @@ impl MountRuntime {
       if let Some(afters) = &mnt.after {
         pending.push((format!("{}@{}", unit_name, mnt.target), afters.clone(), idx));
       } else {
-        self.mount_target(mnt.clone(), log);
+        self.mount_target(mnt.clone(), log, dispatch, registry)?;
         mounted.insert(id.to_string());
       }
     }
@@ -88,7 +111,7 @@ impl MountRuntime {
       pending.retain(|(mount_name, afters, idx)| {
         if afters.iter().all(|a| mounted.contains(a.as_str())) {
           if let Some((_, mnt)) = mounts.get(*idx) {
-            self.mount_target(mnt.clone(), log);
+            let _ = self.mount_target(mnt.clone(), log, dispatch, registry);
             mounted.insert(mount_name.clone());
             progress = true;
           }
@@ -114,6 +137,8 @@ impl MountRuntime {
           .collect(),
       );
     }
+
+    Ok(())
   }
 }
 
@@ -165,7 +190,7 @@ impl Runtime for MountRuntime {
     action: &str,
     mut payload: RuntimePayload,
     ctx: &mut RuntimeContext<'_>,
-    _dispatch: &RuntimeDispatcher,
+    dispatch: &RuntimeDispatcher,
     log: &LogHandle,
   ) -> Result<Option<RuntimePayload>, CoreError> {
     match action {
@@ -176,7 +201,7 @@ impl Runtime for MountRuntime {
           .metadata
           .find::<Mount>("units", &name)
           .ok_or(CoreError::MissingSchema { name })?;
-        self.mount_target(metadata, log);
+        self.mount_target(metadata, log, dispatch, &mut ctx.registry)?;
       }
       "umount" => {
         let name = payload.get::<String>("name")?;
@@ -206,7 +231,7 @@ impl Runtime for MountRuntime {
             }
           }
         }
-        self.mount_units(all_mounts, log);
+        self.mount_units(all_mounts, log, dispatch, &mut ctx.registry)?;
       }
       _ => {}
     }
