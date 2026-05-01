@@ -17,42 +17,9 @@ use rind_ipc::recv::IpcSourcemap;
 pub const UNITS_META: &str = "units";
 const BUILTIN_UNIT: &str = "rind";
 
-pub enum UnitExtensionAction {
-  Metadata(Metadata),
-  CreateIndex,
-  BuiltIn(Metadata),
-  LoadedUnits(Metadata),
-}
-
-impl UnitExtensionAction {
-  pub fn as_metadata(self) -> Metadata {
-    match self {
-      UnitExtensionAction::Metadata(m) => m,
-      UnitExtensionAction::LoadedUnits(m) => m,
-      UnitExtensionAction::BuiltIn(m) => m,
-      _ => Metadata::new("unknown"),
-    }
-  }
-}
-
-impl From<Metadata> for UnitExtensionAction {
-  fn from(value: Metadata) -> Self {
-    UnitExtensionAction::Metadata(value)
-  }
-}
-
-impl From<()> for UnitExtensionAction {
-  fn from(_value: ()) -> Self {
-    UnitExtensionAction::CreateIndex
-  }
-}
-
-pub type UnitExtension = fn(UnitExtensionAction) -> UnitExtensionAction;
-
 pub struct UnitsOrchestrator {
   units_dir: PathBuf,
   users: UserStoreShared,
-  extensions: Vec<UnitExtension>,
 }
 
 impl UnitsOrchestrator {
@@ -61,12 +28,7 @@ impl UnitsOrchestrator {
     Self {
       units_dir: units_dir.into(),
       users,
-      extensions: Default::default(),
     }
-  }
-
-  pub fn insert_extension(&mut self, ext: UnitExtension) {
-    self.extensions.push(ext);
   }
 
   fn load_permissions(&self, permissions: &PermissionStore) -> Result<(), CoreError> {
@@ -94,9 +56,12 @@ impl UnitsOrchestrator {
       .of::<Permission>("permission")
       .of::<Variable>("variable");
 
-    for ext in self.extensions.iter() {
-      metadata = ext(metadata.into()).as_metadata();
-    }
+    metadata = EXTENSIONS.with(|extensions| {
+      extensions
+        .get()
+        .expect("extension manager not initialized")
+        .resolve("component", metadata)
+    })?;
 
     let dir = std::fs::read_dir(&self.units_dir).map_err(|e| {
       CoreError::Custom(format!(
@@ -189,13 +154,19 @@ impl UnitsOrchestrator {
 
     Self::add_builtin_defs(&mut metadata);
 
-    for ext in self.extensions.iter() {
-      metadata = ext(UnitExtensionAction::BuiltIn(metadata)).as_metadata();
-    }
+    metadata = EXTENSIONS.with(|extensions| {
+      extensions
+        .get()
+        .expect("extension manager not initialized")
+        .resolve("built_in", metadata)
+    })?;
 
-    for ext in self.extensions.iter() {
-      metadata = ext(UnitExtensionAction::LoadedUnits(metadata)).as_metadata();
-    }
+    EXTENSIONS.with(|extensions| {
+      extensions
+        .get()
+        .expect("extension manager not initialized")
+        .act("loaded_units", &mut metadata)
+    })?;
 
     ctx.metadata.insert_metadata(metadata);
     ctx.metadata.ensure_index_for_type::<Service>(UNITS_META)?;
@@ -205,9 +176,12 @@ impl UnitsOrchestrator {
     ctx.metadata.ensure_index_for_type::<State>(UNITS_META)?;
     ctx.metadata.ensure_index_for_type::<Signal>(UNITS_META)?;
 
-    for ext in self.extensions.iter() {
-      ext(UnitExtensionAction::CreateIndex);
-    }
+    EXTENSIONS.with(|extensions| {
+      extensions
+        .get()
+        .expect("extension manager not initialized")
+        .act("create_index", ctx.metadata)
+    })?;
 
     Ok(())
   }

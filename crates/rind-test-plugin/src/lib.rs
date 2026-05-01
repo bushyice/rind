@@ -110,23 +110,23 @@ impl Runtime for MyRuntime {
   }
 }
 
-fn myextension(action: UnitExtensionAction) -> UnitExtensionAction {
-  match action {
-    UnitExtensionAction::Metadata(units) => units.of::<MyModel>("themodel").into(),
-    UnitExtensionAction::CreateIndex => ().into(),
-    UnitExtensionAction::LoadedUnits(m) => m.into(),
-    UnitExtensionAction::BuiltIn(mut m) => {
-      m.from_toml(
-        r#"
+fn resolve_metadata(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {
+  match name {
+    "component" => Ok(metadata.of::<MyModel>("themodel")),
+    "built_in" => {
+      metadata
+        .from_toml(
+          r#"
         [[state]]
         name = "state"
         payload = "json"
       "#,
-        "myplugin",
-      )
-      .ok();
-      m.into()
+          "myplugin",
+        )
+        .ok();
+      Ok(metadata)
     }
+    _ => Ok(metadata),
   }
 }
 
@@ -137,7 +137,7 @@ plugin!(
   deps: &[],
   create: MyPlugin,
   orchestrators: [MyOrchestrator],
-  extension: myextension,
+  extensions: [resolve(resolve_metadata)],
   struct MyPlugin;
 );
 

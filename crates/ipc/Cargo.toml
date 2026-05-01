@@ -2,7 +2,7 @@
 name = "rind-ipc"
 version.workspace = true
 edition.workspace = true
-license = "MPL-2.0"
+license.workspace = true
 
 [lib]
 path = "src/ipc.rs"

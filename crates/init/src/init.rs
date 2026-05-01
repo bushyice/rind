@@ -267,8 +267,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .unwrap_or(15);
 
   let mut boot = BootEngine::default();
+  let mut extensions = ExtensionManager::default();
 
-  let mut units = UnitsOrchestrator::new(units_dir);
+  let units = UnitsOrchestrator::new(units_dir);
 
   let mut metadata = MetadataRegistry::default();
   let mut instances = InstanceMap::default();
@@ -278,10 +279,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   for plugin in collect_plugins(plugins_path(), &log)? {
     boot.orchestrators.extend(plugin.provide_orchestrators());
-    if let Some(ext) = plugin.unit_extension() {
-      units.insert_extension(ext);
-    }
+    plugin.register_extensions(&mut extensions);
   }
+  EXTENSIONS.with(|e| match e.set(extensions) {
+    Ok(_) => {}
+    Err(_) => log.log(
+      LogLevel::Error,
+      "boot",
+      "failed to allocate extensions",
+      Default::default(),
+    ),
+  });
 
   boot.orchestrators.insert(0, PumpOrchestrator);
   boot.orchestrators.insert(0, BootOrchestrator);

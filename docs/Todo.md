@@ -8,10 +8,14 @@ kanban-plugin: board
 
 - [ ] **eBPF Loader**: (maybe?) Loading eBPF at system startup.
 - [ ] **cgroups**: Using linux cgroups for service resource management.
+- [ ] **Namespaces**: Service namespaces (user, network, mounts) in isolated envs.
+- [ ] **Watchdog**: Service requirement to ping rind in order not to be terminated.
 
 
 ## Doing
 
+- [ ] **Memory Transport**
+- [ ] **Json Optimizations**
 - [ ] **Piping**: Piping and payloads into other states/signals.
 	- [x] Simple circumstantial piping
 	- [ ] General piping

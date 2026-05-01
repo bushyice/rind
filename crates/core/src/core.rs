@@ -2,6 +2,7 @@ pub mod boot;
 pub mod context;
 pub mod error;
 pub mod events;
+pub mod extensions;
 pub mod lifecycle;
 pub mod logging;
 pub mod metadata;
@@ -23,6 +24,7 @@ pub mod prelude {
   pub use context::*;
   pub use error::*;
   pub use events::*;
+  pub use extensions::*;
   pub use lifecycle::*;
   pub use logging::*;
   pub use metadata::*;

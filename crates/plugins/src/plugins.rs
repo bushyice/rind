@@ -4,10 +4,9 @@ use std::{
 };
 
 use libloading::os::unix::{Library, Symbol};
-use rind_base::units::UnitExtension;
 use rind_core::{
   error::CoreError,
-  prelude::{LogHandle, Orchestrator},
+  prelude::{ExtensionManager, LogHandle, Orchestrator},
 };
 
 pub use rind_base as base;
@@ -32,9 +31,7 @@ pub trait Plugin {
 
   fn provide_orchestrators(&self) -> Vec<Box<dyn Orchestrator>>;
 
-  fn unit_extension(&self) -> Option<UnitExtension> {
-    None
-  }
+  fn register_extensions(&self, _extm: &mut ExtensionManager) {}
 }
 
 pub fn plugins_path() -> PathBuf {
@@ -154,7 +151,11 @@ pub mod prelude {
 
       orchestrators: [$($body:expr),* $(,)?],
 
-      $(extension: $ext:expr,)?
+      extensions: [
+        $(
+          $kind:ident ( $func:path )
+        ),* $(,)?
+      ],
 
       struct $plugin_name:ident $($body_struct:tt)?
     ) => {
@@ -174,15 +175,28 @@ pub mod prelude {
           vec![$(Box::new($body)),*]
         }
 
-        $(fn unit_extension(&self) -> Option<UnitExtension> {
-          Some($ext)
-        })?
+        fn register_extensions(&self, exts: &mut ExtensionManager) {
+          $(
+            plugin!(@register exts, $kind, $func);
+          )*
+        }
       }
 
       #[unsafe(no_mangle)]
       pub extern "Rust" fn get_plugin() -> *mut dyn Plugin {
         Box::into_raw(Box::new($create))
       }
+    };
+    (@register $exts:ident, act, $func:path) => {
+      $exts.register(::rind_plugins::base::core::extensions::Extension::Act($func));
+    };
+
+    (@register $exts:ident, resolve, $func:path) => {
+      $exts.register(::rind_plugins::base::core::extensions::Extension::Resolve($func));
+    };
+
+    (@register $exts:ident, enquire, $func:path) => {
+      $exts.register(::rind_plugins::base::core::extensions::Extension::Enquire($func));
     };
   }
 
