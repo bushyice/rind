@@ -615,11 +615,17 @@ impl ServiceRuntime {
             .split_once('/')
             .map(|(name, p)| (name, Some(p)))
             .unwrap_or((spec, None));
-          let payload = sm
-            .states
-            .get(state_name)
-            .and_then(|v| v.first())
-            .map(|x| x.payload.clone())?;
+          // TODO: use BranchCtx only if the name of state matches
+          let payload = if let Some(payload) = branch_ctx.and_then(|x| x.payload.as_ref())
+            && state_name == "$"
+          {
+            payload
+          } else {
+            sm.states
+              .get(state_name)
+              .and_then(|v| v.first())
+              .map(|x| &x.payload)?
+          };
           let Some(path) = path else {
             return Some(payload.to_string_payload());
           };
@@ -636,8 +642,8 @@ impl ServiceRuntime {
                 Some(cur.to_string())
               }
             }
-            FlowPayload::String(s) => Some(s),
-            FlowPayload::Bytes(b) => Some(String::from_utf8(b).unwrap_or_default()),
+            FlowPayload::String(s) => Some(s.clone()),
+            FlowPayload::Bytes(b) => Some(String::from_utf8(b.clone()).unwrap_or_default()),
             FlowPayload::None(_) => Some(String::new()),
           }
         };
@@ -1711,6 +1717,7 @@ impl Runtime for ServiceRuntime {
 
               for service_name in target_keys {
                 let mut is_running = false;
+                // println!("{service_name} at {:?}", emit_trig.action);
 
                 let Some(meta) = registry
                   .metadata
@@ -1894,7 +1901,43 @@ impl Runtime for ServiceRuntime {
                         Ok(instances) => {
                           ser.instances.extend(instances);
                           self.register_stdio_transport(ser, dispatch, None);
+
+                          if !is_running {
+                            if let Some(inst) = ser.instances.as_one_mut() {
+                              inst.state = ServiceState::Active;
+                              self.run_triggers(ser.metadata.on_start.as_ref(), Some(sm), dispatch);
+                            }
+
+                            let _ = dispatch.dispatch(
+                              "services",
+                              "reconcile_stacks",
+                              rpayload!({
+                                "service": service_name.clone(),
+                                "action": ServiceEventKind::Started
+                              }),
+                            );
+
+                            let _ = dispatch.dispatch(
+                              "timer",
+                              "reconcile_timers",
+                              rpayload!({
+                                "service": service_name.clone(),
+                                "action": ServiceEventKind::Started
+                              }),
+                            );
+                          }
+
                           started += 1;
+                          log.log(
+                            LogLevel::Info,
+                            "service-runtime",
+                            "started branched service instance",
+                            [
+                              ("service".to_string(), service_name.to_string()),
+                              ("branch".into(), key.to_string()),
+                            ]
+                            .into(),
+                          );
                         }
                         Err(e) => {
                           let mut fields = self.log_fields(ser, "start");

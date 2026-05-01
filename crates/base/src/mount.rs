@@ -47,7 +47,7 @@ impl MountRuntime {
     log.log(LogLevel::Info, "mount-runtime", "Mounting target", fields);
 
     let flags = parse_mount_flags(target.flags.as_deref());
-    println!("{target:?}");
+    // println!("{target:?}");
 
     if let Err(e) = mount(
       target.source.as_ref().map(|x| x.as_str()),

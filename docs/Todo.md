@@ -41,6 +41,13 @@ kanban-plugin: board
 
 ## Testing
 
+- [ ] **Service TP state piping address name for `branch_ctx`**
+- [ ] **Inverse Transcendence**: Branched and unbranched inverse transcendence (`activate_on_none`).
+	- [x] Branched transcendence
+	- [x] Unbranched transcendence
+	- [ ] Auto Payload
+	  - [x] With variables
+	  - [ ] With commands
 - [ ] **TImers**: Timers to trigger events after a preset duration.
 - [ ] **Little Tasks 1**:
 	- [x] Fix the persistent socket issue

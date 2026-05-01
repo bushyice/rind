@@ -11,7 +11,8 @@ run.exec = "/usr/bin/user_login"
 run.args = []
 restart = false
 start-on = [{ state = "tr_demo@login_required" }]
-transport = { id = "env", options = ["RIND_LOGIN_TTY=state:tr_demo@login_required"] }
+transport = { id = "env", options = ["RIND_LOGIN_TTY=state:$/tty"] }
+branching = { enabled = true, source-state = "tr_demo@login_required", key = "tty", max-instances = 16 }
 
 [[service]]
 name = "user_shell"
@@ -29,10 +30,18 @@ restart = false
 start-on = [{ state = "tr_demo@niri_active" }]
 branching = { enabled = true, source-state = "tr_demo@niri_active", key = "tty", max-instances = 16 }
 
+[[variable]]
+name = "ttys"
+default = ["/dev/tty1", "/dev/tty2"]
+
 [[state]]
 name = "login_required"
-payload = "string"
-activate-on-none = ["rind@user_session"]
+payload = "json"
+branch = ["tty"]
+activate-on-none = [{
+  name = "rind@user_session",
+  branch = "tty"
+}]
 auto-payload = {
   # there will be others such as system.field (defined by rind) or { eval = "/bin/sh -c 'ls /dev | grep tty'" }
   # where for .eval, each line is parsed separately or can be inserted directly as {eval = "...", insert = ["key"] or insert = "root" }
@@ -42,8 +51,9 @@ auto-payload = {
   # input = ["tty"],
 
   # but for now:
-  eval = "/bin/echo",
-  args = ["/dev/tty1"]
+  variable = "ttys",
+  many = true,
+  insert = "tty"
 }
 
 [[state]]
