@@ -1,7 +1,6 @@
 pub mod flow;
 pub mod ipc;
 pub mod mount;
-pub mod networking;
 pub mod permissions;
 pub mod reaper;
 pub mod services;
@@ -26,7 +25,6 @@ pub mod prelude {
   pub use flow::*;
   pub use ipc::*;
   pub use mount::*;
-  pub use networking::*;
   pub use reaper::*;
   pub use services::*;
   pub use sockets::*;

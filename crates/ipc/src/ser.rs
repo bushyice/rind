@@ -16,10 +16,6 @@ pub struct UnitSerialized {
 }
 
 impl UnitSerialized {
-  pub fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
-  }
-
   pub fn from_string(str: String) -> Self {
     serde_json::from_str(&str).unwrap_or(Self {
       name: String::new().into(),
@@ -33,6 +29,12 @@ impl UnitSerialized {
 
   pub fn as_some(self) -> Option<Self> {
     Some(self)
+  }
+}
+
+impl StringifySerialized for UnitSerialized {
+  fn stringify(&self) -> String {
+    serde_json::to_string(self).unwrap_or_default()
   }
 }
 
@@ -65,8 +67,8 @@ pub struct SocketSerialized {
   pub active: bool,
 }
 
-impl SocketSerialized {
-  pub fn stringify(&self) -> String {
+impl StringifySerialized for SocketSerialized {
+  fn stringify(&self) -> String {
     serde_json::to_string(self).unwrap_or_default()
   }
 }
@@ -78,8 +80,8 @@ pub struct StateSerialized {
   pub keys: Vec<Ustr>,
 }
 
-impl StateSerialized {
-  pub fn stringify(&self) -> String {
+impl StringifySerialized for StateSerialized {
+  fn stringify(&self) -> String {
     serde_json::to_string(self).unwrap_or_default()
   }
 }
@@ -106,46 +108,47 @@ pub struct UnitItemsSerialized {
   pub signals: Vec<SignalSerialized>,
 }
 
-impl UnitItemsSerialized {
-  pub fn stringify(&self) -> String {
+impl StringifySerialized for UnitItemsSerialized {
+  fn stringify(&self) -> String {
     serde_json::to_string(self).unwrap_or_default()
   }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct PortStateSerialized {
-  pub protocol: String,
-  pub local_address: String,
-  pub local_port: u16,
-  pub state: String,
-  pub pid: Option<u32>,
-  pub process: Option<String>,
+pub trait StringifySerialized {
+  fn stringify(&self) -> String;
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct NetworkStatusSerialized {
-  pub interface: Ustr,
-  pub method: Ustr,
-  pub address: Option<Ustr>,
-  pub gateway: Option<Ustr>,
-  pub state: Ustr,
+#[derive(Default)]
+pub struct IpcListComponent {
+  pub components: Vec<Box<dyn StringifySerialized>>,
 }
 
-impl NetworkStatusSerialized {
-  pub fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl StringifySerialized for IpcListComponent {
+  fn stringify(&self) -> String {
+    if self.components.len() == 1 {
+      self.components.last().unwrap().stringify()
+    } else {
+      let mut vec = Vec::new();
+      for item in &self.components {
+        vec.push(item.stringify());
+      }
+      serde_json::to_string(&vec).unwrap_or_default()
+    }
   }
 }
 
-impl PortStateSerialized {
-  pub fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl IpcListComponent {
+  pub fn add(&mut self, item: impl StringifySerialized + 'static) {
+    self.components.push(Box::new(item));
   }
 }
 
 #[cfg(test)]
 mod tests {
-  use super::{ServiceSerialized, UnitItemsSerialized, UnitSerialized, serialize_many};
+
+  use super::{
+    ServiceSerialized, StringifySerialized, UnitItemsSerialized, UnitSerialized, serialize_many,
+  };
 
   #[test]
   fn unit_serialized_roundtrip() {

@@ -1,6 +1,8 @@
 use rind_ipc::payloads::ListPayload;
 use rind_ipc::recv::IpcSourcemap;
-use rind_ipc::ser::{NetworkStatusSerialized, SignalSerialized, SocketSerialized, StateSerialized};
+use rind_ipc::ser::{
+  IpcListComponent, SignalSerialized, SocketSerialized, StateSerialized, StringifySerialized,
+};
 use rind_ipc::{Message, MessageType};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -13,8 +15,7 @@ use std::thread;
 
 use crate::flow::{Signal, State, StateMachine};
 use crate::mount::{Mount, is_mounted};
-use crate::networking::{get_ports, handle_ipc_network};
-use crate::permissions::{PERM_LOGIN, PERM_NETWORK};
+use crate::permissions::PERM_LOGIN;
 use crate::services::{Service, handle_ipc_start, handle_ipc_stop};
 use crate::sockets::{Socket, handle_ipc_start_socket, handle_ipc_stop_socket};
 use crate::user::{handle_ipc_login, handle_ipc_logout, handle_ipc_run0};
@@ -307,57 +308,10 @@ fn build_ipc_list_response(
       )
       .unwrap_or_default(),
     )
-  } else if payload.unit_type == "netiface" {
-    let mut statuses = Vec::new();
-    if let Some(groups) = ctx.registry.metadata.groups("units") {
-      for group in groups {
-        if let Some(cfgs) = ctx
-          .registry
-          .metadata
-          .group_items::<crate::networking::NetworkConfig>("units", group)
-        {
-          for cfg in cfgs {
-            let config = {
-              if let Some(instances) = sm.states.get(&Ustr::from("rind@net-configured")) {
-                instances.iter().find(|i| {
-                  if let Some(obj) = i.payload.to_json().as_object() {
-                    obj.get("name").and_then(|v| v.as_str()) == Some(cfg.name.as_str())
-                  } else {
-                    false
-                  }
-                })
-              } else {
-                None
-              }
-            };
-            let state = if config.is_some() {
-              "Configured"
-            } else {
-              "Down"
-            }
-            .to_string();
-            statuses.push(NetworkStatusSerialized {
-              interface: cfg.name.clone().into(),
-              method: match cfg.method {
-                crate::networking::NetworkMethod::Dhcp => "dhcp".into(),
-                crate::networking::NetworkMethod::Static => "static".into(),
-              },
-              address: config
-                .map(|x| x.payload.get_json_field_as::<Ustr>("ip"))
-                .unwrap_or_default(),
-              gateway: config
-                .map(|x| x.payload.get_json_field_as::<Ustr>("gateway"))
-                .unwrap_or_default(),
-              state: state.into(),
-            });
-          }
-        }
-      }
-    }
-    Message::from_type(MessageType::Ok).with_vec(statuses)
-  } else if payload.unit_type == "netport" {
-    Message::from_type(MessageType::Ok).with_vec(get_ports())
-  } else {
+  } else if payload.unit_type == "unknown"
+    || payload.unit_type == "units"
+    || payload.unit_type.is_empty()
+  {
     let mut units_map: HashMap<Ustr, UnitSerialized> = HashMap::new();
 
     if let Some(groups) = ctx.registry.metadata.groups("units") {
@@ -463,6 +417,17 @@ fn build_ipc_list_response(
     let mut units_list: Vec<UnitSerialized> = units_map.into_values().collect();
     units_list.sort_by(|a, b| a.name.cmp(&b.name));
     Message::from_type(MessageType::Ok).with(serialize_many(&units_list))
+  } else {
+    let msg = EXTENSIONS.with(|extensions| {
+      extensions
+        .get()
+        .expect("extension manager not initialized")
+        .resolve(
+          &format!("ipc:list:{}", payload.unit_type),
+          IpcListComponent::default(),
+        )
+    })?;
+    Message::from_type(MessageType::Ok).with(msg.stringify())
   })
 }
 
@@ -589,7 +554,6 @@ impl Runtime for IpcRuntime {
         ipcsrc.register("start_socket", handle_ipc_start_socket, PermissionExpr::All);
         ipcsrc.register("stop_socket", handle_ipc_stop_socket, PermissionExpr::All);
         ipcsrc.register("list", handle_ipc_list, PermissionExpr::All);
-        ipcsrc.register("network", handle_ipc_network, PERM_NETWORK);
         ipcsrc.register("set_variable", handle_ipc_set, PermissionExpr::All);
         ipcsrc.register("remove_variable", handle_ipc_remove, PermissionExpr::All);
         ipcsrc.register("reload_units", handle_ipc_reload_units, PermissionExpr::All);

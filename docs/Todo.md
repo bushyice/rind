@@ -14,10 +14,11 @@ kanban-plugin: board
 
 ## Doing
 
-- [ ] **Signal Branching**
+- [ ] **Networking as a plugin**: Move networking into a plugin to have more flexibility for a potentially optional(or replaceable) feature.
 - [ ] **Sophisticated timers**
 - [ ] **Memory Transport**
 - [ ] **Json Optimizations**
+- [ ] **KDL Configs**: Replace `TOML` with `KDL`.
 - [ ] **Piping**: Piping and payloads into other states/signals.
 	- [x] Simple circumstantial piping
 	- [ ] General piping
@@ -47,6 +48,7 @@ kanban-plugin: board
 
 ## Testing
 
+- [ ] **Signal Branching**
 - [ ] **Service TP state piping address name for `branch_ctx`**
 - [ ] **Inverse Transcendence**: Branched and unbranched inverse transcendence (`activate_on_none`).
 	- [x] Branched transcendence

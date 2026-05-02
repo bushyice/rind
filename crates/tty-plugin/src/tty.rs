@@ -62,7 +62,7 @@ fn trigger_ttyload(
 ) -> CoreResult<ExtensionExecutionCtx<Arc<MountMetadata>>> {
   match name {
     "mount" if ctx.target.target.as_str() == "/sys" => {
-      Ok(ctx.with_fn(Box::new(|_, _, registry| {
+      Ok(ctx.with_fn(|_, _, registry| {
         let mut ttys: Vec<Ustr> = Vec::new();
         let mut tty_count = 0;
 
@@ -107,8 +107,8 @@ fn trigger_ttyload(
           );
         }
 
-        Ok(())
-      })))
+        Ok(Box::new(()))
+      }))
     }
     _ => Ok(ctx),
   }

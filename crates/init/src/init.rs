@@ -11,7 +11,6 @@ use nix::unistd::Pid;
 use rind_base::flow::FlowRuntime;
 use rind_base::ipc::IpcRuntime;
 use rind_base::mount::MountRuntime;
-use rind_base::networking::NetworkingRuntime;
 use rind_base::reaper::ReaperRuntime;
 use rind_base::services::ServiceRuntime;
 use rind_base::sockets::SocketRuntime;
@@ -55,10 +54,30 @@ impl Orchestrator for BootOrchestrator {
     ctx.dispatch("flow", "bootstrap", Default::default())?;
     ctx.dispatch("sockets", "bootstrap", Default::default())?;
     ctx.dispatch("services", "bootstrap", Default::default())?;
-    ctx.dispatch("networking", "bootstrap", Default::default())?;
-    ctx.dispatch("networking", "scan", Default::default())?;
-    ctx.dispatch("networking", "configure", Default::default())?;
 
+    Ok(())
+  }
+}
+
+struct AfterBootOrchestrator;
+
+impl Orchestrator for AfterBootOrchestrator {
+  fn id(&self) -> &str {
+    "after-boot"
+  }
+
+  fn depends_on(&self) -> &[&str] {
+    &[]
+  }
+
+  fn when(&self) -> OrchestratorWhen<'static> {
+    OrchestratorWhen {
+      cycle: &[BootCycle::Runtime],
+      phase: BootPhase::End,
+    }
+  }
+
+  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
     ctx.dispatch("sockets", "setup_all", Default::default())?;
     ctx.dispatch("services", "start_all", Default::default())?;
     ctx.dispatch("services", "evaluate_triggers", Default::default())?;
@@ -92,7 +111,6 @@ impl Orchestrator for RuntimeProviderOrchestrator {
       Box::new(MountRuntime::default()),
       Box::new(FlowRuntime::default()),
       Box::new(TransportRuntime::default()),
-      Box::new(NetworkingRuntime::default()),
       Box::new(ReaperRuntime::default()),
       Box::new(IpcRuntime::default()),
       Box::new(UserRuntime::default()),
@@ -127,8 +145,6 @@ impl Orchestrator for PumpOrchestrator {
   fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
     ctx.dispatch("reaper", "reap_once", Default::default())?;
     ctx.dispatch("reaper", "timeout_sweep", Default::default())?;
-    ctx.dispatch("networking", "scan", Default::default())?;
-    ctx.dispatch("networking", "reconcile", Default::default())?;
     ctx.dispatch("services", "drain_events", Default::default())?;
     ctx.dispatch("sockets", "drain_events", Default::default())?;
     ctx.dispatch("transport", "drain_incoming", Default::default())?;
@@ -293,6 +309,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   });
 
   boot.orchestrators.insert(0, PumpOrchestrator);
+  boot.orchestrators.insert(0, AfterBootOrchestrator);
   boot.orchestrators.insert(0, BootOrchestrator);
   boot.orchestrators.insert(0, units);
   boot.orchestrators.insert(0, RuntimeProviderOrchestrator);

@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use crate::flow::{Signal, State, StateMachine, state_path};
 use crate::mount::Mount;
-use crate::networking::NetworkConfig;
 use crate::permissions::{PERM_LOGIN, PERM_RUN0, PERM_SYSTEM_SERVICES, Permission};
 use crate::services::Service;
 use crate::sockets::Socket;
@@ -50,7 +49,6 @@ impl UnitsOrchestrator {
       .of::<Timer>("timer")
       .of::<Mount>("mount")
       .of::<Socket>("socket")
-      .of::<NetworkConfig>("network")
       .of::<State>("state")
       .of::<Signal>("signal")
       .of::<Permission>("permission")
@@ -218,27 +216,6 @@ payload = "json"
 name = "request_logout"
 payload = "json"
 
-[[state]]
-name = "net-interface"
-payload = "json"
-branch = ["name"]
-
-[[state]]
-name = "online"
-payload = "none"
-
-[[state]]
-name = "net-configured"
-payload = "json"
-branch = ["name"]
-
-[[state]]
-name = "net-dns_ready"
-payload = "none"
-
-[[state]]
-name = "firewall"
-payload = "none"
 "#;
 
     let _ = metadata.from_toml(builtin_toml, BUILTIN_UNIT);

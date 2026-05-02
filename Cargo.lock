@@ -329,6 +329,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "networking"
+version = "0.1.0"
+dependencies = [
+ "rind-ipc",
+ "rind-plugins",
+ "serde",
+]
+
+[[package]]
 name = "nix"
 version = "0.31.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -705,7 +714,6 @@ name = "tty-plugin"
 version = "0.1.0"
 dependencies = [
  "rind-plugins",
- "serde",
 ]
 
 [[package]]

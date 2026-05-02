@@ -17,12 +17,10 @@ use rind_ipc::{
   payloads::{ListPayload, LogoutPayload, Run0AuthPayload, SSPayload},
   send::send_message,
   ser::{
-    NetworkStatusSerialized, PortStateSerialized, ServiceSerialized, SocketSerialized,
-    StateSerialized, UnitItemsSerialized, UnitSerialized,
+    ServiceSerialized, SocketSerialized, StateSerialized, UnitItemsSerialized, UnitSerialized,
   },
 };
 
-use crate::print::{print_network, print_ports, print_units};
 mod macros;
 mod print;
 
@@ -511,21 +509,27 @@ fn main() {
             .parse_payload::<SocketSerialized>()
             .expect("Failed to parse"),
         );
-      } else if port && network {
-        print_ports(
-          &result
-            .parse_vec_payload::<PortStateSerialized>()
-            .expect("Failed to parse"),
-        );
-      } else if network {
-        for status in result
-          .parse_vec_payload::<NetworkStatusSerialized>()
-          .expect("Failed to parse")
-        {
-          print_network(&status);
-        }
+      }
+      // else if port && network {
+      //   print_ports(
+      //     &result
+      //       .parse_vec_payload::<PortStateSerialized>()
+      //       .expect("Failed to parse"),
+      //   );
+      // } else if network {
+      //   for status in result
+      //     .parse_vec_payload::<NetworkStatusSerialized>()
+      //     .expect("Failed to parse")
+      //   {
+      //     print_network(&status);
+      //   }
+      // }
+      else if r#type.is_some()
+        && let Some(ref ty) = r#type
+        && !ty.is_empty()
+      {
       } else {
-        print_units(
+        print::print_units(
           &result
             .parse_vec_payload::<UnitSerialized>()
             .expect("Failed to parse"),

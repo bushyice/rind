@@ -26,6 +26,7 @@ binaries = [
   # plugins
   "librind_test_plugin.so:/usr/lib/rind/plugins/",
   "libtty_plugin.so:/usr/lib/rind/plugins/",
+  "libnetworking.so:/usr/lib/rind/plugins/",
 ]
 # Supported forms:
 # - "name" -> copied to bins_dir (or /usr/bin by default)

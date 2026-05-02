@@ -29,7 +29,9 @@ pub enum ExtensionResponseAction {
     payload: Option<RuntimePayload>,
   },
   Function(
-    Box<dyn Fn(&RuntimeDispatcher, &LogHandle, &mut InstanceRegistry<'_>) -> CoreResult<()>>,
+    Box<
+      dyn Fn(&RuntimeDispatcher, &LogHandle, &mut InstanceRegistry<'_>) -> CoreResult<Box<dyn Any>>,
+    >,
   ),
 }
 
@@ -62,9 +64,10 @@ impl<T> ExtensionExecutionCtx<T> {
 
   pub fn with_fn(
     mut self,
-    f: Box<dyn Fn(&RuntimeDispatcher, &LogHandle, &mut InstanceRegistry<'_>) -> CoreResult<()>>,
+    f: impl Fn(&RuntimeDispatcher, &LogHandle, &mut InstanceRegistry<'_>) -> CoreResult<Box<dyn Any>>
+    + 'static,
   ) -> Self {
-    self.response = Some(ExtensionResponseAction::Function(f));
+    self.response = Some(ExtensionResponseAction::Function(Box::new(f)));
     self
   }
 
@@ -73,7 +76,7 @@ impl<T> ExtensionExecutionCtx<T> {
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
     registry: &mut InstanceRegistry<'_>,
-  ) -> CoreResult<()> {
+  ) -> CoreResult<Box<dyn Any>> {
     if let Some(action) = self.response {
       match action {
         ExtensionResponseAction::Dispatch {
@@ -81,11 +84,11 @@ impl<T> ExtensionExecutionCtx<T> {
           action,
           payload,
         } => dispatch.dispatch(runtime, action, payload.unwrap_or_default())?,
-        ExtensionResponseAction::Function(f) => f(dispatch, log, registry)?,
+        ExtensionResponseAction::Function(f) => return f(dispatch, log, registry),
       }
     }
 
-    Ok(())
+    Ok(Box::new(()))
   }
 }
 
