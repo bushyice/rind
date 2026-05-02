@@ -1860,11 +1860,18 @@ impl Runtime for ServiceRuntime {
 
                 if let Some(branching) = &ser.metadata.branching {
                   if branching.enabled {
-                    let branches = sm
+                    let mut branches = sm
                       .states
                       .get(&branching.source_state)
                       .cloned()
                       .unwrap_or_default();
+
+                    // this might allow for signal branching
+                    if let Some(event) = emit_event.as_ref() {
+                      if event.r#type == FlowType::Signal && event.name == branching.source_state {
+                        branches.push(event.clone());
+                      }
+                    }
 
                     let mut started = 0usize;
                     for branch in branches {
