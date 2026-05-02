@@ -1,4 +1,4 @@
-use rind_ipc::payloads::ListPayload;
+use rind_ipc::payloads::{ListPayload, SSPayload};
 use rind_ipc::recv::IpcSourcemap;
 use rind_ipc::ser::{
   IpcListComponent, SignalSerialized, SocketSerialized, StateSerialized, StringifySerialized,
@@ -418,15 +418,19 @@ fn build_ipc_list_response(
     units_list.sort_by(|a, b| a.name.cmp(&b.name));
     Message::from_type(MessageType::Ok).with(serialize_many(&units_list))
   } else {
-    let msg = EXTENSIONS.with(|extensions| {
-      extensions
-        .get()
-        .expect("extension manager not initialized")
-        .resolve(
-          &format!("ipc:list:{}", payload.unit_type),
-          IpcListComponent::default(),
-        )
-    })?;
+    let msg = EXTENSIONS
+      .with(|extensions| {
+        extensions
+          .get()
+          .expect("extension manager not initialized")
+          .resolve(
+            &format!("ipc:list:{}", payload.unit_type),
+            ExtensionExecutionCtx::new(IpcListComponent::default()),
+          )
+      })?
+      .dispatch(None, None, Some(&mut ctx.registry))?
+      .downcast::<IpcListComponent>()
+      .map_err(|_| CoreError::Unknown)?;
     Message::from_type(MessageType::Ok).with(msg.stringify())
   })
 }
@@ -455,6 +459,55 @@ pub fn handle_ipc_set(
     .ok_or(CoreError::Custom("Failed to get variable heap".into()))?;
 
   Ok(Message::default())
+}
+
+pub fn handle_ipc_life(
+  msg: Message,
+  ctx: &mut RuntimeContext<'_>,
+  dispatch: &RuntimeDispatcher,
+  log: &LogHandle,
+  action: &str,
+) -> Result<Message, CoreError> {
+  let payload = msg
+    .parse_payload::<SSPayload>()
+    .map_err(CoreError::Custom)?;
+
+  let message = EXTENSIONS
+    .with(|extensions| {
+      extensions
+        .get()
+        .expect("extension manager not initialized")
+        .resolve(
+          &format!("ipc:{action}:{}", payload.unit_type),
+          ExtensionExecutionCtx::new(payload),
+        )
+    })?
+    .dispatch(Some(dispatch), Some(log), Some(&mut ctx.registry))?
+    .downcast::<Message>()
+    .map_err(|_| Message::default());
+
+  Ok(match message {
+    Ok(msg) => *msg,
+    Err(msg) => msg,
+  })
+}
+
+pub fn handle_ipc_start_unknown(
+  msg: Message,
+  ctx: &mut RuntimeContext<'_>,
+  dispatch: &RuntimeDispatcher,
+  log: &LogHandle,
+) -> Result<Message, CoreError> {
+  handle_ipc_life(msg, ctx, dispatch, log, "start")
+}
+
+pub fn handle_ipc_stop_unknown(
+  msg: Message,
+  ctx: &mut RuntimeContext<'_>,
+  dispatch: &RuntimeDispatcher,
+  log: &LogHandle,
+) -> Result<Message, CoreError> {
+  handle_ipc_life(msg, ctx, dispatch, log, "stop")
 }
 
 pub fn handle_ipc_remove(
@@ -553,6 +606,8 @@ impl Runtime for IpcRuntime {
         ipcsrc.register("stop_service", handle_ipc_stop, PermissionExpr::All);
         ipcsrc.register("start_socket", handle_ipc_start_socket, PermissionExpr::All);
         ipcsrc.register("stop_socket", handle_ipc_stop_socket, PermissionExpr::All);
+        ipcsrc.register("start", handle_ipc_start_unknown, PermissionExpr::All);
+        ipcsrc.register("stop", handle_ipc_stop_unknown, PermissionExpr::All);
         ipcsrc.register("list", handle_ipc_list, PermissionExpr::All);
         ipcsrc.register("set_variable", handle_ipc_set, PermissionExpr::All);
         ipcsrc.register("remove_variable", handle_ipc_remove, PermissionExpr::All);

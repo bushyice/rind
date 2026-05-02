@@ -451,7 +451,7 @@ fn main() {
       socket,
       network,
       port,
-      r#type,
+      mut r#type,
       name,
     } => {
       let name = name.unwrap_or_default();
@@ -484,6 +484,12 @@ fn main() {
       )
       .expect("Failed to send message");
 
+      if r#type.is_none() && port && network {
+        r#type = Some("netports".to_string());
+      } else if r#type.is_none() && network {
+        r#type = Some("netiface".to_string());
+      }
+
       if unit {
         print::print_unit(
           &name,
@@ -509,25 +515,16 @@ fn main() {
             .parse_payload::<SocketSerialized>()
             .expect("Failed to parse"),
         );
-      }
-      // else if port && network {
-      //   print_ports(
-      //     &result
-      //       .parse_vec_payload::<PortStateSerialized>()
-      //       .expect("Failed to parse"),
-      //   );
-      // } else if network {
-      //   for status in result
-      //     .parse_vec_payload::<NetworkStatusSerialized>()
-      //     .expect("Failed to parse")
-      //   {
-      //     print_network(&status);
-      //   }
-      // }
-      else if r#type.is_some()
+      } else if r#type.is_some()
         && let Some(ref ty) = r#type
         && !ty.is_empty()
+        && ty != "unknown"
       {
+        if let Ok(list) = result.parse_payload::<rind_ipc::ser::IpcListComponent>() {
+          print::print_ipc_list(&list);
+        } else {
+          println!("{}", result.payload.unwrap_or_default());
+        }
       } else {
         print::print_units(
           &result
@@ -558,15 +555,18 @@ fn main() {
     } => {
       let action = if r#type == "socket" || r#type == "soc" {
         "start_socket"
-      } else {
+      } else if r#type == "service" || r#type == "svc" {
         "start_service"
+      } else {
+        "start"
       };
       handle_send!(
         action,
         &SSPayload {
           force: false,
           name,
-          persist
+          persist,
+          unit_type: r#type
         }
       );
     }
@@ -578,15 +578,18 @@ fn main() {
     } => {
       let action = if r#type == "socket" || r#type == "soc" {
         "stop_socket"
-      } else {
+      } else if r#type == "service" || r#type == "svc" {
         "stop_service"
+      } else {
+        "stop"
       };
       handle_send!(
         action,
         &SSPayload {
-          force: force,
+          force,
           name,
-          persist
+          persist,
+          unit_type: r#type
         }
       );
     }

@@ -63,6 +63,9 @@ fn trigger_ttyload(
   match name {
     "mount" if ctx.target.target.as_str() == "/sys" => {
       Ok(ctx.with_fn(|_, _, registry| {
+        let Some(registry) = registry else {
+          return Err(CoreError::Unknown);
+        };
         let mut ttys: Vec<Ustr> = Vec::new();
         let mut tty_count = 0;
 

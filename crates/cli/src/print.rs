@@ -1,7 +1,145 @@
 use owo_colors::OwoColorize;
 use rind_ipc::ser::{
-  ServiceSerialized, SocketSerialized, StateSerialized, UnitItemsSerialized, UnitSerialized,
+  IpcListComponent, IpcListPrinter, ServiceSerialized, SocketSerialized, StateSerialized,
+  UnitItemsSerialized, UnitSerialized,
 };
+
+pub fn print_ipc_list(list: &IpcListComponent) {
+  let Some(printer) = &list.printer else {
+    for item in &list.components {
+      println!("{}", item);
+    }
+    return;
+  };
+
+  match printer.r#type.as_str() {
+    "table" => print_as_table(list, printer),
+    "list" => print_as_list(list, printer),
+    "string" | _ => {
+      for item in &list.components {
+        println!("{}", item);
+      }
+    }
+  }
+}
+
+fn print_as_table(list: &IpcListComponent, printer: &IpcListPrinter) {
+  // let mut format_str = String::new();
+  // for _ in 0..printer.titles.len() {
+  //   format_str.push_str("{:<20} ");
+  // }
+
+  // let mut colored_titles = Vec::new();
+  // for (i, title) in printer.titles.iter().enumerate() {
+  //   let color = printer
+  //     .colors
+  //     .get(i)
+  //     .cloned()
+  //     .unwrap_or("white".to_string());
+  //   colored_titles.push(colorize_str(title, &color, true));
+  // }
+
+  println!(
+    "{}",
+    printer
+      .titles
+      .iter()
+      .enumerate()
+      .map(|(i, t)| colorize_str(
+        t,
+        printer.colors.get(i).unwrap_or(&"white".to_string()),
+        true
+      ))
+      .collect::<Vec<_>>()
+      .join("  ")
+  );
+
+  for component in &list.components {
+    if let Ok(obj) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(component) {
+      let mut row = Vec::new();
+      for (i, key) in printer.keys.iter().enumerate() {
+        let val = obj
+          .get(key)
+          .map(|v| {
+            if let Some(s) = v.as_str() {
+              s.to_string()
+            } else {
+              v.to_string()
+            }
+          })
+          .unwrap_or_else(|| "-".to_string());
+        let color = printer
+          .colors
+          .get(i)
+          .cloned()
+          .unwrap_or("white".to_string());
+        row.push(colorize_str(&val, &color, false));
+      }
+      println!("{}", row.join("  "));
+    }
+  }
+}
+
+fn print_as_list(list: &IpcListComponent, printer: &IpcListPrinter) {
+  for component in &list.components {
+    if let Ok(obj) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(component) {
+      for (i, key) in printer.keys.iter().enumerate() {
+        let title = printer.titles.get(i).cloned().unwrap_or(key.clone());
+        let val = obj
+          .get(key)
+          .map(|v| {
+            if let Some(s) = v.as_str() {
+              s.to_string()
+            } else {
+              v.to_string()
+            }
+          })
+          .unwrap_or_else(|| "-".to_string());
+        let color = printer
+          .colors
+          .get(i)
+          .cloned()
+          .unwrap_or("white".to_string());
+        println!(
+          "  {}{}: {}",
+          if i == 0 {
+            "● ".bright_green().to_string()
+          } else {
+            "  ".to_string()
+          },
+          title.bold().white(),
+          colorize_str(&val, &color, false)
+        );
+      }
+      println!();
+    }
+  }
+}
+
+fn colorize_str(s: &str, color: &str, bold: bool) -> String {
+  let mut c = match color {
+    "blue" => s.blue().to_string(),
+    "green" => s.green().to_string(),
+    "yellow" => s.yellow().to_string(),
+    "red" => s.red().to_string(),
+    "magenta" => s.magenta().to_string(),
+    "cyan" => s.cyan().to_string(),
+    "white" => s.white().to_string(),
+
+    "on_blue" => s.on_blue().to_string(),
+    "on_green" => s.on_green().to_string(),
+    "on_yellow" => s.on_yellow().to_string(),
+    "on_red" => s.on_red().to_string(),
+    "on_magenta" => s.on_magenta().to_string(),
+    "on_cyan" => s.on_cyan().to_string(),
+    "on_white" => s.on_white().to_string(),
+    _ => s.to_string(),
+  };
+  if bold {
+    c = s.bold().to_string();
+  }
+  c
+}
 
 pub fn print_units(units: &[UnitSerialized]) {
   println!(
@@ -24,51 +162,6 @@ pub fn print_units(units: &[UnitSerialized]) {
     );
   }
 }
-
-// pub fn print_ports(ports: &[PortStateSerialized]) {
-//   println!(
-//     "{:<10} {:<20} {:<10} {:<10} {:<10} {:<15}",
-//     "Protocol".bold().on_blue().white(),
-//     "Local IP".bold().on_green().white(),
-//     "Port".bold().on_yellow().white(),
-//     "State".bold().on_white().black(),
-//     "PID".bold().on_magenta().white(),
-//     "Process".bold().on_cyan().white()
-//   );
-
-//   for port in ports {
-//     let proto = port.protocol.blue();
-//     let pid = port
-//       .pid
-//       .map(|p| p.to_string())
-//       .unwrap_or_else(|| "-".to_string());
-//     let proc_n = port.process.clone().unwrap_or_else(|| "-".to_string());
-//     println!(
-//       "{:<10} {:<20} {:<10} {:<10} {:<10} {:<15}",
-//       proto,
-//       port.local_address,
-//       port.local_port,
-//       port.state.green(),
-//       pid,
-//       proc_n.yellow()
-//     );
-//   }
-// }
-
-// pub fn print_network(status: &NetworkStatusSerialized) {
-//   println!(
-//     "{}: {} (Method: {})",
-//     status.interface.blue().bold(),
-//     status.state.green(),
-//     status.method
-//   );
-//   if let Some(ip) = &status.address {
-//     println!("   IP: {}", ip.yellow());
-//   }
-//   if let Some(gw) = &status.gateway {
-//     println!("   Gateway: {}", gw.black().on_white());
-//   }
-// }
 
 pub fn print_unit(unit_name: &String, unit: &UnitItemsSerialized) {
   println!("{}", format!("Unit: {}", unit_name).bold().cyan());

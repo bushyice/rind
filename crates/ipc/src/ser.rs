@@ -118,28 +118,46 @@ pub trait StringifySerialized {
   fn stringify(&self) -> String;
 }
 
-#[derive(Default)]
+impl StringifySerialized for String {
+  fn stringify(&self) -> String {
+    self.clone()
+  }
+}
+
+impl StringifySerialized for &str {
+  fn stringify(&self) -> String {
+    self.to_string()
+  }
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone)]
+pub struct IpcListPrinter {
+  pub r#type: String, // table/list/string
+  pub titles: Vec<String>,
+  pub keys: Vec<String>,
+  pub colors: Vec<String>,
+}
+
+#[derive(Default, Serialize, Deserialize)]
 pub struct IpcListComponent {
-  pub components: Vec<Box<dyn StringifySerialized>>,
+  pub components: Vec<String>,
+  pub printer: Option<IpcListPrinter>,
 }
 
 impl StringifySerialized for IpcListComponent {
   fn stringify(&self) -> String {
-    if self.components.len() == 1 {
-      self.components.last().unwrap().stringify()
-    } else {
-      let mut vec = Vec::new();
-      for item in &self.components {
-        vec.push(item.stringify());
-      }
-      serde_json::to_string(&vec).unwrap_or_default()
-    }
+    serde_json::to_string(self).unwrap_or_default()
   }
 }
 
 impl IpcListComponent {
-  pub fn add(&mut self, item: impl StringifySerialized + 'static) {
-    self.components.push(Box::new(item));
+  pub fn add(&mut self, item: impl StringifySerialized) {
+    self.components.push(item.stringify());
+  }
+
+  pub fn with_printer(mut self, printer: IpcListPrinter) -> Self {
+    self.printer = Some(printer);
+    self
   }
 }
 

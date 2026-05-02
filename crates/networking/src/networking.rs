@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use rind_ipc::Message;
-use rind_ipc::payloads::NetworkPayload;
+use rind_ipc::payloads::{NetworkPayload, SSPayload};
 use rind_ipc::recv::IpcSourcemap;
-use rind_ipc::ser::{IpcListComponent, StringifySerialized};
+use rind_ipc::ser::{IpcListComponent, IpcListPrinter, StringifySerialized};
 use rind_plugins::prelude::serde_json::json;
 use rind_plugins::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -25,7 +25,7 @@ plugin!(
   deps: &[],
   create: Networking,
   orchestrators: [NetworkingOrchestrator, NetworkingPumpOrchestrator],
-  extensions: [resolve(inject_networking), resolve(inject_ipc_control)],
+  extensions: [resolve(inject_networking), resolve(inject_ipc_list), act(inject_ipc_control)],
   struct Networking;
 );
 
@@ -62,21 +62,95 @@ impl StringifySerialized for PortStateSerialized {
   }
 }
 
-fn inject_ipc_control(
+fn inject_ipc_control(name: &str, ctx: &mut ExtensionExecutionCtx<SSPayload>) -> CoreResult<()> {
+  if name == "ipc:start:network" {
+    handle_ipc_network_internal(NetworkPayload {
+      iface: ctx.target.name.clone(),
+      method: "up".to_string(),
+      address: None,
+      gateway: None,
+    })?
+  } else if name == "ipc:stop:network" {
+    handle_ipc_network_internal(NetworkPayload {
+      iface: ctx.target.name.clone(),
+      method: "down".to_string(),
+      address: None,
+      gateway: None,
+    })?
+  }
+
+  Ok(())
+}
+
+fn inject_ipc_list(
   name: &str,
   ctx: ExtensionExecutionCtx<IpcListComponent>,
 ) -> CoreResult<ExtensionExecutionCtx<IpcListComponent>> {
   match name {
     "ipc:list:netport" => Ok(ctx.with_fn(|_, _, _| {
-      Ok(Box::new(IpcListComponent {
-        components: get_ports()
-          .into_iter()
-          .map(|x| -> Box<dyn StringifySerialized> { Box::new(x) })
-          .collect(),
-      }))
+      let mut list = IpcListComponent::default().with_printer(IpcListPrinter {
+        r#type: "table".to_string(),
+        titles: vec![
+          "Protocol".to_string(),
+          "Local IP".to_string(),
+          "Port".to_string(),
+          "State".to_string(),
+          "PID".to_string(),
+          "Process".to_string(),
+        ],
+        keys: vec![
+          "protocol".to_string(),
+          "local_address".to_string(),
+          "local_port".to_string(),
+          "state".to_string(),
+          "pid".to_string(),
+          "process".to_string(),
+        ],
+        colors: vec![
+          "blue".to_string(),
+          "green".to_string(),
+          "yellow".to_string(),
+          "white".to_string(),
+          "magenta".to_string(),
+          "cyan".to_string(),
+        ],
+      });
+
+      for port in get_ports() {
+        list.add(port);
+      }
+
+      Ok(Box::new(list))
     })),
     "ipc:list:netiface" => Ok(ctx.with_fn(|_, _, registry| {
-      let mut statuses: Vec<Box<dyn StringifySerialized>> = Vec::new();
+      let Some(registry) = registry else {
+        return Err(CoreError::Unknown);
+      };
+      let mut list = IpcListComponent::default().with_printer(IpcListPrinter {
+        r#type: "list".to_string(),
+        titles: vec![
+          "Interface".to_string(),
+          "Method".to_string(),
+          "Address".to_string(),
+          "Gateway".to_string(),
+          "Status".to_string(),
+        ],
+        keys: vec![
+          "interface".to_string(),
+          "method".to_string(),
+          "address".to_string(),
+          "gateway".to_string(),
+          "state".to_string(),
+        ],
+        colors: vec![
+          "blue".to_string(),
+          "white".to_string(),
+          "yellow".to_string(),
+          "magenta".to_string(),
+          "green".to_string(),
+        ],
+      });
+
       let sm = registry
         .singleton::<StateMachine>(StateMachine::KEY)
         .ok_or(CoreError::RuntimeStopped)?;
@@ -107,7 +181,8 @@ fn inject_ipc_control(
                 "Down"
               }
               .to_string();
-              statuses.push(Box::new(NetworkStatusSerialized {
+
+              list.add(NetworkStatusSerialized {
                 interface: cfg.name.clone().into(),
                 method: match cfg.method {
                   NetworkMethod::Dhcp => "dhcp".into(),
@@ -120,15 +195,13 @@ fn inject_ipc_control(
                   .map(|x| x.payload.get_json_field_as::<Ustr>("gateway"))
                   .unwrap_or_default(),
                 state: state.into(),
-              }));
+              });
             }
           }
         }
       }
 
-      Ok(Box::new(IpcListComponent {
-        components: statuses,
-      }))
+      Ok(Box::new(list))
     })),
     _ => Ok(ctx),
   }
@@ -553,9 +626,13 @@ impl NetworkingRuntime {
       .last_interfaces
       .get(iface)
       .and_then(|s| s.mac.clone())
-      .unwrap_or_default();
+      .ok_or(CoreError::InvalidState(
+        "Mac address for {iface} not supplied".to_string(),
+      ))?;
 
-    let mac_bytes = parse_mac(&mac).unwrap_or([0u8; 6]);
+    let mac_bytes = parse_mac(&mac).ok_or(CoreError::InvalidState(
+      "Mac address '{mac}' for {iface} could not be parsed".to_string(),
+    ))?;
 
     match dhcp_request(iface, &mac_bytes) {
       Ok(lease) => {
@@ -826,19 +903,14 @@ impl Runtime for NetworkingRuntime {
   }
 }
 
-pub fn handle_ipc_network(
-  msg: Message,
-  _ctx: &mut RuntimeContext<'_>,
-  _dispatch: &RuntimeDispatcher,
-  _log: &LogHandle,
-) -> Result<Message, CoreError> {
-  let payload = msg
-    .parse_payload::<NetworkPayload>()
-    .map_err(CoreError::Custom)?;
-
+pub fn handle_ipc_network_internal(payload: NetworkPayload) -> CoreResult<()> {
   if payload.method == "up" || payload.method == "down" {
     unsafe {
       let sock = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
+      if sock < 0 {
+        return Err(CoreError::Custom("failed to create socket".into()));
+      }
+
       if sock >= 0 {
         let mut req: libc::ifreq = std::mem::zeroed();
         let bytes = payload.iface.as_bytes();
@@ -850,12 +922,31 @@ pub fn handle_ipc_network(
           } else if payload.method == "down" {
             req.ifr_ifru.ifru_flags &= !(libc::IFF_UP as i16);
           }
-          libc::ioctl(sock, libc::SIOCSIFFLAGS, &req);
+          let ret = libc::ioctl(sock, libc::SIOCSIFFLAGS, &req);
+          if ret != 0 {
+            return Err(CoreError::Custom("failed to set interface flags".into()));
+          }
+        } else {
+          return Err(CoreError::Custom("failed to create socket".into()));
         }
         libc::close(sock);
       }
     }
   }
+  Ok(())
+}
+
+pub fn handle_ipc_network(
+  msg: Message,
+  _ctx: &mut RuntimeContext<'_>,
+  _dispatch: &RuntimeDispatcher,
+  _log: &LogHandle,
+) -> Result<Message, CoreError> {
+  let payload = msg
+    .parse_payload::<NetworkPayload>()
+    .map_err(CoreError::Custom)?;
+
+  handle_ipc_network_internal(payload)?;
 
   Ok(Message::ok("ok"))
 }
@@ -942,6 +1033,7 @@ pub fn get_ports() -> Vec<PortStateSerialized> {
     for line in content.lines().skip(1) {
       let parts: Vec<&str> = line.split_whitespace().collect();
       if parts.len() < 4 {
+        // or 10
         continue;
       }
 
@@ -1171,14 +1263,21 @@ fn dhcp_request(iface: &str, mac: &[u8; 6]) -> Result<DhcpLease, CoreError> {
   use std::os::unix::io::AsRawFd;
   let fd = socket.as_raw_fd();
   let iface_bytes = iface.as_bytes();
-  unsafe {
+
+  let ret = unsafe {
     libc::setsockopt(
       fd,
       libc::SOL_SOCKET,
       libc::SO_BINDTODEVICE,
       iface_bytes.as_ptr() as *const libc::c_void,
       iface_bytes.len() as libc::socklen_t,
-    );
+    )
+  };
+
+  if ret != 0 {
+    return Err(CoreError::Custom(format!(
+      "DHCP: failed to bind to device {iface}. ERR: {ret}"
+    )));
   }
 
   let xid: u32 = {

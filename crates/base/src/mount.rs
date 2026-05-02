@@ -80,7 +80,7 @@ impl MountRuntime {
           .expect("extension manager not initialized")
           .resolve("mount", ExtensionExecutionCtx::new(target.clone()))
       })?
-      .dispatch(dispatch, log, registry)?;
+      .dispatch(Some(dispatch), Some(log), Some(registry))?;
 
     Ok(())
   }

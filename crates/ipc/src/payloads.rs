@@ -13,6 +13,8 @@ pub struct SSPayload {
   pub force: bool,
   #[serde(default)]
   pub persist: bool,
+  #[serde(default)]
+  pub unit_type: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]

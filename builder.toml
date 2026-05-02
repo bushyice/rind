@@ -227,7 +227,8 @@ groups = ["wheel", { name = "network", gid = 1003 }]
 # env = { PATH = "/usr/bin:/bin", TERM = "linux" }
 # env = ["PATH", "/usr/bin:/bin", "TERM", "linux"]
 env = [
-  "PATH", "/usr/bin"
+  "PATH", "/usr/bin",
+  "TERM", "xterm"
 ]
 
 [[profile.main.user]]

@@ -15,9 +15,9 @@ bitflags::bitflags! {
   #[repr(C)]
   pub struct PluginCapability: u64 {
     const EXTENSIONS = 1 << 0;
-    const ORCHESTRATORS = 1 << 0;
-    const RUNTIMES = 1 << 0;
-    const IPC = 1 << 0;
+    const ORCHESTRATORS = 1 << 1;
+    const RUNTIMES = 1 << 2;
+    const IPC = 1 << 3;
   }
 }
 
