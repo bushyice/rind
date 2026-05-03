@@ -395,7 +395,7 @@ impl Orchestrator for NetworkingPumpOrchestrator {
 
   fn when(&self) -> OrchestratorWhen<'static> {
     OrchestratorWhen {
-      cycle: &[BootCycle::Runtime],
+      cycle: &[BootCycle::Pump],
       phase: BootPhase::End,
     }
   }

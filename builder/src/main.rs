@@ -1173,7 +1173,7 @@ fn run(profile: &Profile) {
     .arg(kernel_path)
     .arg("-drive")
     .arg(format!(
-      "file={},format=raw,if=virtio",
+      "file={},format=raw,if=virtio,cache=none",
       artifact_path().join("rootfs.img").display()
     ));
   if let Some(opt) = &profile.run_options {
@@ -1182,6 +1182,11 @@ fn run(profile: &Profile) {
   if let Some(args) = &qemu_options.args {
     cmd.args(args);
   }
+  println!(
+    "[*] Running qemu as {} with args {:?}",
+    qemu_options.arch.as_ref().unwrap_or(&"x86_64".to_string()),
+    qemu_options.args
+  );
   cmd.status().ok();
 }
 
@@ -1200,7 +1205,12 @@ fn handle_command(c: &str, profile: &Profile, fs_ext4: &mut Option<Ext4Fs>, no_o
         }
       }
     }
-    "r" => run(profile),
+    "r" => {
+      if let Some(fs) = std::mem::take(fs_ext4) {
+        let _ = fs.umount();
+      }
+      run(profile);
+    }
     _ => {
       if fs_ext4.is_none() {
         let output = artifact_path().join("rootfs.img");

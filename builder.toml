@@ -188,11 +188,11 @@ busybox_url = "https://busybox.net/downloads/binaries/1.19.0/busybox-x86_64"
 disk_mode = "image"
 
 # Linux Image: for now we can use bzImage
-linux_image = "bzImage:https://l4re.org/download/Linux-kernel/x86-64/bzImage-6.6.8"
+linux_image = "bzImage:https://repo.openeuler.org/openEuler-22.03-LTS-SP3/embedded_img/x86-64/qemu-x86-64/bzImage"
 
 # root= is needed for image disks
-run_options = ["console=ttyS0/ root=/dev/vda rw"]
-#qemu_options = { arch = "x86_64", args = [...] }
+run_options = ["console=ttyS0 root=/dev/vda rw"]
+# qemu_options = { arch = "x86_64", args = ["-device", "virtio-gpu", "-device", "qemu-xhci"] }
 
 # Depricated
 nodes = [

@@ -298,6 +298,10 @@ impl Runtime for UserRuntime {
         });
 
         self.create_runtime_dir(user)?;
+
+        if let Some(ref notifier) = ctx.notifier {
+          notifier.notify()?;
+        }
       }
       "logout" => {
         let session_id = payload.get::<u64>("session_id")?;
@@ -324,6 +328,10 @@ impl Runtime for UserRuntime {
         });
 
         self.remove_runtime_dir(user, &pam)?;
+
+        if let Some(ref notifier) = ctx.notifier {
+          notifier.notify()?;
+        }
       }
       "create_sessions" => {
         let sm = ctx

@@ -257,15 +257,15 @@ impl InverseBranchingConfig {
 #[model(
   meta_name = name,
   meta_fields(
-    name, payload, activate_on_none, after, branch, auto_payload, subscribers, broadcast, permissions
+    name, payload, stop_on, after, branch, auto_payload, subscribers, broadcast, permissions
   ),
   derive_metadata(Debug, Clone)
 )]
 pub struct State {
   pub name: Ustr,
   pub payload: FlowPayloadType,
-  #[serde(rename = "activate-on-none")]
-  pub activate_on_none: Option<Vec<InverseBranchingConfig>>,
+  #[serde(rename = "stop-on")]
+  pub stop_on: Option<Vec<InverseBranchingConfig>>,
   pub after: Option<Vec<FlowItem>>,
   pub branch: Option<Vec<Ustr>>,
   #[serde(rename = "auto-payload")]
@@ -345,7 +345,7 @@ impl StateMachine {
 pub struct FlowRuntime {
   state_defs: Vec<(Ustr, Arc<StateMetadata>)>,
   signal_defs: Vec<(Ustr, Arc<SignalMetadata>)>,
-  activate_on_none_index: HashMap<Ustr, HashSet<Ustr>>,
+  inverse_transcendence_index: HashMap<Ustr, HashSet<Ustr>>,
   transcendence_index: HashMap<Ustr, HashSet<Ustr>>,
 }
 
@@ -354,7 +354,7 @@ impl Default for FlowRuntime {
     Self {
       state_defs: Vec::new(),
       signal_defs: Vec::new(),
-      activate_on_none_index: HashMap::new(),
+      inverse_transcendence_index: HashMap::new(),
       transcendence_index: HashMap::new(),
     }
   }
@@ -583,7 +583,7 @@ impl FlowRuntime {
       event_bus,
       dispatch,
     );
-    self.reconcile_activate_on_none_for_source(
+    self.reconcile_inverse_transcendence_for_source(
       sm,
       &instance,
       FlowAction::Apply,
@@ -652,7 +652,7 @@ impl FlowRuntime {
           event_bus,
           dispatch,
         );
-        let _ = self.reconcile_activate_on_none_for_source(
+        let _ = self.reconcile_inverse_transcendence_for_source(
           sm,
           &branch,
           FlowAction::Revert,
@@ -851,7 +851,7 @@ impl FlowRuntime {
     })
   }
 
-  fn reconcile_activate_on_none_for_source(
+  fn reconcile_inverse_transcendence_for_source(
     &mut self,
     sm: &mut StateMachine,
     source: &FlowInstance,
@@ -861,7 +861,7 @@ impl FlowRuntime {
     event_bus: &EventBus,
     dispatch: &RuntimeDispatcher,
   ) -> Result<(), CoreError> {
-    let Some(targets) = self.activate_on_none_index.get(&source.name) else {
+    let Some(targets) = self.inverse_transcendence_index.get(&source.name) else {
       return Ok(());
     };
     let target_names: Vec<Ustr> = targets.iter().cloned().collect();
@@ -875,33 +875,42 @@ impl FlowRuntime {
       else {
         continue;
       };
-      let Some(deps): Option<Vec<InverseBranchingConfig>> = def.activate_on_none.clone() else {
+      let Some(deps): Option<Vec<InverseBranchingConfig>> = def.stop_on.clone() else {
         continue;
       };
 
-      for payload in auto_payloads_for(&def, None, variables) {
-        let should_activate = deps.iter().all(|cfg| {
-          let branches = sm
-            .states
-            .get(cfg.name())
-            .map(|v| v.as_slice())
-            .unwrap_or(&[]);
-          if let Some(branch_spec) = cfg.branch() {
-            let filter = self.branch_filter_from_payload(&payload, branch_spec.as_str());
-            !branches.iter().any(|b| {
-              if let Some(filter) = &filter {
-                crate::triggers::match_operation(filter, &b.payload)
-              } else {
-                false
+      let auto_activate = def.auto_payload.is_some();
+
+      for payload in if auto_activate {
+        auto_payloads_for(&def, None, variables)
+      } else {
+        sm.states.get(&full_name).map_or(Vec::new(), |x| {
+          x.iter().map(|x| x.payload.clone()).collect()
+        })
+      } {
+        let should_activate = auto_activate
+          && deps.iter().all(|cfg| {
+            let branches = sm
+              .states
+              .get(cfg.name())
+              .map(|v| v.as_slice())
+              .unwrap_or(&[]);
+            if let Some(branch_spec) = cfg.branch() {
+              let filter = self.branch_filter_from_payload(&payload, branch_spec.as_str());
+              !branches.iter().any(|b| {
+                if let Some(filter) = &filter {
+                  crate::triggers::match_operation(filter, &b.payload)
+                } else {
+                  false
+                }
+              })
+            } else {
+              if matches!(action, FlowAction::Apply) && cfg.name() == &source.name {
+                return branches.is_empty();
               }
-            })
-          } else {
-            if matches!(action, FlowAction::Apply) && cfg.name() == &source.name {
-              return branches.is_empty();
+              branches.is_empty()
             }
-            branches.is_empty()
-          }
-        });
+          });
 
         let currently_active = sm
           .states
@@ -940,7 +949,7 @@ impl FlowRuntime {
     Ok(())
   }
 
-  fn reconcile_activate_on_none_all(
+  fn reconcile_inverse_transcendence_all(
     &mut self,
     sm: &mut StateMachine,
     variables: Option<&VariableHeap>,
@@ -948,14 +957,14 @@ impl FlowRuntime {
     event_bus: &EventBus,
     dispatch: &RuntimeDispatcher,
   ) -> Result<(), CoreError> {
-    let sources: Vec<Ustr> = self.activate_on_none_index.keys().cloned().collect();
+    let sources: Vec<Ustr> = self.inverse_transcendence_index.keys().cloned().collect();
     for source in sources {
       let source_instance = FlowInstance {
         name: source,
         payload: FlowPayload::None(false),
         r#type: FlowType::State,
       };
-      self.reconcile_activate_on_none_for_source(
+      self.reconcile_inverse_transcendence_for_source(
         sm,
         &source_instance,
         FlowAction::Revert,
@@ -1001,19 +1010,19 @@ impl FlowRuntime {
     let (state_defs, signal_defs) = self.collect_defs(metadata);
     self.state_defs = state_defs;
     self.signal_defs = signal_defs;
-    self.rebuild_activate_on_none_index();
+    self.rebuild_inverse_transcendence_index();
     self.rebuild_transcendence_index();
   }
 
-  fn rebuild_activate_on_none_index(&mut self) {
-    self.activate_on_none_index.clear();
+  fn rebuild_inverse_transcendence_index(&mut self) {
+    self.inverse_transcendence_index.clear();
     for (full_name, def) in &self.state_defs {
-      let Some(deps) = &def.activate_on_none else {
+      let Some(deps) = &def.stop_on else {
         continue;
       };
       for dep in deps {
         self
-          .activate_on_none_index
+          .inverse_transcendence_index
           .entry(dep.name().clone())
           .or_default()
           .insert(full_name.clone());
@@ -1094,11 +1103,23 @@ impl Runtime for FlowRuntime {
         fields.insert("name".to_string(), name.to_string());
         fields.insert("payload".into(), flow_payload.to_string_payload());
         log.log(LogLevel::Trace, "flow-runtime", "setting state", fields);
+
+        if let Some(notifier) = &ctx.notifier {
+          notifier.notify()?;
+        }
       }
       "remove_state" => {
         let name = payload.get::<Ustr>("name")?;
-        let filter_json: Option<serde_json::Value> = payload.get("filter").ok();
-        let filter = filter_json.and_then(|v| serde_json::from_value(v).ok());
+        let filter_json: Option<serde_json::Value> =
+          payload.get("filter").ok().or(payload.get("payload").ok());
+        let filter = filter_json.and_then(|v| match v {
+          serde_json::Value::Object(b) => Some(FlowMatchOperation::Options {
+            binary: None,
+            contains: None,
+            r#as: Some(b.into()),
+          }),
+          _ => serde_json::from_value(v).ok(),
+        });
 
         ctx
           .registry
@@ -1123,6 +1144,10 @@ impl Runtime for FlowRuntime {
         fields.insert("name".to_string(), name.to_string());
         fields.insert("payload".into(), format!("{filter:?}"));
         log.log(LogLevel::Trace, "flow-runtime", "removing state", fields);
+
+        if let Some(notifier) = &ctx.notifier {
+          notifier.notify()?;
+        }
       }
       "emit_signal" => {
         let name = payload.get::<Ustr>("name")?;
@@ -1169,7 +1194,7 @@ impl Runtime for FlowRuntime {
                 );
               }
 
-              self.reconcile_activate_on_none_all(
+              self.reconcile_inverse_transcendence_all(
                 sm,
                 Some(vh),
                 &mut guard,
@@ -1269,7 +1294,7 @@ fn auto_payloads_for(
   variables: Option<&VariableHeap>,
 ) -> Vec<FlowPayload> {
   let Some(cfg) = &def.auto_payload else {
-    return vec![default_payload_for_type(def.payload)];
+    return vec![];
   };
   let Some(variable) = &cfg.variable else {
     return vec![default_payload_for_type(def.payload)];

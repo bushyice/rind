@@ -11,7 +11,7 @@ fn tty_path() -> String {
       if x.is_empty() {
         "/dev/tty1".to_string()
       } else {
-        x
+        format!("/dev/{x}")
       }
     })
     .unwrap_or_else(|_| "/dev/tty1".to_string());

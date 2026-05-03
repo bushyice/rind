@@ -14,7 +14,11 @@ kanban-plugin: board
 
 ## Doing
 
-- [ ] **Networking as a plugin**: Move networking into a plugin to have more flexibility for a potentially optional(or replaceable) feature.
+- [ ] **TTY Manager Plugin**: A tty management plugin.
+	- [ ] `tty@active` state
+	- [ ] `tty@login_required` state/signal
+	- [ ] `tty_take` functionality
+	- [ ] `tty@switch` signal
 - [ ] **Sophisticated timers**
 - [ ] **Memory Transport**
 - [ ] **Json Optimizations**
@@ -44,6 +48,14 @@ kanban-plugin: board
 	- [ ] Plugin regisry
 	- [ ] Plugin index
 	- [ ] Plugin caps
+- [ ] [BUG] **Notifier Inconsistency**: There's an inconsistency with notifiers where sometimes they do not notify. (e.g: When logging in and logging out).
+- [ ] [BUG] **Session error**: 
+	
+	- [ ] There's an error where services stop when any user logs out, despite being logged in via other ttys.
+	
+	- [ ] There's an issue where logging out in any tty doesn't set the states (potential match operation issue)
+	
+	- [ ] There's an issue where login/logout have a race condition. and also sometimes user_login service starts and stops on-boot despite it seeing the login_required state alive and no remove_state requests.
 
 
 ## Testing
@@ -87,6 +99,7 @@ kanban-plugin: board
 ## Finished
 
 **Complete**
+- [x] **Networking as a plugin**: Move networking into a plugin to have more flexibility for a potentially optional(or replaceable) feature.
 - [ ] **Permissions**: Entity-based(users, groups) access control for internal actions.
 - [x] **Instance Deletion**: Remove items from instance registry.
 	- [x] Socket Uninstantiation

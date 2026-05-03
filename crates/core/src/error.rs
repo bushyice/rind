@@ -1,5 +1,7 @@
 use std::fmt::{Display, Formatter};
 
+use nix::errno::Errno;
+
 use crate::user::PamError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +24,7 @@ pub enum CoreError {
   DuplicatePermissions { id: u16, name: String },
   PamError(PamError),
   Custom(String),
+  System(Errno),
 }
 
 impl Display for CoreError {
@@ -29,6 +32,7 @@ impl Display for CoreError {
     match self {
       CoreError::PamError(x) => x.fmt(f),
       CoreError::ParseToml(x) => write!(f, "parse error: {x}"),
+      CoreError::System(x) => write!(f, "system error: {x}"),
       CoreError::DoubleKey => write!(f, "Double key"),
       CoreError::MissingField { path } => write!(f, "missing field `{path}`"),
       CoreError::TypeMismatch { path, expected } => {
@@ -77,6 +81,12 @@ impl From<std::io::Error> for CoreError {
 impl From<PamError> for CoreError {
   fn from(value: PamError) -> Self {
     CoreError::PamError(value)
+  }
+}
+
+impl From<Errno> for CoreError {
+  fn from(value: Errno) -> Self {
+    CoreError::System(value)
   }
 }
 
