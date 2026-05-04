@@ -219,6 +219,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "display"
+version = "0.1.0"
+dependencies = [
+ "rind-plugins",
+ "rind-plugins-common",
+ "serde",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -538,6 +547,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rind-plugins-common"
+version = "0.1.0"
+dependencies = [
+ "rind-plugins",
+ "serde",
+]
+
+[[package]]
 name = "rind-test-plugin"
 version = "0.1.0"
 dependencies = [
@@ -714,6 +731,7 @@ name = "tty-plugin"
 version = "0.1.0"
 dependencies = [
  "rind-plugins",
+ "rind-plugins-common",
  "serde",
 ]
 

@@ -14,10 +14,11 @@ kanban-plugin: board
 
 ## Doing
 
+- [ ] [FIX] **State transcendence**: Check and fix state transcendence if it doesn't work.
 - [ ] **TTY Manager Plugin**: A tty management plugin.
 	- [x] `tty@active` state
 	- [x] `tty@login_required` state/signal
-	- [ ] `tty_take` functionality
+	- [x] `tty_take` functionality
 	- [x] `tty@switch` signal
 - [ ] [CLEANUP] **Anyhow**: Remove all `anyhow` errors and results and move them to `CoreError` and `CoreResult`.
 - [ ] **Sophisticated timers**

@@ -1,0 +1,13 @@
+[package]
+name = "rind-plugins-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+
+[lib]
+path = "src/common.rs"
+
+[dependencies]
+serde.workspace = true
+rind-plugins = { path = "../plugins" }

@@ -343,8 +343,8 @@ impl StateMachine {
 }
 
 pub struct FlowRuntime {
-  state_defs: Vec<(Ustr, Arc<StateMetadata>)>,
-  signal_defs: Vec<(Ustr, Arc<SignalMetadata>)>,
+  state_defs: HashMap<Ustr, Arc<StateMetadata>>,
+  signal_defs: HashMap<Ustr, Arc<SignalMetadata>>,
   inverse_transcendence_index: HashMap<Ustr, HashSet<Ustr>>,
   transcendence_index: HashMap<Ustr, HashSet<Ustr>>,
 }
@@ -352,8 +352,8 @@ pub struct FlowRuntime {
 impl Default for FlowRuntime {
   fn default() -> Self {
     Self {
-      state_defs: Vec::new(),
-      signal_defs: Vec::new(),
+      state_defs: HashMap::new(),
+      signal_defs: HashMap::new(),
       inverse_transcendence_index: HashMap::new(),
       transcendence_index: HashMap::new(),
     }
@@ -421,35 +421,21 @@ impl FlowRuntime {
     }
   }
 
-  fn setup_all_state_subscribers(
-    &self,
-    dispatch: &RuntimeDispatcher,
-    state_defs: &[(Ustr, Arc<StateMetadata>)],
-  ) {
-    for (name, def) in state_defs {
+  fn setup_all_state_subscribers(&self, dispatch: &RuntimeDispatcher) {
+    for (name, def) in &self.state_defs {
       if let Some(subscribers) = def.subscribers.as_deref() {
         for subscriber in subscribers {
-          self.setup_subscriber_endpoint(dispatch, name, subscriber);
+          self.setup_subscriber_endpoint(dispatch, name.as_str(), subscriber);
         }
       }
     }
   }
 
-  fn state_subscribers_for<'a>(
-    &self,
-    name: &str,
-    state_defs: &'a [(Ustr, Arc<StateMetadata>)],
-  ) -> Option<&'a [TransportMethod]> {
-    state_defs
-      .iter()
-      .find(|(full_name, _)| full_name.as_str() == name)
-      .or_else(|| {
-        let item_name = name.split_once('@').map(|(_, n)| n).unwrap_or(name);
-        state_defs
-          .iter()
-          .find(|(_, d)| d.name.as_str() == item_name)
-      })
-      .and_then(|(_, d)| d.subscribers.as_deref())
+  fn state_subscribers_for(&self, name: &Ustr) -> Option<Vec<TransportMethod>> {
+    self
+      .state_defs
+      .get(name)
+      .and_then(|d| d.subscribers.clone())
   }
 
   fn save_state_machine(&self, sm: &StateMachine) -> Result<(), CoreError> {
@@ -487,8 +473,7 @@ impl FlowRuntime {
 
     let def = self
       .state_defs
-      .iter()
-      .find(|(full_name, _)| *full_name == name)
+      .get(&name)
       .or_else(|| {
         let item_name = name
           .as_str()
@@ -499,8 +484,8 @@ impl FlowRuntime {
           .state_defs
           .iter()
           .find(|(_, d)| d.name.as_str() == item_name)
+          .map(|(_, d)| d)
       })
-      .map(|(_, d)| d.clone())
       .ok_or_else(|| CoreError::InvalidState(format!("state not found: {name}")))?;
 
     let flow_payload = payload.unwrap_or(FlowPayload::None(false));
@@ -582,7 +567,7 @@ impl FlowRuntime {
       guard,
       event_bus,
       dispatch,
-    );
+    )?;
     self.reconcile_inverse_transcendence_for_source(
       sm,
       &instance,
@@ -606,7 +591,7 @@ impl FlowRuntime {
     guard: &mut HashSet<Ustr>,
     event_bus: &EventBus,
     dispatch: &RuntimeDispatcher,
-  ) {
+  ) -> CoreResult<()> {
     if let Some(branches) = sm.states.remove(name) {
       let (to_keep, to_remove): (Vec<_>, Vec<_>) = if let Some(filter) = &filter {
         branches
@@ -634,13 +619,13 @@ impl FlowRuntime {
           action: FlowAction::Revert,
           flow_type: FlowEventType::State,
         });
-        let subscribers = self.state_subscribers_for(name, &self.state_defs);
+        let subscribers = self.state_subscribers_for(&name.to_ustr());
         self.publish_to_state_subscribers(
           dispatch,
           branch.name.as_str(),
           &branch.payload,
           FlowAction::Revert,
-          subscribers,
+          subscribers.as_deref(),
         );
 
         self.reconcile_transcendence(
@@ -651,7 +636,7 @@ impl FlowRuntime {
           guard,
           event_bus,
           dispatch,
-        );
+        )?;
         let _ = self.reconcile_inverse_transcendence_for_source(
           sm,
           &branch,
@@ -668,6 +653,8 @@ impl FlowRuntime {
         sm.states.insert(Ustr::from(name.to_string()), to_keep);
       }
     }
+
+    Ok(())
   }
 
   fn emit_signal(
@@ -679,8 +666,7 @@ impl FlowRuntime {
     let name = name.into();
     let def = self
       .signal_defs
-      .iter()
-      .find(|(full_name, _)| *full_name == name)
+      .get(&name)
       .or_else(|| {
         let item_name = name
           .as_str()
@@ -691,8 +677,9 @@ impl FlowRuntime {
           .signal_defs
           .iter()
           .find(|(_, d)| d.name.as_str() == item_name)
+          .map(|(_, d)| d)
       })
-      .map(|(_, d)| d.clone())
+      .map(|d| d.clone())
       .ok_or_else(|| CoreError::InvalidState(format!("signal not found: {name}")))?;
 
     let flow_payload = payload.unwrap_or(FlowPayload::None(false));
@@ -761,72 +748,65 @@ impl FlowRuntime {
     guard: &mut HashSet<Ustr>,
     event_bus: &EventBus,
     dispatch: &RuntimeDispatcher,
-  ) {
-    let Some(targets) = self.transcendence_index.get(&source.name) else {
-      return;
+  ) -> CoreResult<()> {
+    let Some(targets) = self.transcendence_index.get(&source.name).cloned() else {
+      return Ok(());
     };
 
-    let dependents: Vec<(Ustr, FlowPayload)> = self
-      .state_defs
-      .iter()
-      .filter(|(full_name, _)| targets.contains(full_name))
-      .filter_map(|(full_name, def)| {
-        let after = def.after.as_ref()?;
-        if !after.iter().any(|cond| check_condition(cond, source)) {
-          return None;
-        }
+    for full_name in targets {
+      let Some(def) = self.state_defs.get(&full_name) else {
+        continue;
+      };
 
-        let source_payload = if def.auto_payload.is_some() {
-          let payloads = auto_payloads_for(def, Some(&source.payload), variables);
-          let Some(first) = payloads.first().cloned() else {
-            return None;
-          };
-          first
-        } else {
-          source.payload.clone()
+      let Some(after) = def.after.as_ref() else {
+        continue;
+      };
+      if !after.iter().any(|cond| check_condition(cond, source)) {
+        continue;
+      }
+
+      let source_payload = if def.auto_payload.is_some() {
+        let payloads = auto_payloads_for(def, Some(&source.payload), variables);
+        let Some(first) = payloads.first().cloned() else {
+          continue;
         };
+        first
+      } else {
+        source.payload.clone()
+      };
 
-        let payload = transcendent_payload_for(def, &source_payload)?;
+      let Some(payload) = transcendent_payload_for(def, &source_payload) else {
+        continue;
+      };
 
-        let all_active = after
-          .iter()
-          .all(|cond| condition_matches(sm, cond, Some(source), Some(&payload)));
+      // let all_active = after
+      //   .iter()
+      //   .all(|cond| condition_matches(sm, cond, Some(source), Some(&payload)));
 
-        match action {
-          FlowAction::Apply if !all_active => None,
-          FlowAction::Revert if all_active => None,
-          _ => Some((full_name.clone(), payload)),
-        }
-      })
-      .filter(|(name, _)| *name != source.name)
-      .collect();
-
-    for (dependent, payload) in dependents {
       match action {
-        FlowAction::Apply => {
-          let _ = self.set_state(
-            sm,
-            dependent,
-            Some(payload),
-            variables,
-            guard,
-            event_bus,
-            dispatch,
-          );
-        }
-        FlowAction::Revert => {
-          self.remove_state(
-            sm,
-            &dependent,
-            payload_to_filter(&payload),
-            variables,
-            guard,
-            event_bus,
-            dispatch,
-          );
-        }
+        FlowAction::Apply => self.set_state(
+          sm,
+          full_name,
+          Some(payload),
+          variables,
+          guard,
+          event_bus,
+          dispatch,
+        )?,
+        FlowAction::Revert => self.remove_state(
+          sm,
+          &full_name,
+          payload_to_filter(&payload),
+          variables,
+          guard,
+          event_bus,
+          dispatch,
+        )?,
+        // _ => {}
       }
     }
+
+    Ok(())
   }
 
   fn branch_filter_from_payload(
@@ -867,12 +847,7 @@ impl FlowRuntime {
     let target_names: Vec<Ustr> = targets.iter().cloned().collect();
 
     for full_name in target_names {
-      let Some(def) = self
-        .state_defs
-        .iter()
-        .find(|(name, _)| *name == full_name)
-        .map(|(_, d)| d.clone())
-      else {
+      let Some(def) = self.state_defs.get(&full_name).cloned() else {
         continue;
       };
       let Some(deps): Option<Vec<InverseBranchingConfig>> = def.stop_on.clone() else {
@@ -944,7 +919,7 @@ impl FlowRuntime {
             guard,
             event_bus,
             dispatch,
-          );
+          )?;
         }
       }
     }
@@ -985,22 +960,22 @@ impl FlowRuntime {
     &self,
     metadata: &MetadataRegistry,
   ) -> (
-    Vec<(Ustr, Arc<StateMetadata>)>,
-    Vec<(Ustr, Arc<SignalMetadata>)>,
+    HashMap<Ustr, Arc<StateMetadata>>,
+    HashMap<Ustr, Arc<SignalMetadata>>,
   ) {
-    let mut state_defs = Vec::new();
-    let mut signal_defs = Vec::new();
+    let mut state_defs = HashMap::new();
+    let mut signal_defs = HashMap::new();
 
     if let Some(m) = metadata.metadata("units") {
       for group in m.groups() {
         if let Some(states) = metadata.group_items::<State>("units", group.clone()) {
           for s in states {
-            state_defs.push((Ustr::from(format!("{group}@{}", s.name)), s));
+            state_defs.insert(Ustr::from(format!("{group}@{}", s.name)), s);
           }
         }
         if let Some(signals) = metadata.group_items::<Signal>("units", group.clone()) {
           for s in signals {
-            signal_defs.push((Ustr::from(format!("{group}@{}", s.name)), s));
+            signal_defs.insert(Ustr::from(format!("{group}@{}", s.name)), s);
           }
         }
       }
@@ -1077,8 +1052,6 @@ impl Runtime for FlowRuntime {
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
   ) -> Result<Option<RuntimePayload>, CoreError> {
-    self.refresh_metadata_and_indexes(ctx.registry.metadata);
-
     match action {
       "set_state" => {
         let name = payload.get::<Ustr>("name")?;
@@ -1138,7 +1111,7 @@ impl Runtime for FlowRuntime {
                 &mut guard,
                 ctx.event_bus,
                 dispatch,
-              );
+              )?;
               self.save_state_machine(sm)
             },
           )?;
@@ -1171,7 +1144,8 @@ impl Runtime for FlowRuntime {
         self.reconcile_signal_transcendence(sm, &source, ctx.event_bus, &mut emitted);
       }
       "bootstrap" => {
-        self.setup_all_state_subscribers(dispatch, &self.state_defs);
+        self.refresh_metadata_and_indexes(ctx.registry.metadata);
+        self.setup_all_state_subscribers(dispatch);
         ctx
           .registry
           .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
@@ -1194,7 +1168,7 @@ impl Runtime for FlowRuntime {
                   &mut guard,
                   ctx.event_bus,
                   dispatch,
-                );
+                )?;
               }
 
               self.reconcile_inverse_transcendence_all(

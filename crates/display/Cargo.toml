@@ -1,14 +1,16 @@
 [package]
-name = "tty-plugin"
+name = "display"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-path = "src/tty.rs"
+path = "src/display.rs"
 crate-type = ["cdylib"]
 
 [dependencies]
 rind-plugins = { path = "../plugins" }
 rind-plugins-common = { path = "../common" }
 serde.workspace = true
+
+# smithay = "0.7.0"

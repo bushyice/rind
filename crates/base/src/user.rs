@@ -274,7 +274,7 @@ impl Runtime for UserRuntime {
             .payload(json!({
               "session_id": session_id,
               "username": username.as_str(),
-              "tty": tty.as_str(),
+              "tty": tty.trim_start_matches("/dev/"),
               "runtime_dir": runtime_dir(user.uid).to_string_lossy().to_string()
             }))
             .into(),
@@ -333,8 +333,8 @@ impl Runtime for UserRuntime {
           .singleton_mut::<StateMachine>(StateMachine::KEY)
           .ok_or_else(|| CoreError::InvalidState("state machine store not found".into()))?;
         let key = Ustr::from("rind@user_session");
-        if let Some(users) = sm.states.get(&key).cloned() {
-          for user in users {
+        if let Some(users) = sm.states.get_mut(&key).cloned() {
+          for mut user in users {
             let username = user.payload.get_json_field_as::<String>("username").ok_or(
               CoreError::MissingField {
                 path: "username".into(),
@@ -347,24 +347,9 @@ impl Runtime for UserRuntime {
 
             let session = pam.pam_open_session(&username, &tty)?;
 
-            let _ = dispatch.dispatch(
-              "flow",
-              "remove_state",
-              FlowRuntimePayload::new("rind@user_session")
-                .payload(user.payload.to_json())
-                .into(),
-            );
-
-            let mut new_payload = user.payload.clone();
-            new_payload.set_json("session_id".into(), session.id.into());
-
-            let _ = dispatch.dispatch(
-              "flow",
-              "set_state",
-              FlowRuntimePayload::new("rind@user_session")
-                .payload(new_payload.to_json())
-                .into(),
-            );
+            user
+              .payload
+              .set_json("session_id".into(), session.id.into());
 
             let user_record = pam
               .store

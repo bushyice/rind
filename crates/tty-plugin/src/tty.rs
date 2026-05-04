@@ -7,6 +7,7 @@
 use std::{
   fs::{self, File, OpenOptions},
   os::fd::{AsRawFd, BorrowedFd, OwnedFd, RawFd},
+  sync::Arc,
 };
 
 use rind_plugins::{
@@ -20,6 +21,7 @@ use rind_plugins::{
     *,
   },
 };
+use rind_plugins_common::TTYPayload;
 
 plugin_extensible!(EXTENSIONS);
 
@@ -156,7 +158,7 @@ impl TTYRuntime {
       !x.iter().any(|x| {
         x.payload
           .get_json_field_as::<String>("tty")
-          .map_or(false, |x| x == format!("/dev/{tty_name}"))
+          .map_or(false, |x| x == tty_name)
       })
     }) && !self.has_login_required(sm, &tty_name)
     {
@@ -212,10 +214,24 @@ impl Runtime for TTYRuntime {
       }
       "take" => {
         let tty_name = payload.get::<Ustr>("tty")?;
+
+        log.log(
+          LogLevel::Info,
+          "ttys",
+          &format!("taking tty {tty_name}"),
+          Default::default(),
+        );
         self.taken_state(dispatch, tty_name, true)?;
       }
       "return" => {
         let tty_name = payload.get::<Ustr>("tty")?;
+
+        log.log(
+          LogLevel::Info,
+          "ttys",
+          &format!("returning tty {tty_name}"),
+          Default::default(),
+        );
         self.taken_state(dispatch, tty_name, false)?;
       }
       "drain_events" => {
@@ -373,14 +389,6 @@ impl Runtime for TTYRuntime {
   }
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-pub enum TTYPayload {
-  Check,
-  Take(Ustr),
-  Return(Ustr),
-  Taken(Vec<Ustr>),
-}
-
 fn handle_ipc_tty(
   msg: Message,
   ctx: &mut RuntimeContext<'_>,
@@ -459,6 +467,56 @@ fn inject_builtin(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {
   }
 }
 
+fn trigger_ttyload(
+  name: &str,
+  ctx: ExtensionExecutionCtx<Arc<MountMetadata>>,
+) -> CoreResult<ExtensionExecutionCtx<Arc<MountMetadata>>> {
+  match name {
+    "mount" if ctx.target.target.as_str() == "/sys" => Ok(ctx.with_fn(|_, _, _| {
+      let mut tty_count = 0;
+
+      let limit = std::env::var("RIND_ACTIVATE_TTYS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(7);
+
+      if limit == 0 {
+        return Ok(Box::new(()));
+      }
+
+      if let Ok(dir) = fs::read_dir("/sys/class/tty") {
+        let mut entries: Vec<_> = dir.collect::<Result<Vec<_>, _>>()?;
+        entries.sort_by_key(|e| {
+          let name = e.file_name();
+          let name = name.to_string_lossy();
+
+          name
+            .strip_prefix("tty")
+            .and_then(|n| n.parse::<u32>().ok())
+            .unwrap_or(u32::MAX)
+        });
+
+        for item in entries {
+          let name = item.file_name();
+          let name = name.to_string_lossy();
+
+          // TODO: proper tty fetch
+          if name.starts_with("tty") && name != "tty" && name != "tty0" && tty_count < limit {
+            tty_count += 1;
+
+            if let Ok(file) = OpenOptions::new().write(true).open(format!("/dev/{name}")) {
+              if unsafe { libc::ioctl(file.as_raw_fd(), libc::TIOCSCTTY, 1) } != 0 {}
+            }
+          }
+        }
+      }
+
+      Ok(Box::new(()))
+    })),
+    _ => Ok(ctx),
+  }
+}
+
 plugin!(
   name: "myplugin",
   version: 0,
@@ -466,7 +524,7 @@ plugin!(
   deps: &[],
   create: MyPlugin,
   orchestrators: [TTYOrchestrator::default(), TTYPumpOrchestrator],
-  extensions: [resolve(inject_builtin)],
+  extensions: [resolve(inject_builtin), resolve(trigger_ttyload)],
   struct MyPlugin;
 );
 
