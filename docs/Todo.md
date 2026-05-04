@@ -15,10 +15,11 @@ kanban-plugin: board
 ## Doing
 
 - [ ] **TTY Manager Plugin**: A tty management plugin.
-	- [ ] `tty@active` state
-	- [ ] `tty@login_required` state/signal
+	- [x] `tty@active` state
+	- [x] `tty@login_required` state/signal
 	- [ ] `tty_take` functionality
-	- [ ] `tty@switch` signal
+	- [x] `tty@switch` signal
+- [ ] [CLEANUP] **Anyhow**: Remove all `anyhow` errors and results and move them to `CoreError` and `CoreResult`.
 - [ ] **Sophisticated timers**
 - [ ] **Memory Transport**
 - [ ] **Json Optimizations**

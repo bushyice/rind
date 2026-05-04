@@ -9,14 +9,19 @@ use std::{
   os::fd::{AsRawFd, BorrowedFd, OwnedFd, RawFd},
 };
 
-use rind_plugins::prelude::{
-  nix::{
-    sys::epoll::EpollFlags,
-    unistd::{Whence, lseek, read},
+use rind_plugins::{
+  base::ipcc::{Message, recv::IpcSourcemap},
+  prelude::{
+    nix::{
+      sys::epoll::EpollFlags,
+      unistd::{Whence, lseek, read},
+    },
+    serde_json::json,
+    *,
   },
-  serde_json::json,
-  *,
 };
+
+pub static PERM_TTY: PermissionId = PermissionId(1004);
 
 #[derive(Default)]
 struct TTYOrchestrator;
@@ -164,6 +169,21 @@ impl TTYRuntime {
 
     Ok(())
   }
+
+  fn taken_state(
+    &self,
+    dispatch: &RuntimeDispatcher,
+    tty_name: Ustr,
+    take: bool,
+  ) -> CoreResult<()> {
+    dispatch.dispatch(
+      "flow",
+      if take { "set_state" } else { "remove_state" },
+      FlowRuntimePayload::new("tty@taken")
+        .payload(serde_json::Value::String(tty_name.to_string()))
+        .into(),
+    )
+  }
 }
 
 impl Runtime for TTYRuntime {
@@ -182,6 +202,19 @@ impl Runtime for TTYRuntime {
     match action {
       "watch_events" => {
         self.event_rx = Some(ctx.event_bus.subscribe::<FlowEvent>());
+
+        // TODO: move it own action
+        // but ig it saves on dispatch overhead
+        let ipcsrc = ctx.scope.get::<IpcSourcemap>().cloned().unwrap_or_default();
+        ipcsrc.register("tty", handle_ipc_tty, PERM_TTY);
+      }
+      "take" => {
+        let tty_name = payload.get::<Ustr>("tty")?;
+        self.taken_state(dispatch, tty_name, true)?;
+      }
+      "return" => {
+        let tty_name = payload.get::<Ustr>("tty")?;
+        self.taken_state(dispatch, tty_name, false)?;
       }
       "drain_events" => {
         if let Some(rx) = &self.event_rx {
@@ -251,6 +284,31 @@ impl Runtime for TTYRuntime {
           .singleton::<StateMachine>(StateMachine::KEY)
           .ok_or(CoreError::RuntimeStopped)?;
 
+        match EXTENSIONS.with(|extensions| {
+          extensions
+            .get()
+            .expect("extension manager not initialized")
+            .resolve(
+              "boot",
+              TTYPayload::Taken(sm.states.get("tty@taken").map_or(Default::default(), |x| {
+                x.iter()
+                  .map(|x| x.payload.to_string_payload().to_ustr())
+                  .collect()
+              })),
+            )
+        })? {
+          TTYPayload::Return(tty) => self.taken_state(dispatch, tty, false)?,
+          TTYPayload::Take(tty) => self.taken_state(dispatch, tty, true)?,
+          _ => {}
+        }
+
+        dispatch.dispatch("ttys", "reconcile", Default::default())?;
+      }
+      "reconcile" => {
+        let sm = ctx
+          .registry
+          .singleton::<StateMachine>(StateMachine::KEY)
+          .ok_or(CoreError::RuntimeStopped)?;
         self.reconcile_login(sm, dispatch, &self.active, &self.active)?;
       }
       "on_switch" => {
@@ -311,6 +369,52 @@ impl Runtime for TTYRuntime {
 
     Ok(None)
   }
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub enum TTYPayload {
+  Check,
+  Take(Ustr),
+  Return(Ustr),
+  Taken(Vec<Ustr>),
+}
+
+fn handle_ipc_tty(
+  msg: Message,
+  ctx: &mut RuntimeContext<'_>,
+  dispatch: &RuntimeDispatcher,
+  _log: &LogHandle,
+) -> CoreResult<Message> {
+  let payload = msg
+    .parse_payload::<TTYPayload>()
+    .map_err(CoreError::Custom)?;
+
+  let sm = ctx
+    .registry
+    .singleton::<StateMachine>(StateMachine::KEY)
+    .ok_or(CoreError::RuntimeStopped)?;
+
+  match payload {
+    TTYPayload::Check => {
+      return Ok(Message::ok(
+        sm.states
+          .get("tty@active")
+          .and_then(|x| x.first().map(|x| x.payload.to_string_payload()))
+          .unwrap_or("tty1".to_string()),
+      ));
+    }
+    TTYPayload::Take(tty) => {
+      dispatch.dispatch("ttys", "take", RuntimePayload::default().insert("tty", tty))?
+    }
+    TTYPayload::Return(tty) => dispatch.dispatch(
+      "ttys",
+      "return",
+      RuntimePayload::default().insert("tty", tty),
+    )?,
+    _ => {}
+  }
+
+  Ok(Message::ok("ok"))
 }
 
 fn inject_builtin(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {

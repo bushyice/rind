@@ -241,6 +241,7 @@ pub fn subset_match(filter: &serde_json::Value, payload: &serde_json::Value) -> 
       true
     }
     (f, serde_json::Value::Object(p_tab)) => p_tab.values().any(|p_val| subset_match(f, p_val)),
+    (f, serde_json::Value::Array(p_arr)) => p_arr.iter().any(|p_val| subset_match(f, p_val)),
     (f, p) => f == p,
   }
 }

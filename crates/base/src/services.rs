@@ -203,6 +203,10 @@ pub struct BranchingConfig {
   pub key: Option<String>,
   #[serde(rename = "max-instances", default)]
   pub max_instances: Option<usize>,
+  #[serde(default)]
+  pub only: Option<Vec<String>>,
+  #[serde(default)]
+  pub except: Option<Vec<String>>,
 }
 
 fn default_username_field() -> String {
@@ -1334,6 +1338,37 @@ impl ServiceRuntime {
 
     (level, text, fields)
   }
+
+  fn check_branch_match(
+    &self,
+    spec: &str,
+    key: &str,
+    sm: &StateMachine,
+    vh: Option<&VariableHeap>,
+  ) -> bool {
+    let key_val = serde_json::json!(key);
+
+    if let Some(var_name) = spec.strip_prefix("var:") {
+      if let Some(vh) = vh {
+        if let Some(val) = vh.get(var_name) {
+          if let Ok(json_val) = serde_json::to_value(val) {
+            return crate::triggers::subset_match(&key_val, &json_val);
+          }
+        }
+      }
+      return false;
+    }
+
+    let state_name = spec.strip_prefix("state:").unwrap_or(spec);
+    if let Some(instances) = sm.states.get(&Ustr::from(state_name)) {
+      for inst in instances {
+        if crate::triggers::subset_match(&key_val, &inst.payload.to_json()) {
+          return true;
+        }
+      }
+    }
+    false
+  }
 }
 
 #[derive(Debug)]
@@ -1803,11 +1838,7 @@ impl Runtime for ServiceRuntime {
                             (FlowAction::Revert, Some(event), Some(start_conds)) => {
                               start_conds.iter().any(|cond| {
                                 crate::triggers::check_condition(cond, event)
-                                  && !crate::flow::condition_is_active(
-                                    sm,
-                                    cond,
-                                    None,
-                                  )
+                                  && !crate::flow::condition_is_active(sm, cond, None)
                               })
                             }
                             _ => false,
@@ -1887,6 +1918,33 @@ impl Runtime for ServiceRuntime {
                       }) {
                         continue;
                       }
+
+                      if let Some(onlys) = &branching.only {
+                        let mut matched = false;
+                        for spec in onlys {
+                          if self.check_branch_match(spec, key.as_str(), sm, Some(vh)) {
+                            matched = true;
+                            break;
+                          }
+                        }
+                        if !matched {
+                          continue;
+                        }
+                      }
+
+                      if let Some(excepts) = &branching.except {
+                        let mut skipped = false;
+                        for spec in excepts {
+                          if self.check_branch_match(spec, key.as_str(), sm, Some(vh)) {
+                            skipped = true;
+                            break;
+                          }
+                        }
+                        if skipped {
+                          continue;
+                        }
+                      }
+
                       if let Some(max) = branching.max_instances {
                         if ser.instances.len() >= max || started >= max {
                           break;
