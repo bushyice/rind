@@ -373,8 +373,18 @@ fn main() {
     }
     Commands::Logout => {
       let username = std::env::var("USER").expect("unknown user");
-      let tty = "tty1".to_string();
-      handle_send!("logout", &LogoutPayload { username, tty });
+      let session_id = std::env::var("SESSION_ID")
+        .expect("unknown session")
+        .parse::<u64>()
+        .expect("unknown session");
+      handle_send!(
+        "logout",
+        &LogoutPayload {
+          session_id,
+          username,
+          tty: None
+        }
+      );
     }
     Commands::Logs {
       dir,

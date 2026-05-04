@@ -138,7 +138,12 @@ pub fn handle_ipc_login(
     return Err(CoreError::PamError(e));
   }
 
-  let session = match pam.pam_open_session(&payload.username, &payload.tty) {
+  let mut tty = payload.tty.clone();
+  if !tty.starts_with("/dev/") {
+    tty = format!("/dev/{}", tty);
+  }
+
+  let session = match pam.pam_open_session(&payload.username, &tty) {
     Ok(s) => s,
     Err(e) => return Err(CoreError::PamError(e)),
   };
@@ -148,7 +153,7 @@ pub fn handle_ipc_login(
     "login",
     rpayload!({
       "username": payload.username.to_ustr(),
-      "tty": payload.tty.to_ustr(),
+      "tty": tty.to_ustr(),
       "session_id": session.id,
     })
     .into(),
@@ -166,13 +171,13 @@ pub fn handle_ipc_logout(
   dispatch: &RuntimeDispatcher,
   _log: &LogHandle,
 ) -> Result<Message, CoreError> {
-  let mut payload = msg
+  let payload = msg
     .parse_payload::<LogoutPayload>()
     .map_err(|x| CoreError::Custom(x))?;
 
-  if !payload.tty.starts_with("/dev/") {
-    payload.tty = format!("/dev/{}", payload.tty);
-  }
+  // if !payload.tty.starts_with("/dev/") {
+  //   payload.tty = format!("/dev/{}", payload.tty);
+  // }
 
   let pam = ctx
     .registry
@@ -188,39 +193,23 @@ pub fn handle_ipc_logout(
     return Err(CoreError::PermissionDenied);
   }
 
-  let sessions = pam.sessions_for(&payload.username);
+  pam.pam_close_session(payload.session_id)?;
 
-  let mut closed = false;
-  let mut session_id = 0;
-  for session in sessions {
-    if session.tty == payload.tty {
-      session_id = session.id;
-      let _ = pam.pam_close_session(session.id);
-      closed = true;
-    }
-  }
+  let _ = dispatch.dispatch(
+    "user",
+    "logout",
+    rpayload!({
+      "session_id": payload.session_id,
+      "username": payload.username.to_ustr(),
+      "tty": payload.tty.map(|x| x.to_ustr()),
+    })
+    .into(),
+  );
 
-  if closed {
-    let _ = dispatch.dispatch(
-      "user",
-      "logout",
-      rpayload!({
-        "session_id": session_id,
-        "username": payload.username.to_ustr(),
-      })
-      .into(),
-    );
-
-    return Ok(Message::ok(format!(
-      "logged in successfully as {}",
-      payload.username
-    )));
-  }
-
-  Err(CoreError::InvalidState(format!(
-    "no active session for {} on tty {}",
-    payload.username, payload.tty
-  )))
+  return Ok(Message::ok(format!(
+    "logged out successfully as {}",
+    payload.username
+  )));
 }
 
 impl UserRuntime {
@@ -306,18 +295,23 @@ impl Runtime for UserRuntime {
       "logout" => {
         let session_id = payload.get::<u64>("session_id")?;
         let username = payload.get::<Ustr>("username")?;
+        let tty = payload.get::<Ustr>("tty").ok();
         let user = pam
           .store
           .lookup_by_name(&username)
           .ok_or(PamError::UserNotFound)?;
 
+        let mut filter = serde_json::Map::new();
+        filter.insert("session_id".into(), session_id.into());
+        if let Some(tty) = tty {
+          filter.insert("tty".into(), tty.as_str().into());
+        }
+
         let _ = dispatch.dispatch(
           "flow",
           "remove_state",
           FlowRuntimePayload::new("rind@user_session")
-            .payload(json!({
-              "session_id": session_id,
-            }))
+            .payload(serde_json::Value::Object(filter))
             .into(),
         );
 
@@ -339,7 +333,7 @@ impl Runtime for UserRuntime {
           .singleton_mut::<StateMachine>(StateMachine::KEY)
           .ok_or_else(|| CoreError::InvalidState("state machine store not found".into()))?;
         let key = Ustr::from("rind@user_session");
-        if let Some(users) = sm.states.get_mut(&key) {
+        if let Some(users) = sm.states.get(&key).cloned() {
           for user in users {
             let username = user.payload.get_json_field_as::<String>("username").ok_or(
               CoreError::MissingField {
@@ -350,28 +344,34 @@ impl Runtime for UserRuntime {
               .payload
               .get_json_field_as::<String>("tty")
               .ok_or(CoreError::MissingField { path: "tty".into() })?;
-            // let session_id = user.payload.get_json_field_as::<u64>("session_id").ok_or(
-            //   CoreError::MissingField {
-            //     path: "session_id".into(),
-            //   },
-            // )?;
 
             let session = pam.pam_open_session(&username, &tty)?;
 
-            // ILLEGAL OPERATION:
-            // - modify state silently
-            // - modify primary key
-            // - direct wrtie to sm with impermanence
-            user
-              .payload
-              .set_json("session_id".into(), session.id.into());
+            let _ = dispatch.dispatch(
+              "flow",
+              "remove_state",
+              FlowRuntimePayload::new("rind@user_session")
+                .payload(user.payload.to_json())
+                .into(),
+            );
 
-            let user = pam
+            let mut new_payload = user.payload.clone();
+            new_payload.set_json("session_id".into(), session.id.into());
+
+            let _ = dispatch.dispatch(
+              "flow",
+              "set_state",
+              FlowRuntimePayload::new("rind@user_session")
+                .payload(new_payload.to_json())
+                .into(),
+            );
+
+            let user_record = pam
               .store
               .lookup_by_name(&username)
               .ok_or(PamError::UserNotFound)?;
 
-            self.create_runtime_dir(user)?;
+            self.create_runtime_dir(user_record)?;
           }
         }
       }

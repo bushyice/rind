@@ -32,7 +32,8 @@ pub struct LoginPayload {
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct LogoutPayload {
   pub username: String,
-  pub tty: String,
+  pub session_id: u64,
+  pub tty: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]

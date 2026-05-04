@@ -99,7 +99,5 @@ fn main() {
 
   prompt_and_login(&mut writer, &mut reader, tty.clone());
 
-  loop {
-    thread::sleep(Duration::from_secs(5));
-  }
+  std::process::exit(0);
 }

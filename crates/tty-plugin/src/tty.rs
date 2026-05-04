@@ -185,18 +185,18 @@ impl Runtime for TTYRuntime {
       }
       "drain_events" => {
         if let Some(rx) = &self.event_rx {
-          if let Some(w) = rx.try_recv()
-            && w.name.as_str() == "rind@user_session"
-          {
-            self.reconcile_login(
-              ctx
-                .registry
-                .singleton::<StateMachine>(StateMachine::KEY)
-                .ok_or(CoreError::RuntimeStopped)?,
-              dispatch,
-              &self.active,
-              &self.active,
-            )?;
+          while let Some(w) = rx.try_recv() {
+            if w.name.as_str() == "rind@user_session" {
+              self.reconcile_login(
+                ctx
+                  .registry
+                  .singleton::<StateMachine>(StateMachine::KEY)
+                  .ok_or(CoreError::RuntimeStopped)?,
+                dispatch,
+                &self.active,
+                &self.active,
+              )?;
+            }
           }
         }
       }

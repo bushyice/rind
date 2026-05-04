@@ -79,7 +79,17 @@ fn main() {
   let stdout = unsafe { Stdio::from_raw_fd(out_fd) };
   let stderr = unsafe { Stdio::from_raw_fd(err_fd) };
 
-  let _ = unsafe { libc::ioctl(fd, libc::TIOCSCTTY, 0) };
+  // wait a little so that the tty will be released
+  std::thread::sleep(std::time::Duration::from_millis(100));
+
+  for i in 0..5 {
+    if unsafe { libc::ioctl(fd, libc::TIOCSCTTY, 1) } == 0 {
+      break;
+    }
+    let err = std::io::Error::last_os_error();
+    eprintln!("attempt {} to acquire tty failed: {}", i + 1, err);
+    std::thread::sleep(std::time::Duration::from_millis(200));
+  }
 
   let mut shell = "/bin/sh".to_string();
   let mut uid = 0u32;

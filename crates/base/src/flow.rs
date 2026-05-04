@@ -908,6 +908,9 @@ impl FlowRuntime {
               if matches!(action, FlowAction::Apply) && cfg.name() == &source.name {
                 return branches.is_empty();
               }
+              if matches!(action, FlowAction::Revert) && cfg.name() == &source.name {
+                return true;
+              }
               branches.is_empty()
             }
           });

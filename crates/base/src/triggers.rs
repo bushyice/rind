@@ -240,6 +240,7 @@ pub fn subset_match(filter: &serde_json::Value, payload: &serde_json::Value) -> 
       }
       true
     }
+    (f, serde_json::Value::Object(p_tab)) => p_tab.values().any(|p_val| subset_match(f, p_val)),
     (f, p) => f == p,
   }
 }
@@ -365,30 +366,31 @@ pub fn payload_compatible(reference: Option<&FlowPayload>, thing: &FlowPayload) 
 }
 
 fn json_subset(reference: &serde_json::Value, thing: &serde_json::Value) -> bool {
-  let Some(ref_obj) = reference.as_object() else {
-    return true;
-  };
-  let Some(thing_obj) = thing.as_object() else {
-    return false;
-  };
-
-  let mut shared = 0usize;
-  for (key, value) in ref_obj {
-    if let Some(candidate) = thing_obj.get(key) {
-      shared += 1;
-      if value != candidate {
-        return false;
+  match (reference, thing) {
+    (serde_json::Value::Object(ref_obj), serde_json::Value::Object(thing_obj)) => {
+      for (key, ref_val) in ref_obj {
+        let Some(thing_val) = thing_obj.get(key) else {
+          return false;
+        };
+        if !json_subset(ref_val, thing_val) {
+          return false;
+        }
       }
+      true
     }
+    (serde_json::Value::Array(ref_arr), serde_json::Value::Array(thing_arr)) => {
+      for ref_val in ref_arr {
+        if !thing_arr
+          .iter()
+          .any(|thing_val| json_subset(ref_val, thing_val))
+        {
+          return false;
+        }
+      }
+      true
+    }
+    (r, t) => r == t,
   }
-
-  if shared > 0 {
-    return true;
-  }
-
-  ref_obj
-    .values()
-    .all(|v| thing_obj.values().any(|cv| cv == v))
 }
 
 #[cfg(test)]

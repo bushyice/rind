@@ -1806,7 +1806,7 @@ impl Runtime for ServiceRuntime {
                                   && !crate::flow::condition_is_active(
                                     sm,
                                     cond,
-                                    Some(&event.payload),
+                                    None,
                                   )
                               })
                             }
@@ -1881,7 +1881,10 @@ impl Runtime for ServiceRuntime {
                         continue;
                       };
 
-                      if ser.instances.iter().any(|i| i.key == key) {
+                      if ser.instances.iter().any(|i| {
+                        i.key == key
+                          && (i.state == ServiceState::Active || i.state == ServiceState::Starting)
+                      }) {
                         continue;
                       }
                       if let Some(max) = branching.max_instances {
