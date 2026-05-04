@@ -297,6 +297,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
   for plugin in collect_plugins(plugins_path(), &log)? {
     boot.orchestrators.extend(plugin.provide_orchestrators());
     plugin.register_extensions(&mut extensions);
+    if let Some(ext) = plugin.ext {
+      unsafe {
+        ext(&extensions);
+      };
+    }
   }
   EXTENSIONS.with(|e| match e.set(extensions) {
     Ok(_) => {}

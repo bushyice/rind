@@ -21,6 +21,8 @@ use rind_plugins::{
   },
 };
 
+plugin_extensible!(EXTENSIONS);
+
 pub static PERM_TTY: PermissionId = PermissionId(1004);
 
 #[derive(Default)]

@@ -14,10 +14,11 @@ pub use rind_base as base;
 bitflags::bitflags! {
   #[repr(C)]
   pub struct PluginCapability: u64 {
-    const EXTENSIONS = 1 << 0;
-    const ORCHESTRATORS = 1 << 1;
-    const RUNTIMES = 1 << 2;
-    const IPC = 1 << 3;
+    const ORCHESTRATORS = 1 << 0;
+    const RUNTIMES = 1 << 1;
+    const IPC = 1 << 2;
+    const EXTENSIONS = 1 << 3;
+    const EXTENSIBLE = 1 << 4;
   }
 }
 
@@ -49,6 +50,7 @@ pub struct PluginCache {
   pub lib: &'static Library,
   pub meta: PluginMetadata,
   pub plugin: Box<dyn Plugin>,
+  pub ext: Option<unsafe extern "Rust" fn(&ExtensionManager)>,
 }
 
 impl Deref for PluginCache {
@@ -88,6 +90,11 @@ pub fn collect_plugins<P: AsRef<Path>>(
         Err(_) => 1,
       };
 
+      let ext = match lib.get::<unsafe extern "Rust" fn(&ExtensionManager)>(b"extension_entry") {
+        Ok(f) => Some(*f),
+        Err(_) => None,
+      };
+
       let get_plugin: Symbol<unsafe extern "Rust" fn() -> *mut dyn Plugin> =
         match lib.get(b"get_plugin") {
           Ok(s) => s,
@@ -111,6 +118,7 @@ pub fn collect_plugins<P: AsRef<Path>>(
         lib,
         meta: plugin.get_metadata(),
         plugin,
+        ext,
       };
 
       log.log(
@@ -139,6 +147,24 @@ pub mod prelude {
   macro_rules! plugin_abi {
     ($abi:expr) => {
       pub const PLUGIN_ABI_VERSION: u32 = $abi;
+    };
+  }
+
+  #[macro_export]
+  macro_rules! plugin_extensible {
+    ($name:ident) => {
+
+      thread_local! {
+        pub static $name: rind_plugins::base::core::once_cell::unsync::OnceCell<&'static ::rind_plugins::base::core::extensions::ExtensionManager> = rind_plugins::base::core::once_cell::unsync::OnceCell::new();
+      }
+
+      #[unsafe(no_mangle)]
+      pub extern "Rust" fn extension_entry(ext: &'static ::rind_plugins::base::core::extensions::ExtensionManager) {
+        EXTENSIONS.with(|e| match e.set(ext) {
+          Ok(_) => {}
+          Err(_) => {},
+        });
+      }
     };
   }
 
