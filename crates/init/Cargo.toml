@@ -17,3 +17,7 @@ rind-base = { path = "../base" }
 rind-core = { path = "../core" }
 rind-plugins = { path = "../plugins" }
 # rind-daemon = { path = "../rind-daemon" }
+
+[dev-dependencies]
+rind-ipc = { path = "../ipc" }
+serde_json.workspace = true

@@ -158,6 +158,7 @@ mod tests {
 
   use crate::context::{RuntimeContext, ScopeBuilder};
   use crate::logging::{LogConfig, LogHandle, start_logger};
+  use crate::metadata::Metadata;
   use crate::orchestrator::{
     BootCycle, BootPhase, Orchestrator, OrchestratorContext, OrchestratorWhen,
   };
@@ -458,6 +459,27 @@ mod tests {
       .run(&mut metadata, &mut instances, &runtime, &mut resources)
       .expect("boot run should succeed");
     assert_eq!(resources.unwatched_fds(), vec![42]);
+    let _ = runtime.send(RuntimeCommand::Stop);
+  }
+
+  #[test]
+  fn reload_units_collection_rebuilds_collect_cycle_metadata() {
+    let log = logger_for_tests();
+    let runtime = start_runtime(log, vec![], None);
+    let mut boot = BootEngine::default();
+    let mut metadata = MetadataRegistry::default();
+    let mut instances = InstanceMap::default();
+    let mut resources = Resources::default();
+
+    let units = Metadata::new("units");
+    metadata.insert_metadata(units);
+    assert!(metadata.metadata("units").is_some());
+
+    boot
+      .reload_units_collection(&mut metadata, &mut instances, &runtime, &mut resources)
+      .expect("reload units collect cycle should succeed");
+    assert!(metadata.metadata("units").is_none());
+
     let _ = runtime.send(RuntimeCommand::Stop);
   }
 }

@@ -509,6 +509,7 @@ dependencies = [
  "nix",
  "rind-base",
  "rind-core",
+ "rind-ipc",
  "rind-plugins",
  "serde_json",
 ]

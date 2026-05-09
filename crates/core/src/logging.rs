@@ -34,8 +34,11 @@ pub struct LogConfig {
 
 impl Default for LogConfig {
   fn default() -> Self {
+    let dir = std::env::var("RIND_LOG_DIR")
+      .map(PathBuf::from)
+      .unwrap_or_else(|_| PathBuf::from("/var/log/rind"));
     Self {
-      dir: PathBuf::from("/var/log/rind"),
+      dir,
       flush_interval: Duration::from_millis(250),
       segment_max_bytes: 16 * 1024 * 1024,
     }
