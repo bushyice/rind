@@ -15,6 +15,11 @@ int main(void) {
   set_message_payload(&msg, payload);
   set_message_name(&msg, "tp_demo:transport_state");
 
+  InvokeCommand cmd = create_invoke(Enquire, "list", NULL);
+  InvokeCommand res = invoke(cmd);
+
+  printf("%s\n", res.payload);
+
   listen_tp(&tp, &on_message);
   send_message(&tp, msg);
 

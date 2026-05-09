@@ -193,7 +193,7 @@ disk_mode = "image"
 linux_image = "bzImage:https://repo.openeuler.org/openEuler-22.03-LTS-SP3/embedded_img/x86-64/qemu-x86-64/bzImage"
 
 # root= is needed for image disks
-run_options = ["console=ttyS0 root=/dev/vda rw"]
+run_options = ["console=ttyS0 root=/dev/vda rw quiet"]
 qemu_options = { arch = "x86_64", args = ["-cpu", "host", "-enable-kvm", "-machine", "q35,accel=kvm", "-device", "virtio-net,netdev=net", "-netdev", "user,id=net,hostname=system,net=10.10.2.0/24"] }
 
 # Depricated

@@ -2,17 +2,17 @@
  * Copyright (c) 2026 rind contributors
  *
  * This header is provided under the MIT License.
- * 
+ *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
  * in the Software without restriction, including without limitation the rights
  * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
  * copies of the Software, and to permit persons to whom the Software is
  * furnished to do so, subject to the following conditions:
- * 
+ *
  * The above copyright notice and this permission notice shall be included in all
  * copies or substantial portions of the Software.
- * 
+ *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -22,9 +22,89 @@
  * SOFTWARE.
  */
 
-#ifndef RIND_H
-#define RIND_H
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdlib.h>
 
-// ... (existing content or generated content) ...
+typedef enum TransportProtocolMethod {
+  STDIO = 0,
+  UDS = 1,
+} TransportProtocolMethod;
 
-#endif // RIND_H
+typedef enum MessageType {
+  Signal = 0,
+  State = 1,
+  Enquiry = 2,
+  Response = 3,
+} MessageType;
+
+typedef enum MessageAction {
+  Remove = 0,
+  Set = 1,
+} MessageAction;
+
+typedef enum PayloadType {
+  String = 0,
+  Json = 1,
+} PayloadType;
+
+typedef enum InvokeType {
+  Valid = 0,
+  Ok = 1,
+  InvokeError = 2,
+  Unknown = 3,
+  RequestInput = 4,
+  Enquire = 5,
+} InvokeType;
+
+typedef struct TransportProtocol {
+  enum TransportProtocolMethod protocol;
+  const char *const *options;
+  uintptr_t len;
+  uint64_t id;
+} TransportProtocol;
+
+typedef struct PayloadContainer {
+  enum PayloadType type;
+  const char *content;
+} PayloadContainer;
+
+typedef struct MessageContainer {
+  enum MessageType type;
+  enum MessageAction action;
+  struct PayloadContainer *payload;
+  const char *name;
+} MessageContainer;
+
+typedef struct InvokeCommand {
+  enum InvokeType type;
+  const char *action;
+  const char *payload;
+} InvokeCommand;
+
+struct TransportProtocol init_tp(enum TransportProtocolMethod protocol, const char *options);
+
+void listen_tp(struct TransportProtocol *tp, void (*func)(struct MessageContainer));
+
+struct MessageContainer create_message(enum MessageType type, enum MessageAction action);
+
+struct PayloadContainer create_message_payload(enum PayloadType type, const char *inner);
+
+void set_message_payload(struct MessageContainer *message, struct PayloadContainer payload);
+
+void set_message_name(struct MessageContainer *message, const char *name);
+
+struct MessageContainer set_state(const char *name, struct PayloadContainer payload);
+
+struct MessageContainer remove_state(const char *name, struct PayloadContainer *payload);
+
+struct MessageContainer emit_signal(const char *name, struct PayloadContainer *payload);
+
+void send_message(const struct TransportProtocol *tp, struct MessageContainer message);
+
+struct InvokeCommand create_invoke(enum InvokeType type, const char *action, const char *payload);
+
+void set_rind_sock_path(char *path);
+
+struct InvokeCommand invoke(struct InvokeCommand command);

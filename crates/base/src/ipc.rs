@@ -9,6 +9,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -621,13 +622,15 @@ impl Runtime for IpcRuntime {
           let tx = self.incoming_tx.clone();
           let notifier = ctx.notifier.clone();
           self.listener_thread = Some(thread::spawn(move || {
-            let socket_path = "/tmp/rind.sock";
-            let _ = std::fs::remove_file(socket_path);
-            let listener = match UnixListener::bind(socket_path) {
+            let socket_path = std::env::var("RIND_SOC_PATH")
+              .map(PathBuf::from)
+              .unwrap_or_else(|_| PathBuf::from("/tmp/rind.sock"));
+            let _ = std::fs::remove_file(&socket_path);
+            let listener = match UnixListener::bind(&socket_path) {
               Ok(l) => l,
               Err(e) => {
                 // TODO: i'll use log instead
-                eprintln!("[ipc] failed to bind {}: {}", socket_path, e);
+                eprintln!("[ipc] failed to bind {:?}: {}", socket_path, e);
                 return;
               }
             };

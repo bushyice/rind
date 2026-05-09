@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::raw::c_char;
 use std::os::unix::net::UnixStream;
 use std::ptr::null_mut;
@@ -11,6 +11,7 @@ use std::{ptr, thread};
 use once_cell::sync::Lazy;
 use rind_base::flow::{FlowJson, FlowPayload};
 use rind_base::transport::TransportMessage;
+use rind_ipc::Message;
 
 static UDS_CONNECTIONS: Lazy<RwLock<HashMap<u64, UnixStream>>> =
   Lazy::new(|| RwLock::new(HashMap::new()));
@@ -31,11 +32,74 @@ pub enum MessageAction {
 }
 
 #[repr(C)]
+#[derive(Debug, PartialEq, Eq)]
+pub enum MessageType {
+  Signal = 0,
+  State = 1,
+  Enquiry = 2,
+  Response = 3,
+}
+
+#[repr(C)]
+#[derive(Debug, PartialEq, Eq)]
+pub enum InvokeType {
+  Valid = 0,
+  Ok = 1,
+  InvokeError = 2,
+  Unknown = 3,
+  RequestInput = 4,
+  Enquire = 5,
+}
+
+#[repr(C)]
 pub struct MessageContainer {
   r#type: MessageType,
   action: MessageAction,
   payload: *mut PayloadContainer,
   name: *const c_char,
+}
+
+#[repr(C)]
+pub struct InvokeCommand {
+  r#type: InvokeType,
+  action: *const c_char,
+  payload: *const c_char,
+}
+
+impl Into<Message> for InvokeCommand {
+  fn into(self) -> Message {
+    Message {
+      r#type: match self.r#type {
+        InvokeType::Enquire => rind_ipc::MessageType::Enquire,
+        InvokeType::Ok => rind_ipc::MessageType::Ok,
+        InvokeType::InvokeError => rind_ipc::MessageType::Error,
+        InvokeType::Valid => rind_ipc::MessageType::Valid,
+        InvokeType::RequestInput => rind_ipc::MessageType::RequestInput,
+        InvokeType::Unknown => rind_ipc::MessageType::Unknown,
+      },
+      action: if !self.action.is_null() {
+        unsafe { CStr::from_ptr(self.action) }
+          .to_str()
+          .unwrap()
+          .to_string()
+          .into()
+      } else {
+        "unknown".into()
+      },
+      payload: if !self.payload.is_null() {
+        unsafe { CStr::from_ptr(self.payload) }
+          .to_str()
+          .unwrap()
+          .to_string()
+          .into()
+      } else {
+        None
+      },
+      from_uid: None,
+      from_gid: None,
+      from_pid: None,
+    }
+  }
 }
 
 impl Into<TransportMessage> for &MessageContainer {
@@ -70,15 +134,6 @@ impl Into<TransportMessage> for &MessageContainer {
       },
     }
   }
-}
-
-#[repr(C)]
-#[derive(Debug, PartialEq, Eq)]
-pub enum MessageType {
-  Signal = 0,
-  State = 1,
-  Enquiry = 2,
-  Response = 3,
 }
 
 #[repr(C)]
@@ -311,6 +366,40 @@ pub extern "C" fn set_message_name(message: *mut MessageContainer, name: *const 
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn set_state(name: *const c_char, payload: PayloadContainer) -> MessageContainer {
+  let mut msg = create_message(MessageType::State, MessageAction::Set);
+  msg.name = name;
+  msg.payload = Box::into_raw(Box::new(payload));
+  msg
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn remove_state(
+  name: *const c_char,
+  payload: *mut PayloadContainer,
+) -> MessageContainer {
+  let mut msg = create_message(MessageType::State, MessageAction::Remove);
+  msg.name = name;
+  if !payload.is_null() {
+    msg.payload = payload;
+  }
+  msg
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn emit_signal(
+  name: *const c_char,
+  payload: *mut PayloadContainer,
+) -> MessageContainer {
+  let mut msg = create_message(MessageType::Signal, MessageAction::Set);
+  msg.name = name;
+  if !payload.is_null() {
+    msg.payload = payload;
+  }
+  msg
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn send_message(tp: *const TransportProtocol, message: MessageContainer) {
   if tp.is_null() {
     return;
@@ -344,6 +433,130 @@ pub extern "C" fn send_message(tp: *const TransportProtocol, message: MessageCon
       {
         return;
       }
+    }
+  }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn create_invoke(
+  r#type: InvokeType,
+  action: *const c_char,
+  payload: *const c_char,
+) -> InvokeCommand {
+  InvokeCommand {
+    r#type,
+    action,
+    payload,
+  }
+}
+
+static RIND_SOCK_PATH: Lazy<RwLock<String>> = Lazy::new(|| RwLock::new("/tmp/rind.sock".into()));
+
+#[unsafe(no_mangle)]
+pub extern "C" fn set_rind_sock_path(path: *mut c_char) {
+  *RIND_SOCK_PATH.write().unwrap() = unsafe { CString::from_raw(path) }
+    .to_string_lossy()
+    .to_string();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn invoke(command: InvokeCommand) -> InvokeCommand {
+  let Ok(mut stream) = UnixStream::connect(RIND_SOCK_PATH.read().unwrap().clone()) else {
+    return InvokeCommand {
+      action: null_mut(),
+      payload: null_mut(),
+      r#type: InvokeType::InvokeError,
+    };
+  };
+
+  let msg: Message = command.into();
+  let Ok(payload) = serde_json::to_vec(&msg) else {
+    return InvokeCommand {
+      action: null_mut(),
+      payload: null_mut(),
+      r#type: InvokeType::InvokeError,
+    };
+  };
+  let len = (payload.len() as u32).to_be_bytes();
+
+  if stream.write_all(&len).is_err() {
+    return InvokeCommand {
+      action: null_mut(),
+      payload: null_mut(),
+      r#type: InvokeType::InvokeError,
+    };
+  }
+
+  if stream.write_all(&payload).is_err() {
+    return InvokeCommand {
+      action: null_mut(),
+      payload: null_mut(),
+      r#type: InvokeType::InvokeError,
+    };
+  }
+
+  let mut len_buf = [0u8; 4];
+
+  if stream.read_exact(&mut len_buf).is_err() {
+    return InvokeCommand {
+      action: null_mut(),
+      payload: null_mut(),
+      r#type: InvokeType::InvokeError,
+    };
+  }
+
+  let len = u32::from_be_bytes(len_buf) as usize;
+
+  let mut buf = vec![0u8; len];
+
+  if stream.read_exact(&mut buf).is_err() {
+    return InvokeCommand {
+      action: null_mut(),
+      payload: null_mut(),
+      r#type: InvokeType::InvokeError,
+    };
+  }
+
+  let raw = match String::from_utf8(buf) {
+    Ok(s) => s,
+    Err(e) => {
+      let str = CString::new(e.to_string()).unwrap();
+      return InvokeCommand {
+        action: null_mut(),
+        payload: str.into_raw(),
+        r#type: InvokeType::InvokeError,
+      };
+    }
+  };
+
+  match serde_json::from_str::<Message>(&raw) {
+    Ok(m) => InvokeCommand {
+      action: {
+        let str = CString::new(m.action).unwrap();
+        str.into_raw()
+      },
+      payload: if let Some(p) = m.payload {
+        let str = CString::new(p).unwrap();
+        str.into_raw()
+      } else {
+        null_mut()
+      },
+      r#type: match m.r#type {
+        rind_ipc::MessageType::Enquire => InvokeType::Enquire,
+        rind_ipc::MessageType::Ok => InvokeType::Ok,
+        rind_ipc::MessageType::Error => InvokeType::InvokeError,
+        rind_ipc::MessageType::Valid => InvokeType::Valid,
+        rind_ipc::MessageType::RequestInput => InvokeType::RequestInput,
+        rind_ipc::MessageType::Unknown => InvokeType::Unknown,
+      },
+    },
+    Err(e) => {
+      let str = CString::new(e.to_string()).unwrap();
+      return InvokeCommand {
+        action: null_mut(),
+        payload: str.into_raw(),
+        r#type: InvokeType::InvokeError,
+      };
     }
   }
 }

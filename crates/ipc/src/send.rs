@@ -1,12 +1,17 @@
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 
 use libc::{geteuid, getgid, getpid, getuid};
 
 use crate::Message;
 
 pub fn send_message(mut msg: Message) -> anyhow::Result<Message> {
-  let mut stream = UnixStream::connect("/tmp/rind.sock")?;
+  let mut stream = UnixStream::connect(
+    std::env::var("RIND_SOC_PATH")
+      .map(PathBuf::from)
+      .unwrap_or_else(|_| PathBuf::from("/tmp/rind.sock")),
+  )?;
 
   let euid = unsafe { geteuid() };
   let gid = unsafe { getgid() };
