@@ -55,6 +55,14 @@ impl Orchestrator for BootOrchestrator {
     ctx.dispatch("sockets", "bootstrap", Default::default())?;
     ctx.dispatch("services", "bootstrap", Default::default())?;
 
+    ctx.dispatch(
+      "flow",
+      "emit_signal",
+      RuntimePayload::default()
+        .insert("name", "rind@boot".to_ustr())
+        .insert("payload", serde_json::Value::String("".into())),
+    )?;
+
     Ok(())
   }
 }

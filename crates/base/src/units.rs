@@ -191,6 +191,14 @@ name = "active"
 payload = "string"
 
 [[state]]
+name = "inactive"
+payload = "string"
+
+[[state]]
+name = "suspended"
+payload = "string"
+
+[[state]]
 name = "user_session"
 payload = "json"
 branch = ["session_id"]
@@ -215,6 +223,10 @@ payload = "json"
 [[signal]]
 name = "request_logout"
 payload = "json"
+
+[[signal]]
+name = "boot"
+payload = "string"
 
 "#;
 

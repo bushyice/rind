@@ -254,15 +254,15 @@ impl SocketRuntime {
     self.instances.remove(&fd);
     self.owner.remove(&fd);
 
-    if socket.metadata.r#type == SocketType::Uds {
-      self.get_socket_path(&socket.metadata.listen, false)?;
-    }
-
     if let Some(owner) = &socket.metadata.owner {
       if let Some(paused) = self.paused.get_mut(owner) {
         paused.retain(|&f| f != fd);
       }
       sr.owners.remove(owner);
+    }
+
+    if socket.metadata.r#type == SocketType::Uds {
+      self.get_socket_path(&socket.metadata.listen, false)?;
     }
 
     Ok(())
@@ -452,12 +452,16 @@ impl Runtime for SocketRuntime {
               };
 
               for branch in active {
-                self.start_socket(
+                match self.start_socket(
                   branch.payload.to_string_payload().to_ustr(),
                   ctx.resources,
                   registry,
                   sr,
-                )?;
+                ) {
+                  Ok(_) => {}
+                  Err(CoreError::MetadataNotFound(_)) => {}
+                  Err(e) => return Err(e),
+                };
               }
 
               Ok(())
@@ -561,6 +565,13 @@ impl Runtime for SocketRuntime {
           && let Some(pm) = pm
         {
           let Ok(cred) = get_peer_cred(fd) else {
+            log.log(
+              LogLevel::Debug,
+              "sockets",
+              "permission denied: failed to get peer credentials",
+              [("name".to_string(), name.to_string())].into(),
+            );
+
             self.clear_socket(socket);
             return Ok(None);
           };
@@ -569,6 +580,16 @@ impl Runtime for SocketRuntime {
             .iter()
             .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(cred.uid, x)))
           {
+            log.log(
+              LogLevel::Debug,
+              "sockets",
+              "permission denied",
+              [
+                ("name".to_string(), name.to_string()),
+                ("uid".to_string(), cred.uid.to_string()),
+              ]
+              .into(),
+            );
             self.clear_socket(socket);
             return Ok(None);
           }

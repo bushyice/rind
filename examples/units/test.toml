@@ -40,8 +40,18 @@ name = "ipcs_s"
 type = "uds"
 listen = "/var/sock/some.sock"
 owner = "test@ipcs"
-start-on = [{ state = "rind@net-configured" }]
+start-on = [{ state = "net@configured" }]
 trigger = [{
   signal = "test@thething",
-  payload = "yeaaaaaaaah"
+  payload = "()"
 }]
+
+[[service]]
+name = "sif"
+run.exec = "/bin/sif"
+transport = "stdio"
+start-on = [{ signal = "rind@boot" }]
+restart = false
+cgroup = { path = "/sys/fs/cgroup/rind-demo/sif", memory-max = "128M", cpu-max = "50000 100000", pids-max = "64" }
+namespaces = { mount = true, uts = true, ipc = true, net = true, cgroup = true }
+watchdog = { interval-ms = 1000, grace-ms = 5000, action = "restart" }

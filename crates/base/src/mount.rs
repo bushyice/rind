@@ -6,7 +6,10 @@ use std::{
   sync::Arc,
 };
 
-use nix::mount::{MsFlags, mount, umount};
+use nix::{
+  errno::Errno,
+  mount::{MsFlags, mount, umount},
+};
 use rind_core::prelude::*;
 
 #[model(meta_name = target, meta_fields(target, source, fstype, flags, data, create, after), derive_metadata(Debug))]
@@ -54,14 +57,17 @@ impl MountRuntime {
 
     let flags = parse_mount_flags(target.flags.as_deref());
     // println!("{target:?}");
+    let fstype = target.fstype.as_ref().map(|x| x.as_str());
 
     if let Err(e) = mount(
       target.source.as_ref().map(|x| x.as_str()),
       target.target.as_str(),
-      target.fstype.as_ref().map(|x| x.as_str()),
+      fstype,
       flags,
       target.data.as_deref(),
-    ) {
+    ) && !(e == Errno::EBUSY && fstype == Some("devtmpfs") && &**target.target == "/dev")
+    // ignore /dev ebusy
+    {
       let mut fields = HashMap::new();
       fields.insert("target".to_string(), target.target.to_string());
       fields.insert("error".to_string(), e.to_string());
@@ -201,7 +207,9 @@ impl Runtime for MountRuntime {
           .metadata
           .find::<Mount>("units", &name)
           .ok_or(CoreError::MissingSchema { name })?;
-        self.mount_target(metadata, log, dispatch, &mut ctx.registry)?;
+        if !is_mounted(metadata.target.as_str())? {
+          self.mount_target(metadata, log, dispatch, &mut ctx.registry)?;
+        }
       }
       "umount" => {
         let name = payload.get::<String>("name")?;

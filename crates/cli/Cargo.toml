@@ -36,6 +36,10 @@ path = "demo/tcp.rs"
 name = "ipc_so"
 path = "demo/ipc_socket.rs"
 
+[[bin]]
+name = "sif"
+path = "demo/sif.rs"
+
 [dependencies]
 clap.workspace = true
 rind-ipc = { path = "../ipc", default-features = false, features = [] }

@@ -1128,6 +1128,9 @@ impl Runtime for FlowRuntime {
       "emit_signal" => {
         let name = payload.get::<Ustr>("name")?;
         let flow_payload = FlowPayload::from_json(payload.get("payload").ok());
+        let mut fields = HashMap::new();
+        fields.insert("name".to_string(), name.to_string());
+        fields.insert("payload".into(), format!("{flow_payload:?}"));
         self.emit_signal(name.clone(), Some(flow_payload.clone()), ctx.event_bus)?;
         let source = FlowInstance {
           name,
@@ -1141,6 +1144,7 @@ impl Runtime for FlowRuntime {
           .ok_or(CoreError::InvalidState(
             "state machine store not found".into(),
           ))?;
+        log.log(LogLevel::Trace, "flow-runtime", "emitting signal", fields);
         self.reconcile_signal_transcendence(sm, &source, ctx.event_bus, &mut emitted);
       }
       "bootstrap" => {

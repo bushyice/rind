@@ -1,4 +1,6 @@
 use nix::sys::signal::{Signal, kill};
+use nix::sys::time::TimeSpec;
+use nix::sys::timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags};
 use nix::unistd::Pid;
 use rind_ipc::Message;
 use rind_ipc::payloads::SSPayload;
@@ -6,8 +8,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::ops::{Deref, DerefMut};
-use std::os::fd::RawFd;
+use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -222,6 +225,58 @@ pub struct ServiceUserSource {
   pub match_branch_key: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ServiceCgroup {
+  pub path: Option<Ustr>,
+  #[serde(rename = "memory-max")]
+  pub memory_max: Option<Ustr>,
+  #[serde(rename = "cpu-max")]
+  pub cpu_max: Option<Ustr>,
+  #[serde(rename = "pids-max")]
+  pub pids_max: Option<Ustr>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct ServiceNamespaces {
+  #[serde(default)]
+  pub mount: bool,
+  #[serde(default)]
+  pub uts: bool,
+  #[serde(default)]
+  pub ipc: bool,
+  #[serde(default)]
+  pub net: bool,
+  #[serde(default)]
+  pub pid: bool,
+  #[serde(default)]
+  pub user: bool,
+  #[serde(default)]
+  pub cgroup: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum WatchdogAction {
+  #[default]
+  Restart,
+  Stop,
+  Signal,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ServiceWatchdog {
+  #[serde(rename = "interval-ms")]
+  pub interval_ms: Option<u64>,
+  #[serde(rename = "grace-ms", default = "default_watchdog_grace_ms")]
+  pub grace_ms: u64,
+  #[serde(default)]
+  pub action: WatchdogAction,
+}
+
+fn default_watchdog_grace_ms() -> u64 {
+  15_000
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ServiceSpace {
@@ -237,7 +292,8 @@ pub enum ServiceSpace {
   meta_name = name,
   meta_fields(
     name, run, after, branching, restart, start_on, stop_on, on_start, on_stop,
-    transport, working_dir, space, user_source, singleton, managed_by
+    transport, working_dir, space, user_source, singleton, managed_by, cgroup,
+    namespaces, watchdog
   ),
   derive_metadata(Debug)
 )]
@@ -267,6 +323,9 @@ pub struct Service {
   pub restart: Option<RestartPolicy>,
   #[serde(rename = "managed-by")]
   pub managed_by: Option<Vec<Ustr>>,
+  pub cgroup: Option<ServiceCgroup>,
+  pub namespaces: Option<ServiceNamespaces>,
+  pub watchdog: Option<ServiceWatchdog>,
 
   // Instance data
   pub id: ServiceId,
@@ -293,6 +352,16 @@ pub struct ServiceRuntime {
   pid_map: HashMap<u32, Ustr>,
   stopping_map: HashMap<u32, Instant>,
   trigger_index: HashMap<Ustr, HashSet<Ustr>>,
+  watchdog_fds: HashMap<RawFd, WatchdogBinding>,
+  watchdog_pids: HashMap<u32, RawFd>,
+}
+
+#[derive(Debug, Clone)]
+struct WatchdogBinding {
+  service_key: Ustr,
+  branch: Option<Ustr>,
+  user: Option<Ustr>,
+  pid: u32,
 }
 
 impl Default for ServiceRuntime {
@@ -306,11 +375,185 @@ impl Default for ServiceRuntime {
       pid_map: HashMap::new(),
       stopping_map: HashMap::new(),
       trigger_index: HashMap::new(),
+      watchdog_fds: HashMap::new(),
+      watchdog_pids: HashMap::new(),
     }
   }
 }
 
 impl ServiceRuntime {
+  fn sanitize_cgroup_component(input: &str) -> String {
+    input
+      .chars()
+      .map(|c| {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+          c
+        } else {
+          '_'
+        }
+      })
+      .collect()
+  }
+
+  fn cgroup_path_for(
+    service: &Service,
+    branch_ctx: Option<&ServiceBranchContext>,
+    user: Option<&Ustr>,
+  ) -> Option<PathBuf> {
+    let Some(cg) = &service.metadata.cgroup else {
+      return None;
+    };
+
+    let mut path = if let Some(custom) = &cg.path {
+      PathBuf::from(custom.as_str())
+    } else {
+      let mut p = PathBuf::from("/sys/fs/cgroup/rind");
+      p.push(Self::sanitize_cgroup_component(
+        service.metadata.name.as_str(),
+      ));
+      if let Some(branch) = branch_ctx.and_then(|ctx| ctx.key.as_ref()) {
+        p.push(Self::sanitize_cgroup_component(branch.as_str()));
+      }
+      if let Some(user) = user {
+        p.push(Self::sanitize_cgroup_component(user.as_str()));
+      }
+      p
+    };
+
+    if !path.is_absolute() {
+      path = PathBuf::from("/sys/fs/cgroup").join(path);
+    }
+
+    Some(path)
+  }
+
+  fn setup_cgroup_for_pid(
+    &self,
+    service: &Service,
+    branch_ctx: Option<&ServiceBranchContext>,
+    user: Option<&Ustr>,
+    pid: u32,
+  ) -> anyhow::Result<()> {
+    let Some(path) = Self::cgroup_path_for(service, branch_ctx, user) else {
+      return Ok(());
+    };
+
+    std::fs::create_dir_all(&path)?;
+
+    if let Some(cg) = &service.metadata.cgroup {
+      if let Some(mem) = &cg.memory_max {
+        let _ = std::fs::write(path.join("memory.max"), mem.as_str());
+      }
+      if let Some(cpu) = &cg.cpu_max {
+        let _ = std::fs::write(path.join("cpu.max"), cpu.as_str());
+      }
+      if let Some(pids) = &cg.pids_max {
+        let _ = std::fs::write(path.join("pids.max"), pids.as_str());
+      }
+    }
+
+    std::fs::write(path.join("cgroup.procs"), pid.to_string())?;
+    Ok(())
+  }
+
+  fn namespace_unshare_flags(ns: &ServiceNamespaces) -> libc::c_int {
+    let mut flags = 0;
+    if ns.mount {
+      flags |= libc::CLONE_NEWNS;
+    }
+    if ns.uts {
+      flags |= libc::CLONE_NEWUTS;
+    }
+    if ns.ipc {
+      flags |= libc::CLONE_NEWIPC;
+    }
+    if ns.net {
+      flags |= libc::CLONE_NEWNET;
+    }
+    if ns.cgroup {
+      flags |= libc::CLONE_NEWCGROUP;
+    }
+    flags
+  }
+
+  fn arm_watchdog_timer(
+    &mut self,
+    service_key: Ustr,
+    branch: Option<Ustr>,
+    user: Option<Ustr>,
+    pid: u32,
+    watchdog: &ServiceWatchdog,
+    resources: &mut Resources,
+  ) -> Result<(), CoreError> {
+    let tfd = TimerFd::new(
+      ClockId::CLOCK_MONOTONIC,
+      TimerFlags::TFD_NONBLOCK | TimerFlags::TFD_CLOEXEC,
+    )
+    .map_err(CoreError::custom)?;
+
+    let grace = Duration::from_millis(watchdog.grace_ms.max(1));
+    tfd
+      .set(
+        Expiration::OneShot(TimeSpec::from(grace)),
+        TimerSetTimeFlags::empty(),
+      )
+      .map_err(CoreError::custom)?;
+
+    let fd = tfd.as_fd().as_raw_fd();
+    resources.own(fd, tfd);
+    let payload_service_key = service_key.clone();
+    let payload_branch = branch.clone();
+    resources.action(
+      fd,
+      ResourceAction::from(("services", "watchdog_expired")).payload(move |p| {
+        let p = p.insert("service_key", payload_service_key.clone());
+        if let Some(branch) = &payload_branch {
+          p.insert("branch", branch.clone())
+        } else {
+          p
+        }
+      }),
+    );
+
+    self.watchdog_fds.insert(
+      fd,
+      WatchdogBinding {
+        service_key,
+        branch,
+        user,
+        pid,
+      },
+    );
+    self.watchdog_pids.insert(pid, fd);
+    Ok(())
+  }
+
+  fn disarm_watchdog_pid(&mut self, pid: u32, resources: &mut Resources) {
+    if let Some(fd) = self.watchdog_pids.remove(&pid) {
+      self.watchdog_fds.remove(&fd);
+      resources.terminate(fd);
+    }
+  }
+
+  fn refresh_watchdog_fd(&self, fd: RawFd, watchdog: &ServiceWatchdog) -> Result<(), CoreError> {
+    let grace = Duration::from_millis(watchdog.grace_ms.max(1));
+    let spec = libc::itimerspec {
+      it_interval: libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+      },
+      it_value: libc::timespec {
+        tv_sec: grace.as_secs() as libc::time_t,
+        tv_nsec: grace.subsec_nanos() as libc::c_long,
+      },
+    };
+    let rc = unsafe { libc::timerfd_settime(fd, 0, &spec, std::ptr::null_mut()) };
+    if rc < 0 {
+      return Err(CoreError::custom(std::io::Error::last_os_error()));
+    }
+    Ok(())
+  }
+
   fn payload_field_as_key(payload: &FlowPayload, field: &str) -> Option<Ustr> {
     payload.get_json_field(field).map(|v| {
       if let Some(s) = v.as_str() {
@@ -488,8 +731,20 @@ impl ServiceRuntime {
     variable_heap: Option<&VariableHeap>,
     registry_key: Ustr,
     notifier: Option<Notifier>,
+    resources: &mut Resources,
   ) -> anyhow::Result<Vec<ChildInstance>> {
     let mut instances = Vec::new();
+
+    if let Some(sm) = sm {
+      let key = registry_key.trim_start_matches("units@");
+
+      if let Some(inst) = sm.states.get("rind@inactive")
+        && inst.iter().any(|x| x.payload.to_string_payload() == key)
+      {
+        return Ok(instances);
+      }
+    }
+
     for run in service.metadata.run.as_many() {
       let resolved = self.resolve_run_option(run, variable_heap);
       let run_ref = resolved.as_ref().unwrap_or(run);
@@ -504,6 +759,7 @@ impl ServiceRuntime {
         variable_heap,
         registry_key.clone(),
         notifier.clone(),
+        resources,
       )?;
 
       instances.push(instance);
@@ -560,6 +816,7 @@ impl ServiceRuntime {
     variable_heap: Option<&VariableHeap>,
     registry_key: Ustr,
     notifier: Option<Notifier>,
+    resources: &mut Resources,
   ) -> anyhow::Result<()> {
     log.log(
       LogLevel::Info,
@@ -578,6 +835,7 @@ impl ServiceRuntime {
       variable_heap,
       registry_key,
       notifier,
+      resources,
     )?;
     service.instances.extend(instances);
     Ok(())
@@ -602,6 +860,7 @@ impl ServiceRuntime {
     variables: Option<&VariableHeap>,
     registry_key: Ustr,
     notifier: Option<Notifier>,
+    resources: &mut Resources,
   ) -> anyhow::Result<ChildInstance> {
     let full_name = registry_key
       .strip_prefix("units@")
@@ -611,6 +870,21 @@ impl ServiceRuntime {
     let mut envs = run.env.clone().unwrap_or_default();
     let branch_key = branch_ctx.and_then(|ctx| ctx.key.as_ref());
     let resolved_user = self.resolve_service_user(service, branch_ctx, sm)?;
+    let watchdog_cfg = service.metadata.watchdog.clone();
+    if let Some(ns) = &service.metadata.namespaces {
+      if ns.pid {
+        return Err(anyhow::anyhow!(
+          "service '{}' requested pid namespace, but pid isolation is unsupported with current pre_exec+unshare model (requires clone/fork+exec redesign)",
+          service.metadata.name
+        ));
+      }
+      if ns.user {
+        return Err(anyhow::anyhow!(
+          "service '{}' requested user namespace, but user namespace setup is unsupported without uid/gid map configuration",
+          service.metadata.name
+        ));
+      }
+    }
 
     if let Some(transport) = &service.metadata.transport {
       if let Some(sm) = sm {
@@ -737,9 +1011,28 @@ impl ServiceRuntime {
       }
     }
 
+    if let Some(watchdog) = &watchdog_cfg {
+      envs.insert(
+        Ustr::from("RIND_WATCHDOG_GRACE_MS"),
+        Ustr::from(watchdog.grace_ms.to_string()),
+      );
+      if let Some(interval_ms) = watchdog.interval_ms {
+        envs.insert(
+          Ustr::from("RIND_WATCHDOG_INTERVAL_MS"),
+          Ustr::from(interval_ms.to_string()),
+        );
+      }
+    }
+
     let child = unsafe {
       let mut cmd = Command::new(run.exec.as_str());
       let pre_exec_fds = activation_fds.clone();
+      let ns_flags = service
+        .metadata
+        .namespaces
+        .as_ref()
+        .map(Self::namespace_unshare_flags)
+        .unwrap_or(0);
       cmd
         .args(args.iter().map(|a| a.as_str()))
         .stdin(Stdio::piped())
@@ -747,6 +1040,9 @@ impl ServiceRuntime {
         .stderr(Stdio::piped())
         .pre_exec(move || {
           libc::setsid();
+          if ns_flags != 0 && libc::unshare(ns_flags) < 0 {
+            return Err(std::io::Error::last_os_error());
+          }
           for (idx, fd) in pre_exec_fds.iter().enumerate() {
             let target_fd = (3 + idx) as RawFd;
             if *fd != target_fd && libc::dup2(*fd, target_fd) < 0 {
@@ -815,7 +1111,14 @@ impl ServiceRuntime {
     };
 
     let pid = child.id();
-    self.pid_map.insert(pid, registry_key);
+    if let Err(e) = self.setup_cgroup_for_pid(service, branch_ctx, resolved_user.as_ref(), pid) {
+      let _ = kill(Pid::from_raw(-(pid as i32)), Signal::SIGKILL);
+      return Err(anyhow::anyhow!(
+        "failed to setup cgroup for service '{}': {e}",
+        service.metadata.name
+      ));
+    }
+    self.pid_map.insert(pid, registry_key.clone());
 
     let mut child = child;
     if service
@@ -826,21 +1129,29 @@ impl ServiceRuntime {
       .unwrap_or(false)
     {
       start_stdout_listener(
-        service.metadata.name.clone(),
+        registry_key.clone(),
         &mut child,
         self.stdio_tx.clone(),
         notifier,
       );
       let (tx, rx) = mpsc::channel::<TransportMessage>();
-      start_stdin_writer(service.metadata.name.clone(), &mut child, log.clone(), rx);
+      start_stdin_writer(registry_key.clone(), &mut child, log.clone(), rx);
       if let Ok(mut writers) = self.stdio_writers.lock() {
-        writers
-          .entry(service.metadata.name.clone())
-          .or_default()
-          .push(tx);
+        writers.entry(registry_key.clone()).or_default().push(tx);
       }
     } else {
-      start_service_stream_logs(service.metadata.name.clone(), &mut child, log.clone());
+      start_service_stream_logs(registry_key.clone(), &mut child, log.clone());
+    }
+
+    if let Some(watchdog) = &watchdog_cfg {
+      let _ = self.arm_watchdog_timer(
+        registry_key.clone(),
+        branch_key.cloned(),
+        resolved_user.clone(),
+        pid,
+        watchdog,
+        resources,
+      );
     }
 
     Ok(ChildInstance::new(
@@ -860,6 +1171,7 @@ impl ServiceRuntime {
     variable_heap: Option<&VariableHeap>,
     registry_key: Ustr,
     notifier: Option<Notifier>,
+    resources: &mut Resources,
   ) {
     if let Some(inst) = service.instances.as_one_mut() {
       if inst.state == ServiceState::Active
@@ -881,6 +1193,7 @@ impl ServiceRuntime {
       variable_heap,
       registry_key.clone(),
       notifier,
+      resources,
     ) {
       Ok(_) => {
         self.register_stdio_transport(service, dispatch, None);
@@ -935,6 +1248,7 @@ impl ServiceRuntime {
     sm: Option<&StateMachine>,
     key: Option<Ustr>,
     user: Option<Ustr>,
+    resources: &mut Resources,
   ) {
     if let Some(ref key) = key {
       if inst.key.as_str() != key.as_str() {
@@ -960,6 +1274,7 @@ impl ServiceRuntime {
         Signal::SIGTERM
       };
       let _ = kill(pgid, signal);
+      self.disarm_watchdog_pid(child.id(), resources);
       inst.state = ServiceState::Stopping;
       inst.stop_time = Some(Instant::now());
       inst.manually_stopped = true;
@@ -984,6 +1299,7 @@ impl ServiceRuntime {
     index: Option<usize>,
     service_key: Option<&Ustr>,
     notifier: Option<Notifier>,
+    resources: &mut Resources,
   ) {
     if let Some(index) = index {
       if let Some(inst) = service.instances.get_mut(index) {
@@ -995,6 +1311,7 @@ impl ServiceRuntime {
           sm,
           key.clone(),
           user.clone(),
+          resources,
         );
       }
     } else {
@@ -1007,6 +1324,7 @@ impl ServiceRuntime {
           sm,
           key.clone(),
           user.clone(),
+          resources,
         );
       }
     }
@@ -1096,7 +1414,9 @@ impl ServiceRuntime {
     dispatch: &RuntimeDispatcher,
     sm: Option<&StateMachine>,
     service_key: Ustr,
+    resources: &mut Resources,
   ) -> Option<ServiceExitAction> {
+    self.disarm_watchdog_pid(pid as u32, resources);
     let idx = service.instances.find_by_pid(pid)?;
     let (manually_stopped, retry_count) = {
       let inst = &mut service.instances.0[idx];
@@ -1223,7 +1543,7 @@ impl ServiceRuntime {
     let _ = dispatch.dispatch(
       "transport",
       "register_stdio",
-      rpayload!({ "endpoint": unit.map(|unit| format!("{unit}@{}", service.metadata.name)).unwrap_or(service.metadata.name.to_string()) }),
+      rpayload!({ "endpoint": unit.map(|unit| format!("{unit}@{}", service.metadata.name)).unwrap_or(service.metadata.name.to_string()).to_ustr() }),
     );
   }
 
@@ -1693,6 +2013,13 @@ impl Runtime for ServiceRuntime {
         }
 
         while let Ok((service_name, message)) = self.stdio_rx.try_recv() {
+          if message.name.as_ref().map(|x| x.as_str()) == Some("watchdog") {
+            let _ = dispatch.dispatch(
+              "services",
+              "watchdog_ping",
+              rpayload!({ "service": service_name.clone() }),
+            );
+          }
           if message.name.as_ref().map(|x| x.as_str()) == Some("log") {
             let (level, message_text, fields) = self.stdio_log_entry(&service_name, &message);
             log.log(level, "service-transport", message_text, fields);
@@ -1706,6 +2033,96 @@ impl Runtime for ServiceRuntime {
               "message": message
             }),
           );
+        }
+      }
+      "watchdog_ping" => {
+        let mut service = payload.get::<Ustr>("service")?;
+        if !service.starts_with("units@") {
+          service = Ustr::from(format!("units@{}", service));
+        }
+        let branch = payload.get::<Ustr>("branch").ok();
+        let fds: Vec<RawFd> = self
+          .watchdog_fds
+          .iter()
+          .filter_map(|(fd, binding)| {
+            if binding.service_key != service {
+              return None;
+            }
+            if let Some(branch) = &branch
+              && binding.branch.as_ref() != Some(branch)
+            {
+              return None;
+            }
+            Some(*fd)
+          })
+          .collect();
+
+        if let Some(service_meta) = ctx.registry.metadata.find::<Service>(
+          "units",
+          service.strip_prefix("units@").unwrap_or(service.as_str()),
+        ) && let Some(watchdog) = &service_meta.watchdog
+        {
+          for fd in fds {
+            let _ = self.refresh_watchdog_fd(fd, watchdog);
+          }
+        }
+      }
+      "watchdog_expired" => {
+        let fd = payload.get::<i32>("fd")?;
+        let Some(binding) = self.watchdog_fds.get(&(fd as RawFd)).cloned() else {
+          return Ok(None);
+        };
+        let action = ctx
+          .registry
+          .metadata
+          .find::<Service>(
+            "units",
+            binding
+              .service_key
+              .strip_prefix("units@")
+              .unwrap_or(binding.service_key.as_str()),
+          )
+          .and_then(|svc| svc.watchdog.as_ref().map(|wd| wd.action))
+          .unwrap_or(WatchdogAction::Restart);
+
+        ctx.resources.terminate(fd);
+        self.watchdog_fds.remove(&(fd as RawFd));
+        self.watchdog_pids.remove(&binding.pid);
+
+        match action {
+          WatchdogAction::Signal => {
+            let _ = kill(Pid::from_raw(-(binding.pid as i32)), Signal::SIGABRT);
+          }
+          WatchdogAction::Stop => {
+            let _ = dispatch.dispatch(
+              "services",
+              "stop",
+              rpayload!({
+                "name": binding.service_key.strip_prefix("units@").unwrap_or(binding.service_key.as_str()).to_ustr(),
+                "force": true,
+                "only_user": binding.user.clone()
+              }),
+            );
+          }
+          WatchdogAction::Restart => {
+            let _ = dispatch.dispatch(
+              "services",
+              "stop",
+              rpayload!({
+                "name": binding.service_key.strip_prefix("units@").unwrap_or(binding.service_key.as_str()).to_ustr(),
+                "force": true,
+                "only_user": binding.user.clone()
+              }),
+            );
+            let _ = dispatch.dispatch(
+              "services",
+              "start",
+              rpayload!({
+                "name": binding.service_key.strip_prefix("units@").unwrap_or(binding.service_key.as_str()).to_ustr(),
+                "only_user": binding.user
+              }),
+            );
+          }
         }
       }
       "evaluate_triggers" => {
@@ -1811,6 +2228,7 @@ impl Runtime for ServiceRuntime {
                                 None,
                                 Some(&service_key),
                                 ctx.notifier.clone(),
+                                ctx.resources,
                               );
                             }
                           }
@@ -1859,6 +2277,7 @@ impl Runtime for ServiceRuntime {
                             None,
                             Some(&service_key),
                             ctx.notifier.clone(),
+                            ctx.resources,
                           );
                         }
                       }
@@ -1965,6 +2384,7 @@ impl Runtime for ServiceRuntime {
                         Some(vh),
                         service_key.clone().into(),
                         ctx.notifier.clone(),
+                        ctx.resources,
                       ) {
                         Ok(instances) => {
                           ser.instances.extend(instances);
@@ -2033,6 +2453,7 @@ impl Runtime for ServiceRuntime {
                   Some(vh),
                   service_key.into(),
                   ctx.notifier.clone(),
+                  ctx.resources,
                 );
               }
               Ok(())
@@ -2089,6 +2510,7 @@ impl Runtime for ServiceRuntime {
                   Some(vh),
                   service_key.to_ustr(),
                   ctx.notifier.clone(),
+                  ctx.resources,
                 ) {
                   Ok(instances) => {
                     service.instances.extend(instances);
@@ -2142,6 +2564,7 @@ impl Runtime for ServiceRuntime {
                   Some(vh),
                   service_key.into(),
                   ctx.notifier.clone(),
+                  ctx.resources,
                 );
               }
               if service
@@ -2192,6 +2615,7 @@ impl Runtime for ServiceRuntime {
                 index,
                 Some(&name),
                 notifier,
+                ctx.resources,
               );
               Ok(())
             },
@@ -2210,7 +2634,7 @@ impl Runtime for ServiceRuntime {
           .registry
           .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
             (StateMachine::KEY.into(), VariableHeap::KEY.into()),
-            move |registry, (sm, _)| {
+            |registry, (sm, _)| {
               let keys: Vec<Ustr> = registry
                 .instances
                 .keys()
@@ -2233,6 +2657,7 @@ impl Runtime for ServiceRuntime {
                         None,
                         Some(&key),
                         notifier.clone(),
+                        ctx.resources,
                       );
                     }
                   }
@@ -2274,9 +2699,21 @@ impl Runtime for ServiceRuntime {
                   pending.push((full_name.clone(), afters.clone(), svc_meta.clone()));
                 } else {
                   let service =
-                    registry.instantiate_one::<Service>("units", full_name.as_str(), |x| {
+                    match registry.instantiate_one::<Service>("units", full_name.as_str(), |x| {
                       Ok(Service::new(x))
-                    })?;
+                    }) {
+                      Ok(service) => Ok(service),
+                      Err(CoreError::MetadataNotFound(_)) => continue,
+                      Err(e) => {
+                        // log.log(
+                        //   LogLevel::Error,
+                        //   "service-runtime",
+                        //   format!("failed to instantiate service '{full_name}': {e}"),
+                        //   Default::default(),
+                        // );
+                        Err(e)
+                      }
+                    }?;
                   self.start_service(
                     service,
                     log,
@@ -2286,6 +2723,7 @@ impl Runtime for ServiceRuntime {
                     Some(vh),
                     service_key,
                     ctx.notifier.clone(),
+                    ctx.resources,
                   );
                   started.insert(full_name.clone());
                 }
@@ -2309,6 +2747,7 @@ impl Runtime for ServiceRuntime {
                         Some(vh),
                         service_key,
                         ctx.notifier.clone(),
+                        ctx.resources,
                       );
                       started.insert(name.clone());
                       progress = true;
@@ -2394,6 +2833,7 @@ impl Runtime for ServiceRuntime {
                         None,
                         Some(&dependent),
                         notifier.clone(),
+                        ctx.resources,
                       );
                     }
                   }
@@ -2438,6 +2878,7 @@ impl Runtime for ServiceRuntime {
                         Some(vh),
                         service_key.into(),
                         ctx.notifier.clone(),
+                        ctx.resources,
                       );
                     }
                   }
@@ -2471,6 +2912,7 @@ impl Runtime for ServiceRuntime {
                         dispatch,
                         Some(sm),
                         service_key.clone(),
+                        ctx.resources,
                       ) {
                         match exit_action {
                           ServiceExitAction::Restart => {
@@ -2483,6 +2925,7 @@ impl Runtime for ServiceRuntime {
                               Some(vh),
                               service_key.clone(),
                               ctx.notifier.clone(),
+                              ctx.resources,
                             );
                           }
                           ServiceExitAction::StopDependents => {

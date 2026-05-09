@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-  error::CoreError,
+  error::{CoreError, CoreResult},
   metadata::{Metadata, Model, NamedItem},
 };
 
@@ -198,8 +198,8 @@ impl<'a> InstanceRegistry<'a> {
     &mut self,
     metadata: impl Into<Ustr>,
     name: impl Into<Ustr>,
-    mut instantiate: impl FnMut(Arc<T::M>) -> anyhow::Result<T>,
-  ) -> anyhow::Result<&mut T>
+    mut instantiate: impl FnMut(Arc<T::M>) -> CoreResult<T>,
+  ) -> CoreResult<&mut T>
   where
     T: Model + 'static,
   {
@@ -232,8 +232,8 @@ impl<'a> InstanceRegistry<'a> {
     &mut self,
     metadata: impl Into<Ustr>,
     name: impl Into<Ustr>,
-    instantiate: impl FnMut(Arc<T::M>) -> anyhow::Result<T>,
-  ) -> anyhow::Result<&mut T>
+    instantiate: impl FnMut(Arc<T::M>) -> CoreResult<T>,
+  ) -> CoreResult<&mut T>
   where
     T: Model + 'static,
   {

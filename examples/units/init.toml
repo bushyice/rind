@@ -22,3 +22,9 @@ source = "tmpfs"
 target = "/tmp"
 fstype = "tmpfs"
 create = true
+
+[[mount]]
+source = "cgroup2"
+target = "/sys/fs/cgroup"
+fstype = "cgroup2"
+create = true

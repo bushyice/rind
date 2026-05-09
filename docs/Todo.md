@@ -7,19 +7,22 @@ kanban-plugin: board
 ## Todos
 
 - [ ] **eBPF Loader**: (maybe?) Loading eBPF at system startup.
-- [ ] **cgroups**: Using linux cgroups for service resource management.
-- [ ] **Namespaces**: Service namespaces (user, network, mounts) in isolated envs.
-- [ ] **Watchdog**: Service requirement to ping rind in order not to be terminated.
+- [ ] [Trivial] **Name fixes**: Rename concepts accordingly for better understanding.
 
 
 ## Doing
 
-- [ ] [FIX] **State transcendence**: Check and fix state transcendence if it doesn't work.
-- [ ] **TTY Manager Plugin**: A tty management plugin.
-	- [x] `tty@active` state
-	- [x] `tty@login_required` state/signal
-	- [x] `tty_take` functionality
-	- [x] `tty@switch` signal
+- [ ] **Namespaces**: Service namespaces (user, network, mounts) in isolated envs.
+	- [x] Basic namespaces
+	- [ ] PID namespace proper `clone/fork+exec` flow (not `pre_exec+unshare`)
+	- [ ] User namespace setup with `/proc/<pid>/uid_map`,`gid_map`,`setgroups`
+	- [ ] Mount propagation setup
+	- [ ] Rootfs isolation flow
+	- [ ] Network namespace bring-up
+	- [ ] Namespace persistence/join support
+	- [ ] Namespace-local init/PID1 behavior (child reaping + sigfwd)
+	- [ ] Capability bounding/drop pipeline
+	- [ ] Seccomp profile (pre-exec)
 - [ ] [CLEANUP] **Anyhow**: Remove all `anyhow` errors and results and move them to `CoreError` and `CoreResult`.
 - [ ] **Sophisticated timers**
 - [ ] **Memory Transport**
@@ -62,8 +65,9 @@ kanban-plugin: board
 
 ## Testing
 
-- [ ] **Signal Branching**
 - [ ] **Service TP state piping address name for `branch_ctx`**
+- [ ] **cgroups**: Using linux cgroups for service resource management.
+- [ ] **Watchdog**: Service requirement to ping rind in order not to be terminated.
 - [ ] **Inverse Transcendence**: Branched and unbranched inverse transcendence (`activate_on_none`).
 	- [x] Branched transcendence
 	- [x] Unbranched transcendence
@@ -101,8 +105,15 @@ kanban-plugin: board
 ## Finished
 
 **Complete**
+- [x] **Signal Branching**
+- [x] [FIX] **State transcendence**: Check and fix state transcendence if it doesn't work.
 - [x] **Networking as a plugin**: Move networking into a plugin to have more flexibility for a potentially optional(or replaceable) feature.
 - [ ] **Permissions**: Entity-based(users, groups) access control for internal actions.
+- [x] **TTY Manager Plugin**: A tty management plugin.
+	- [x] `tty@active` state
+	- [x] `tty@login_required` state/signal
+	- [x] `tty_take` functionality
+	- [x] `tty@switch` signal
 - [x] **Instance Deletion**: Remove items from instance registry.
 	- [x] Socket Uninstantiation
 - [x] **Envs**: Loading `.env` files as user profile and as `rind` config source.

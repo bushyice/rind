@@ -15,6 +15,7 @@ use crate::flow::{FlowMatchOperation, FlowPayload, Signal, State};
 use rind_core::notifier::Notifier;
 
 #[derive(Serialize, Deserialize, Copy, Clone)]
+#[serde(rename_all = "snake_case")]
 pub enum TransportMessageType {
   Signal,
   State,
@@ -23,6 +24,7 @@ pub enum TransportMessageType {
 }
 
 #[derive(Serialize, Deserialize, Default, PartialEq, Copy, Clone)]
+#[serde(rename_all = "snake_case")]
 pub enum TransportMessageAction {
   #[default]
   Set,
@@ -245,6 +247,20 @@ pub fn start_stdout_listener(
           if let Some(n) = &notifier {
             let _ = n.notify();
           }
+        } else {
+          let _ = tx.send((
+            service_name.clone(),
+            TransportMessage {
+              action: TransportMessageAction::Set,
+              name: Some("log".to_ustr()),
+              r#type: TransportMessageType::Response,
+              payload: Some(FlowPayload::String(line)),
+              branch: None,
+            },
+          ));
+          if let Some(n) = &notifier {
+            let _ = n.notify();
+          }
         }
       }
     });
@@ -361,7 +377,7 @@ impl Runtime for TransportRuntime {
                       && let Some(perms) = &state.permissions
                       && !perms
                         .iter()
-                        .any(|x| pm.from_name(x).map_or(false, |x| !pm.user_has(uid, x)))
+                        .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(uid, x)))
                     {
                       continue;
                     }
@@ -391,7 +407,7 @@ impl Runtime for TransportRuntime {
                     && let Some(perms) = &state.permissions
                     && !perms
                       .iter()
-                      .any(|x| pm.from_name(x).map_or(false, |x| !pm.user_has(uid, x)))
+                      .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(uid, x)))
                   {
                     continue;
                   }
