@@ -120,7 +120,7 @@ fn build_ipc_list_response(
           .registry
           .as_one::<Service>(
             "units",
-            Ustr::from(format!("{}@{}", payload.name, ser.name)),
+            Ustr::from(format!("{}:{}", payload.name, ser.name)),
           )
           .map_or(None, |x| {
             Some((
@@ -163,7 +163,7 @@ fn build_ipc_list_response(
             name: x.name.clone(),
             active: ctx
               .registry
-              .as_one::<Socket>("units", Ustr::from(format!("{}@{}", payload.name, x.name)))
+              .as_one::<Socket>("units", Ustr::from(format!("{}:{}", payload.name, x.name)))
               .is_ok(),
             listen: x.listen.clone(),
             triggers: x.trigger.as_ref().map_or(0, |x| x.len()),
@@ -176,7 +176,7 @@ fn build_ipc_list_response(
             name: st.name.clone(),
             instances: sm
               .states
-              .get(&Ustr::from(format!("{}@{}", payload.name, st.name)))
+              .get(&Ustr::from(format!("{}:{}", payload.name, st.name)))
               .map_or(Default::default(), |x| {
                 x.iter().map(|x| x.payload.to_json()).collect()
               }),
@@ -372,7 +372,7 @@ fn build_ipc_list_response(
           .filter(|s| {
             ctx
               .registry
-              .instances::<Service>("units", Ustr::from(format!("{group}@{}", s.name)))
+              .instances::<Service>("units", Ustr::from(format!("{group}:{}", s.name)))
               .ok()
               .map_or(false, |x| x.iter().any(|x| x.instances.is_active()))
           })
@@ -382,7 +382,7 @@ fn build_ipc_list_response(
           .filter(|s| {
             ctx
               .registry
-              .instances::<Socket>("units", Ustr::from(format!("{group}@{}", s.name)))
+              .instances::<Socket>("units", Ustr::from(format!("{group}:{}", s.name)))
               .ok()
               .map_or(false, |x| x.iter().any(|x| x.active))
           })
@@ -391,7 +391,7 @@ fn build_ipc_list_response(
           .iter()
           .filter(|s| {
             sm.states
-              .get(&Ustr::from(format!("{group}@{}", s.name)))
+              .get(&Ustr::from(format!("{group}:{}", s.name)))
               .is_some()
           })
           .count();

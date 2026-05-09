@@ -59,7 +59,7 @@ impl Orchestrator for BootOrchestrator {
       "flow",
       "emit_signal",
       RuntimePayload::default()
-        .insert("name", "rind@boot".to_ustr())
+        .insert("name", "rind:boot".to_ustr())
         .insert("payload", serde_json::Value::String("".into())),
     )?;
 

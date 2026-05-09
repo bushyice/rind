@@ -31,7 +31,7 @@ pub struct StatePersistence {
 }
 
 impl StatePersistence {
-  pub const KEY: &str = "runtime@state_persistence";
+  pub const KEY: &str = "runtime:state_persistence";
 
   pub fn new(path: impl Into<PathBuf>) -> Self {
     let path = path.into();
@@ -174,6 +174,8 @@ fn sync_parent_dir(path: &Path) -> Result<(), CoreError> {
 
 #[cfg(test)]
 mod tests {
+  use crate::rslvns;
+
   use super::*;
   use std::time::Duration;
 
@@ -195,7 +197,7 @@ mod tests {
 
     let mut snapshot = StateSnapshot::new();
     snapshot.insert(
-      "test@active".into(),
+      rslvns!("test", "active").into(),
       vec![StateEntry {
         data: b"hello".to_vec(),
       }],
@@ -205,7 +207,7 @@ mod tests {
 
     let loaded = persistence.load().expect("load should work");
     assert_eq!(loaded.len(), 1);
-    assert!(loaded.contains_key("test@active"));
+    assert!(loaded.contains_key(&rslvns!("test", "active")));
 
     let _ = fs::remove_file(path);
     persistence.shutdown();
@@ -228,7 +230,7 @@ mod tests {
 
     let mut snapshot = StateSnapshot::new();
     snapshot.insert(
-      "async@test".into(),
+      rslvns!("async", "test").into(),
       vec![StateEntry {
         data: b"hello".to_vec(),
       }],
@@ -239,7 +241,7 @@ mod tests {
     thread::sleep(Duration::from_millis(100));
 
     let loaded = persistence.load().expect("should load async save");
-    assert!(loaded.contains_key("async@test"));
+    assert!(loaded.contains_key(&rslvns!("async", "test")));
 
     let _ = fs::remove_file(path);
     persistence.shutdown();

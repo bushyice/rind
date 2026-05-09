@@ -179,7 +179,7 @@ impl SocketRuntime {
     let sockets = metadata.items::<Socket>("units").unwrap_or_default();
 
     for (group, meta) in sockets {
-      let key = Ustr::from(format!("{}@{}", group, meta.name));
+      let key = Ustr::from(format!("{}:{}", group, meta.name));
       let mut interests = std::collections::HashSet::new();
 
       if let Some(start_on) = &meta.start_on {
@@ -304,7 +304,7 @@ pub struct SocketRegistry {
 }
 
 impl SocketRegistry {
-  pub const KEY: &str = "runtime@socket_registry";
+  pub const KEY: &str = "runtime:socket_registry";
 }
 
 impl Runtime for SocketRuntime {
@@ -375,7 +375,7 @@ impl Runtime for SocketRuntime {
                   .items::<Socket>("units")
                   .unwrap_or_default()
                   .into_iter()
-                  .map(|(group, meta)| Ustr::from(format!("{}@{}", group, meta.name)))
+                  .map(|(group, meta)| Ustr::from(format!("{}:{}", group, meta.name)))
                   .collect::<std::collections::HashSet<Ustr>>()
               };
 
@@ -447,7 +447,7 @@ impl Runtime for SocketRuntime {
               SocketRegistry::KEY.into(),
             ),
             |registry, (sm, _vh, sr)| {
-              let Some(active) = sm.states.get("rind@active") else {
+              let Some(active) = sm.states.get("rind:active") else {
                 return Ok(());
               };
 
@@ -689,7 +689,7 @@ pub fn handle_ipc_start_socket(
     let _ = dispatch.dispatch(
       "flow",
       "set_state",
-      FlowRuntimePayload::new("rind@active")
+      FlowRuntimePayload::new("rind:active")
         .payload(payload.name.clone())
         .into(),
     );
@@ -751,7 +751,7 @@ pub fn handle_ipc_stop_socket(
     let _ = dispatch.dispatch(
       "flow",
       "remove_state",
-      FlowRuntimePayload::new("rind@active")
+      FlowRuntimePayload::new("rind:active")
         .payload(payload.name.clone())
         .into(),
     );

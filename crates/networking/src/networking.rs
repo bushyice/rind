@@ -12,10 +12,10 @@ use rind_plugins::prelude::serde_json::json;
 use rind_plugins::prelude::*;
 use serde::{Deserialize, Serialize};
 
-const NETWORKING_INTERFACE_STATE: &str = "net@interface";
-const NETWORKING_ONLINE_STATE: &str = "net@online";
-const NETWORKING_CONFIGURED_STATE: &str = "net@configured";
-const NETWORKING_DNS_READY_STATE: &str = "net@dns_ready";
+const NETWORKING_INTERFACE_STATE: &str = "net:interface";
+const NETWORKING_ONLINE_STATE: &str = "net:online";
+const NETWORKING_CONFIGURED_STATE: &str = "net:configured";
+const NETWORKING_DNS_READY_STATE: &str = "net:dns_ready";
 pub static PERM_NETWORK: PermissionId = PermissionId(1003);
 
 plugin!(

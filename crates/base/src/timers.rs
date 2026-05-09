@@ -65,7 +65,7 @@ impl Runtime for TimerRuntime {
     match action {
       "start" => {
         let name = payload.get::<Ustr>("name")?;
-        let timer_key = Ustr::from(format!("units@{}", name));
+        let timer_key = Ustr::from(format!("units:{}", name));
 
         if ctx.registry.instances.contains_key(&timer_key) {
           return Ok(None);
@@ -135,7 +135,7 @@ impl Runtime for TimerRuntime {
         );
       }
       "reconcile_timers" => {
-        let service_name = normalize_uaddr(payload.get::<Ustr>("service")?, "units@");
+        let service_name = normalize_uaddr(payload.get::<Ustr>("service")?, "units:");
         let event_action = payload.get::<ServiceEventKind>("action")?;
 
         let metadata = ctx
@@ -154,7 +154,7 @@ impl Runtime for TimerRuntime {
               if let Some(ref dependencies) = timer.after
                 && dependencies.contains(&service_name)
               {
-                dependents.push(Ustr::from(format!("{}@{}", group, timer.name)));
+                dependents.push(Ustr::from(format!("{}:{}", group, timer.name)));
               }
             }
           }

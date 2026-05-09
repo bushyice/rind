@@ -4,7 +4,7 @@ use std::thread;
 use std::time::Duration;
 
 fn endpoint() -> String {
-  std::env::var("RIND_UDS_ENDPOINT").unwrap_or_else(|_| "tp_demo@uds_echo".to_string())
+  std::env::var("RIND_UDS_ENDPOINT").unwrap_or_else(|_| "tp_demo:uds_echo".to_string())
 }
 
 fn socket_path() -> String {
@@ -49,7 +49,7 @@ fn main() {
 
     let reply = serde_json::json!({
       "type": "Signal",
-      "name": "tp_demo@demo_ping",
+      "name": "tp_demo:demo_ping",
       "payload": { "String": format!("echo:{payload}") },
       "action": "Set"
     });

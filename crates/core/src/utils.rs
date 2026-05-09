@@ -73,3 +73,60 @@ pub fn get_peer_cred(fd: i32) -> std::io::Result<ucred> {
 
   Ok(cred)
 }
+
+/// Resolve identifier namespaces such as `rind:active`
+/// ## Examples
+/// ```
+/// rslvns!("rind", "active") // "rind:active"
+/// rslvns!("units", "rind", "active") // "units:rind:active"
+/// rslvns!(u "rind", "active") // ustr of "rind:active"
+/// rslvns!(u "units", "rind", "active") // ustr of "units:rind:active"
+/// rslvns!(norm "units:rind:active") // "rind:active"
+/// rslvns!(norm "units:" "units:rind:active") // "rind:active"
+/// rslvns!(res "rind:active") // ("rind", "active")
+/// rslvns!(res "units:rind:active") // ("rind", "active")
+/// ```
+#[macro_export]
+macro_rules! rslvns {
+  ($p:expr, $c:expr) => {
+    format!("{}:{}", $p, $c)
+  };
+  ($u:expr, $p:expr, $c:expr) => {
+    format!("{}:{}:{}", $u, $p, $c)
+  };
+
+  (u $p:expr, $c:expr) => {
+    rslvns!($p, $c).to_ustr()
+  };
+  (u $u:expr, $p:expr, $c:expr) => {
+    rslvns!($u, $p, $c).to_ustr()
+  };
+
+  (norm $path:expr) => {{ rslvns!(norm "units:" $path) }};
+  (norm $prefix:literal $path:expr) => {{ $path.trim_start_matches($prefix) }};
+
+  (res $path:expr) => {{
+    let mut parts = $path.rsplitn(3, ':');
+    let child = parts.next().unwrap_or("");
+    let parent = parts.next().unwrap_or("");
+    (parent, child)
+  }};
+
+  (res? $path:expr) => {{
+    let mut parts = $path.rsplitn(3, ':');
+    let child = parts.next()?;
+    let parent = parts.next()?;
+    (parent, child)
+  }};
+}
+
+#[cfg(test)]
+#[test]
+pub fn resolve_namespace() {
+  assert_eq!(rslvns!("a", "b"), "a:b");
+  assert_eq!(rslvns!("u", "a", "b"), "u:a:b");
+  assert_eq!(rslvns!(norm "units:a:b"), "a:b");
+  assert_eq!(rslvns!(norm "u:" "u:a:b"), "a:b");
+  assert_eq!(rslvns!(res "a:b"), ("a", "b"));
+  assert_eq!(rslvns!(res "u:a:b"), ("a", "b"));
+}

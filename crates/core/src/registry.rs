@@ -7,6 +7,8 @@ use std::{
 use crate::{
   error::{CoreError, CoreResult},
   metadata::{Metadata, Model, NamedItem},
+  rslvns,
+  types::ToUstr,
 };
 
 use crate::types::Ustr;
@@ -93,7 +95,7 @@ impl MetadataRegistry {
     for group in m.groups() {
       if let Some(items) = m.get_in_group::<T>(group.clone()) {
         for (idx, item) in items.iter().enumerate() {
-          map.insert(Ustr::from(format!("{group}@{}", item.name())), idx);
+          map.insert(Ustr::from(rslvns!(group, item.name())), idx);
         }
       }
     }
@@ -109,13 +111,16 @@ impl MetadataRegistry {
   {
     let metadata = metadata.into();
     let full_name = full_name.into();
-    let (group, _) = full_name.as_str().split_once('@')?;
+    let (group, _) = rslvns!(res full_name); //full_name.as_str().split_once(':')?;
 
-    let idx = *self.indexes.get(&TypeId::of::<T>())?.get(&full_name)?;
-    self
-      .group_items::<T>(metadata, group)?
-      .get(idx)
-      .map(|x| x.clone())
+    if let Some(idx) = self.indexes.get(&TypeId::of::<T>())?.get(&full_name) {
+      self
+        .group_items::<T>(metadata, group)?
+        .get(*idx)
+        .map(|x| x.clone())
+    } else {
+      self.lookup::<T>(metadata, full_name)
+    }
   }
 
   pub fn lookup<T>(
@@ -128,7 +133,7 @@ impl MetadataRegistry {
   {
     let metadata = metadata.into();
     let full_name = full_name.into();
-    let (group, item_name) = full_name.as_str().split_once('@')?;
+    let (group, item_name) = rslvns!(res? full_name);
     self
       .group_items::<T>(metadata, group)?
       .iter()
@@ -147,7 +152,7 @@ impl MetadataRegistry {
     let metadata = metadata.into();
     let m = self.metadata.get(&metadata)?;
     for group in m.groups() {
-      let full = format!("{group}@{item_name}");
+      let full = rslvns!(group, item_name); //format!("{group}:{item_name}");
       if let Some(found) = self.lookup::<T>(metadata.clone(), full.as_str()) {
         return Some(found);
       }
@@ -205,9 +210,9 @@ impl<'a> InstanceRegistry<'a> {
   {
     let metadata = metadata.into();
     let name = name.into();
-    let full_name = Ustr::from(format!("{metadata}@{name}"));
-    let metadata_item = if name.as_str().contains('@') {
-      self.metadata.lookup::<T>(metadata.clone(), name.clone())
+    let full_name = rslvns!(metadata, name).to_ustr();
+    let metadata_item = if name.as_str().contains(':') {
+      self.metadata.find::<T>(metadata.clone(), name.clone())
     } else {
       self
         .metadata
@@ -239,7 +244,7 @@ impl<'a> InstanceRegistry<'a> {
   {
     let metadata = metadata.into();
     let name = name.into();
-    let full_name = Ustr::from(format!("{metadata}@{name}"));
+    let full_name = rslvns!(u metadata, name);
     let insts = self.instances.get(&full_name);
     if let None = insts {
       self.instantiate(metadata, name, instantiate)
@@ -269,7 +274,7 @@ impl<'a> InstanceRegistry<'a> {
   {
     let metadata = metadata.into();
     let name = name.into();
-    let full_name = Ustr::from(format!("{metadata}@{name}"));
+    let full_name = rslvns!(u metadata, name);
     Ok(
       self
         .instances
@@ -291,7 +296,7 @@ impl<'a> InstanceRegistry<'a> {
   {
     let metadata = metadata.into();
     let name = name.into();
-    let full_name = Ustr::from(format!("{metadata}@{name}"));
+    let full_name = rslvns!(u metadata, name);
     Ok(
       self
         .instances
@@ -326,7 +331,7 @@ impl<'a> InstanceRegistry<'a> {
   {
     let metadata = metadata.into();
     let name = name.into();
-    let full_name = Ustr::from(format!("{metadata}@{name}"));
+    let full_name = rslvns!(u metadata, name);
     Ok(
       self
         .instances
@@ -344,7 +349,7 @@ impl<'a> InstanceRegistry<'a> {
   {
     let metadata = metadata.into();
     let name = name.into();
-    let full_name = Ustr::from(format!("{metadata}@{name}"));
+    let full_name = rslvns!(u metadata, name);
     let instances = self
       .instances
       .get(&full_name)
@@ -369,7 +374,7 @@ impl<'a> InstanceRegistry<'a> {
   {
     let metadata = metadata.into();
     let name = name.into();
-    let full_name = Ustr::from(format!("{metadata}@{name}"));
+    let full_name = rslvns!(u metadata, name);
     let instances = self
       .instances
       .get_mut(&full_name)
@@ -551,12 +556,20 @@ name = "api"
       .expect("index build should succeed");
 
     let web = registry
-      .find::<Service>("units", "demo@web")
-      .expect("service should be indexed by unit@item");
+      .find::<Service>("units", rslvns!("demo", "web"))
+      .expect("service should be indexed by unit:item");
     assert_eq!(web.name.as_str(), "web");
     assert_eq!(web.run.as_ref().map(|x| x.as_str()), Some("/bin/webd"));
 
-    assert!(registry.find::<Service>("units", "demo@missing").is_none());
-    assert!(registry.find::<Service>("units", "missing@web").is_none());
+    assert!(
+      registry
+        .find::<Service>("units", rslvns!("demo", "missing"))
+        .is_none()
+    );
+    assert!(
+      registry
+        .find::<Service>("units", rslvns!("missing", "web"))
+        .is_none()
+    );
   }
 }

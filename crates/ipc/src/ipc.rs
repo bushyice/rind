@@ -125,7 +125,7 @@ mod tests {
   #[test]
   fn message_roundtrip_serialization_contract() {
     let msg = Message::from_action("service.start")
-      .with("{\"name\":\"units@demo\"}".to_string())
+      .with("{\"name\":\"units:demo\"}".to_string())
       .from_uid(1000)
       .from_gid(1000)
       .from_pid(4242);

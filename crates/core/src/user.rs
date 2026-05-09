@@ -474,7 +474,7 @@ pub struct PamHandle {
 }
 
 impl PamHandle {
-  pub const KEY: &str = "runtime@pam_handle";
+  pub const KEY: &str = "runtime:pam_handle";
 
   pub fn new(store: UserStoreShared) -> Self {
     Self::with_config(store, PamConfig::default())

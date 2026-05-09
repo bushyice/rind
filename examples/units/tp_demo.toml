@@ -10,14 +10,14 @@ name = "env_consumer"
 run.exec = "/usr/bin/example-active"
 run.args = ["env-demo"]
 restart = false
-transport = { id = "env", options = ["DEMO_STATE=state:tp_demo@transport_state"] }
+transport = { id = "env", options = ["DEMO_STATE=state:tp_demo:transport_state"] }
 
 [[service]]
 name = "args_consumer"
 run.exec = "/usr/bin/example-active"
 run.args = ["args-demo"]
 restart = false
-transport = { id = "args", options = ["--from-state", "state:tp_demo@transport_state"] }
+transport = { id = "args", options = ["--from-state", "state:tp_demo:transport_state"] }
 
 [[state]]
 name = "transport_state"

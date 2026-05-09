@@ -104,7 +104,7 @@ impl MountRuntime {
     for (idx, (unit_name, mnt)) in mounts.iter().enumerate() {
       let id = mnt.target.clone();
       if let Some(afters) = &mnt.after {
-        pending.push((format!("{}@{}", unit_name, mnt.target), afters.clone(), idx));
+        pending.push((format!("{}:{}", unit_name, mnt.target), afters.clone(), idx));
       } else {
         self.mount_target(mnt.clone(), log, dispatch, registry)?;
         mounted.insert(id.to_string());

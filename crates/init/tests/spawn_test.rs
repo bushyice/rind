@@ -80,7 +80,7 @@ restart = false
   }
 
   let payload = SSPayload {
-    name: "test@probe".to_string(),
+    name: "test:probe".to_string(),
     force: false,
     persist: true,
     unit_type: "service".to_string(),

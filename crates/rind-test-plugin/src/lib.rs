@@ -78,7 +78,7 @@ impl Runtime for MyRuntime {
     //   ctx
     //     .registry
     //     .metadata
-    //     .lookup::<MyModel>("units", "example@example")
+    //     .lookup::<MyModel>("units", "example:example")
     // );
 
     log.log(
@@ -99,7 +99,7 @@ impl Runtime for MyRuntime {
     let _ = dispatch.dispatch(
       "flow",
       "set_state",
-      FlowRuntimePayload::new("myplugin@state")
+      FlowRuntimePayload::new("myplugin:state")
         .payload(serde_json::json!({
           "id": 0
         }))

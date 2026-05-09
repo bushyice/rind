@@ -13,10 +13,10 @@ use serde_json::json;
 
 use crate::flow::FlowRuntimePayload;
 
-const NETWORKING_INTERFACE_STATE: &str = "rind@net-interface";
-const NETWORKING_ONLINE_STATE: &str = "rind@online";
-const NETWORKING_CONFIGURED_STATE: &str = "rind@net-configured";
-const NETWORKING_DNS_READY_STATE: &str = "rind@net-dns_ready";
+const NETWORKING_INTERFACE_STATE: &str = "rind:net-interface";
+const NETWORKING_ONLINE_STATE: &str = "rind:online";
+const NETWORKING_CONFIGURED_STATE: &str = "rind:net-configured";
+const NETWORKING_DNS_READY_STATE: &str = "rind:net-dns_ready";
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]

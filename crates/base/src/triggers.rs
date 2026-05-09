@@ -99,7 +99,7 @@ pub fn trigger_events(
     if let Some(sm) = sm {
       match &trigger.payload {
         Some(serde_json::Value::String(s)) => {
-          if let Some((state_name, path)) = s.rsplit_once('@') {
+          if let Some((state_name, path)) = s.rsplit_once(':') {
             if let Some(branches) = sm.states.get(state_name) {
               for branch in branches {
                 let mut resolved_trigger = trigger.clone();
@@ -117,7 +117,7 @@ pub fn trigger_events(
           for v in map.values() {
             if let Some(s) = v.as_str() {
               if let Some(spec) = s.strip_prefix("state:") {
-                if let Some((state_name, _)) = spec.rsplit_once('@') {
+                if let Some((state_name, _)) = spec.rsplit_once(':') {
                   primary_state = Some(state_name.to_string());
                   break;
                 }

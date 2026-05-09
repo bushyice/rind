@@ -270,7 +270,7 @@ impl Runtime for UserRuntime {
         let _ = dispatch.dispatch(
           "flow",
           "set_state",
-          FlowRuntimePayload::new("rind@user_session")
+          FlowRuntimePayload::new("rind:user_session")
             .payload(json!({
               "session_id": session_id,
               "username": username.as_str(),
@@ -310,7 +310,7 @@ impl Runtime for UserRuntime {
         let _ = dispatch.dispatch(
           "flow",
           "remove_state",
-          FlowRuntimePayload::new("rind@user_session")
+          FlowRuntimePayload::new("rind:user_session")
             .payload(serde_json::Value::Object(filter))
             .into(),
         );
@@ -332,7 +332,7 @@ impl Runtime for UserRuntime {
           .registry
           .singleton_mut::<StateMachine>(StateMachine::KEY)
           .ok_or_else(|| CoreError::InvalidState("state machine store not found".into()))?;
-        let key = Ustr::from("rind@user_session");
+        let key = Ustr::from("rind:user_session");
         if let Some(users) = sm.states.get_mut(&key).cloned() {
           for mut user in users {
             let username = user.payload.get_json_field_as::<String>("username").ok_or(

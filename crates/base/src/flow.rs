@@ -297,7 +297,7 @@ pub struct StateMachine {
 }
 
 impl StateMachine {
-  pub const KEY: &str = "runtime@state_machine";
+  pub const KEY: &str = "runtime:state_machine";
 
   pub fn from_persistence(persistence: StatePersistence) -> Self {
     Self {
@@ -330,7 +330,7 @@ impl StateMachine {
       .iter()
       .filter_map(|(name, states)| {
         // State impermanence
-        if name.as_str().contains("@_") {
+        if name.as_str().contains(":_") {
           return None;
         }
         Some((
@@ -477,7 +477,7 @@ impl FlowRuntime {
       .or_else(|| {
         let item_name = name
           .as_str()
-          .split_once('@')
+          .split_once(':')
           .map(|(_, n)| n)
           .unwrap_or(name.as_str());
         self
@@ -670,7 +670,7 @@ impl FlowRuntime {
       .or_else(|| {
         let item_name = name
           .as_str()
-          .split_once('@')
+          .split_once(':')
           .map(|(_, n)| n)
           .unwrap_or(name.as_str());
         self
@@ -970,12 +970,12 @@ impl FlowRuntime {
       for group in m.groups() {
         if let Some(states) = metadata.group_items::<State>("units", group.clone()) {
           for s in states {
-            state_defs.insert(Ustr::from(format!("{group}@{}", s.name)), s);
+            state_defs.insert(Ustr::from(format!("{group}:{}", s.name)), s);
           }
         }
         if let Some(signals) = metadata.group_items::<Signal>("units", group.clone()) {
           for s in signals {
-            signal_defs.insert(Ustr::from(format!("{group}@{}", s.name)), s);
+            signal_defs.insert(Ustr::from(format!("{group}:{}", s.name)), s);
           }
         }
       }

@@ -126,7 +126,7 @@ impl TTYRuntime {
   }
 
   fn has_login_required(&self, sm: &StateMachine, tty: &str) -> bool {
-    sm.states.get("tty@login_required").map_or(false, |x| {
+    sm.states.get("tty:login_required").map_or(false, |x| {
       x.iter().any(|x| {
         x.payload
           .get_json_field_as::<String>("tty")
@@ -146,15 +146,15 @@ impl TTYRuntime {
       dispatch.dispatch(
         "flow",
         "remove_state",
-        FlowRuntimePayload::new("tty@login_required")
+        FlowRuntimePayload::new("tty:login_required")
           .payload(json!({ "tty": last.to_string() }))
           .into(),
       )?;
     }
 
-    if sm.states.get("tty@taken").map_or(true, |x| {
+    if sm.states.get("tty:taken").map_or(true, |x| {
       !x.iter().any(|x| x.payload.to_string_payload() == tty_name)
-    }) && sm.states.get("rind@user_session").map_or(true, |x| {
+    }) && sm.states.get("rind:user_session").map_or(true, |x| {
       !x.iter().any(|x| {
         x.payload
           .get_json_field_as::<String>("tty")
@@ -165,7 +165,7 @@ impl TTYRuntime {
       dispatch.dispatch(
         "flow",
         "set_state",
-        FlowRuntimePayload::new("tty@login_required")
+        FlowRuntimePayload::new("tty:login_required")
           .payload(json!({ "tty": tty_name.to_string() }))
           .into(),
       )?;
@@ -183,7 +183,7 @@ impl TTYRuntime {
     dispatch.dispatch(
       "flow",
       if take { "set_state" } else { "remove_state" },
-      FlowRuntimePayload::new("tty@taken")
+      FlowRuntimePayload::new("tty:taken")
         .payload(serde_json::Value::String(tty_name.to_string()))
         .into(),
     )
@@ -237,7 +237,7 @@ impl Runtime for TTYRuntime {
       "drain_events" => {
         if let Some(rx) = &self.event_rx {
           while let Some(w) = rx.try_recv() {
-            if w.name.as_str() == "rind@user_session" {
+            if w.name.as_str() == "rind:user_session" {
               self.reconcile_login(
                 ctx
                   .registry
@@ -261,7 +261,7 @@ impl Runtime for TTYRuntime {
         if let Some(target_name) = ctx
           .registry
           .singleton::<StateMachine>(StateMachine::KEY)
-          .and_then(|sm| sm.states.get("tty@active"))
+          .and_then(|sm| sm.states.get("tty:active"))
           .and_then(|instances| instances.first())
           .map(|x| x.payload.to_string_payload())
         {
@@ -308,7 +308,7 @@ impl Runtime for TTYRuntime {
             .expect("extension manager not initialized")
             .resolve(
               "boot",
-              TTYPayload::Taken(sm.states.get("tty@taken").map_or(Default::default(), |x| {
+              TTYPayload::Taken(sm.states.get("tty:taken").map_or(Default::default(), |x| {
                 x.iter()
                   .map(|x| x.payload.to_string_payload().to_ustr())
                   .collect()
@@ -347,13 +347,13 @@ impl Runtime for TTYRuntime {
             .singleton::<StateMachine>(StateMachine::KEY)
             .ok_or(CoreError::RuntimeStopped)?;
 
-          if sm.states.get("tty@active").map_or(true, |x| {
+          if sm.states.get("tty:active").map_or(true, |x| {
             !x.iter().any(|x| x.payload.to_string_payload() == tty_name)
           }) {
             dispatch.dispatch(
               "flow",
               "remove_state",
-              FlowRuntimePayload::new("tty@active")
+              FlowRuntimePayload::new("tty:active")
                 .payload(serde_json::Value::String(last.clone()))
                 .into(),
             )?;
@@ -361,7 +361,7 @@ impl Runtime for TTYRuntime {
             dispatch.dispatch(
               "flow",
               "set_state",
-              FlowRuntimePayload::new("tty@active")
+              FlowRuntimePayload::new("tty:active")
                 .payload(serde_json::Value::String(tty_name.to_string()))
                 .into(),
             )?;
@@ -374,7 +374,7 @@ impl Runtime for TTYRuntime {
           dispatch.dispatch(
             "flow",
             "emit_signal",
-            FlowRuntimePayload::new("tty@switch")
+            FlowRuntimePayload::new("tty:switch")
               .payload(serde_json::Value::String(tty_name.to_string()))
               .into(),
           )?;
@@ -408,7 +408,7 @@ fn handle_ipc_tty(
     TTYPayload::Check => {
       return Ok(Message::ok(
         sm.states
-          .get("tty@active")
+          .get("tty:active")
           .and_then(|x| x.first().map(|x| x.payload.to_string_payload()))
           .unwrap_or("tty1".to_string()),
       ));
@@ -442,7 +442,7 @@ fn inject_builtin(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {
           payload = "json"
           branch = ["tty"]
           stop-on = [{
-            name = "rind@user_session",
+            name = "rind:user_session",
             branch = "tty"
           }]
 

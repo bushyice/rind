@@ -55,7 +55,7 @@ branch = ["id"]
 [[state]]
 name = "derived"
 payload = "json"
-after = [{ state = "test@base" }]
+after = [{ state = "test:base" }]
 branch = ["id"]
 
 [[timer]]
@@ -80,7 +80,7 @@ payload = "string"
 [[signal]]
 name = "sig2"
 payload = "string"
-after = [{ signal = "test@sig1" }]
+after = [{ signal = "test:sig1" }]
 
 [[signal]]
 name = "sock_hit"
@@ -90,7 +90,7 @@ payload = "none"
 name = "sig_worker"
 run.exec = "/bin/sh"
 run.args = ["-c", "sleep 1"]
-start-on = [{ signal = "test@sig2" }]
+start-on = [{ signal = "test:sig2" }]
 restart = false
 
 [[service]]
@@ -103,14 +103,14 @@ restart = { max_retries = 1 }
 name = "sock_worker"
 run.exec = "/bin/sh"
 run.args = ["-c", "sleep 1"]
-start-on = [{ signal = "test@sock_hit" }]
+start-on = [{ signal = "test:sock_hit" }]
 restart = false
 
 [[socket]]
 name = "trigger_sock"
 type = "tcp"
 listen = "127.0.0.1:0"
-trigger = [{ signal = "test@sock_hit" }]
+trigger = [{ signal = "test:sock_hit" }]
 "#;
 
   units
@@ -178,7 +178,7 @@ fn flow_runtime_reconciles_dependent_state_and_remove() {
     .dispatch(
       "flow",
       "set_state",
-      FlowRuntimePayload::new("test@base")
+      FlowRuntimePayload::new("test:base")
         .payload(serde_json::json!({"id":"a1","value":7}))
         .into(),
       context_id,
@@ -192,8 +192,8 @@ fn flow_runtime_reconciles_dependent_state_and_remove() {
       let sm = registry
         .singleton::<StateMachine>(StateMachine::KEY)
         .expect("state machine should exist");
-      assert!(sm.states.contains_key(&Ustr::from("test@base")));
-      assert!(sm.states.contains_key(&Ustr::from("test@derived")));
+      assert!(sm.states.contains_key(&Ustr::from("test:base")));
+      assert!(sm.states.contains_key(&Ustr::from("test:derived")));
     })
     .expect("state assertions should succeed");
 
@@ -201,7 +201,7 @@ fn flow_runtime_reconciles_dependent_state_and_remove() {
     .dispatch(
       "flow",
       "remove_state",
-      FlowRuntimePayload::new("test@base")
+      FlowRuntimePayload::new("test:base")
         .filter(serde_json::json!({"id":"a1"}))
         .into(),
       context_id,
@@ -215,8 +215,8 @@ fn flow_runtime_reconciles_dependent_state_and_remove() {
       let sm = registry
         .singleton::<StateMachine>(StateMachine::KEY)
         .expect("state machine should exist");
-      assert!(!sm.states.contains_key(&Ustr::from("test@base")));
-      assert!(!sm.states.contains_key(&Ustr::from("test@derived")));
+      assert!(!sm.states.contains_key(&Ustr::from("test:base")));
+      assert!(!sm.states.contains_key(&Ustr::from("test:derived")));
     })
     .expect("remove assertions should succeed");
 
@@ -231,7 +231,7 @@ fn socket_runtime_start_and_stop_updates_registry_and_resources() {
     .dispatch(
       "sockets",
       "start",
-      rind_core::rpayload!({ "name": Ustr::from("test@listener") }),
+      rind_core::rpayload!({ "name": Ustr::from("test:listener") }),
       context_id,
     )
     .expect("socket start should queue");
@@ -241,7 +241,7 @@ fn socket_runtime_start_and_stop_updates_registry_and_resources() {
     .with_instances(|instances| {
       let registry = InstanceRegistry::new(&metadata, instances);
       let sockets = registry
-        .instances::<Socket>("units", "test@listener")
+        .instances::<Socket>("units", "test:listener")
         .expect("socket instance list should exist");
       !sockets.is_empty() && sockets.iter().all(|sock| sock.active)
     })
@@ -259,7 +259,7 @@ fn socket_runtime_start_and_stop_updates_registry_and_resources() {
     .dispatch(
       "sockets",
       "stop",
-      rind_core::rpayload!({ "name": Ustr::from("test@listener") }),
+      rind_core::rpayload!({ "name": Ustr::from("test:listener") }),
       context_id,
     )
     .expect("socket stop should queue");
@@ -268,7 +268,7 @@ fn socket_runtime_start_and_stop_updates_registry_and_resources() {
   runtime
     .with_instances(|instances| {
       let registry = InstanceRegistry::new(&metadata, instances);
-      let missing = registry.instances::<Socket>("units", "test@listener");
+      let missing = registry.instances::<Socket>("units", "test:listener");
       assert!(missing.is_err() || missing.expect("instances result should exist").is_empty());
     })
     .expect("socket missing assertion should succeed");
@@ -284,7 +284,7 @@ fn timer_runtime_start_and_finish_cleans_instance() {
     .dispatch(
       "timer",
       "start",
-      rind_core::rpayload!({ "name": Ustr::from("test@tick") }),
+      rind_core::rpayload!({ "name": Ustr::from("test:tick") }),
       context_id,
     )
     .expect("timer start should queue");
@@ -294,7 +294,7 @@ fn timer_runtime_start_and_finish_cleans_instance() {
     .with_instances(|instances| {
       let registry = InstanceRegistry::new(&metadata, instances);
       let _ = registry
-        .as_one::<Timer>("units", "test@tick")
+        .as_one::<Timer>("units", "test:tick")
         .expect("timer should exist after start");
     })
     .expect("timer presence assertion should succeed");
@@ -303,7 +303,7 @@ fn timer_runtime_start_and_finish_cleans_instance() {
     .dispatch(
       "timer",
       "finish_timer",
-      rind_core::rpayload!({ "name": Ustr::from("test@tick") }),
+      rind_core::rpayload!({ "name": Ustr::from("test:tick") }),
       context_id,
     )
     .expect("timer finish should queue");
@@ -312,7 +312,7 @@ fn timer_runtime_start_and_finish_cleans_instance() {
   runtime
     .with_instances(|instances| {
       let registry = InstanceRegistry::new(&metadata, instances);
-      let missing = registry.as_one::<Timer>("units", "test@tick");
+      let missing = registry.as_one::<Timer>("units", "test:tick");
       assert!(missing.is_err());
     })
     .expect("timer missing assertion should succeed");
@@ -328,7 +328,7 @@ fn service_runtime_start_and_child_exit_updates_instance_group() {
     .dispatch(
       "services",
       "start",
-      rind_core::rpayload!({ "name": Ustr::from("test@worker") }),
+      rind_core::rpayload!({ "name": Ustr::from("test:worker") }),
       context_id,
     )
     .expect("service start should queue");
@@ -338,7 +338,7 @@ fn service_runtime_start_and_child_exit_updates_instance_group() {
     .with_instances(|instances| {
       let registry = InstanceRegistry::new(&metadata, instances);
       let service = registry
-        .as_one::<Service>("units", "test@worker")
+        .as_one::<Service>("units", "test:worker")
         .expect("service should exist after start");
       service
         .instances
@@ -364,7 +364,7 @@ fn service_runtime_start_and_child_exit_updates_instance_group() {
     .with_instances(|instances| {
       let registry = InstanceRegistry::new(&metadata, instances);
       let service = registry
-        .as_one::<Service>("units", "test@worker")
+        .as_one::<Service>("units", "test:worker")
         .expect("service should remain registered");
       assert!(
         service.instances.0.is_empty()
@@ -395,7 +395,7 @@ fn signal_transcendence_chain_starts_dependent_service() {
     .dispatch(
       "flow",
       "emit_signal",
-      FlowRuntimePayload::new("test@sig1")
+      FlowRuntimePayload::new("test:sig1")
         .payload(serde_json::Value::String("hello".to_string()))
         .into(),
       context_id,
@@ -412,7 +412,7 @@ fn signal_transcendence_chain_starts_dependent_service() {
     .with_instances(|instances| {
       let registry = InstanceRegistry::new(&metadata, instances);
       let service = registry
-        .as_one::<Service>("units", "test@sig_worker")
+        .as_one::<Service>("units", "test:sig_worker")
         .expect("signal dependent service should exist");
       assert!(!service.instances.0.is_empty());
     })
@@ -438,7 +438,7 @@ fn socket_trigger_emits_signal_that_starts_service() {
     .dispatch(
       "sockets",
       "start",
-      rind_core::rpayload!({ "name": Ustr::from("test@trigger_sock") }),
+      rind_core::rpayload!({ "name": Ustr::from("test:trigger_sock") }),
       context_id,
     )
     .expect("socket start should queue");
@@ -448,7 +448,7 @@ fn socket_trigger_emits_signal_that_starts_service() {
     .with_instances(|instances| {
       let registry = InstanceRegistry::new(&metadata, instances);
       registry
-        .instances::<Socket>("units", "test@trigger_sock")
+        .instances::<Socket>("units", "test:trigger_sock")
         .ok()
         .and_then(|list| list.first().map(|s| s.fd))
     })
@@ -479,7 +479,7 @@ fn socket_trigger_emits_signal_that_starts_service() {
     .with_instances(|instances| {
       let registry = InstanceRegistry::new(&metadata, instances);
       let service = registry
-        .as_one::<Service>("units", "test@sock_worker")
+        .as_one::<Service>("units", "test:sock_worker")
         .expect("socket-triggered service should exist");
       assert!(!service.instances.0.is_empty());
     })
@@ -496,7 +496,7 @@ fn service_on_failure_retry_cap_is_enforced() {
     .dispatch(
       "services",
       "start",
-      rind_core::rpayload!({ "name": Ustr::from("test@retry_worker") }),
+      rind_core::rpayload!({ "name": Ustr::from("test:retry_worker") }),
       context_id,
     )
     .expect("retry service start should queue");
@@ -506,7 +506,7 @@ fn service_on_failure_retry_cap_is_enforced() {
     .with_instances(|instances| {
       let registry = InstanceRegistry::new(&metadata, instances);
       let service = registry
-        .as_one::<Service>("units", "test@retry_worker")
+        .as_one::<Service>("units", "test:retry_worker")
         .expect("retry service should exist");
       service
         .instances
@@ -531,7 +531,7 @@ fn service_on_failure_retry_cap_is_enforced() {
       .with_instances(|instances| {
         let registry = InstanceRegistry::new(&metadata, instances);
         let service = registry
-          .as_one::<Service>("units", "test@retry_worker")
+          .as_one::<Service>("units", "test:retry_worker")
           .expect("retry service should still exist");
         service
           .instances
@@ -558,7 +558,7 @@ fn service_on_failure_retry_cap_is_enforced() {
     .with_instances(|instances| {
       let registry = InstanceRegistry::new(&metadata, instances);
       let service = registry
-        .as_one::<Service>("units", "test@retry_worker")
+        .as_one::<Service>("units", "test:retry_worker")
         .expect("retry service should remain as object");
       assert!(
         service.instances.0.is_empty()
@@ -591,7 +591,7 @@ fn race_like_dispatch_churn_keeps_runtime_consistent() {
       .dispatch(
         "flow",
         "set_state",
-        FlowRuntimePayload::new("test@base").payload(payload).into(),
+        FlowRuntimePayload::new("test:base").payload(payload).into(),
         context_id,
       )
       .expect("set_state should queue");
@@ -601,7 +601,7 @@ fn race_like_dispatch_churn_keeps_runtime_consistent() {
         .dispatch(
           "flow",
           "remove_state",
-          FlowRuntimePayload::new("test@base")
+          FlowRuntimePayload::new("test:base")
             .filter(serde_json::json!({"id": format!("b{i}")}))
             .into(),
           context_id,
@@ -614,7 +614,7 @@ fn race_like_dispatch_churn_keeps_runtime_consistent() {
         .dispatch(
           "services",
           "start",
-          rind_core::rpayload!({ "name": Ustr::from("test@worker") }),
+          rind_core::rpayload!({ "name": Ustr::from("test:worker") }),
           context_id,
         )
         .expect("start should queue");
@@ -625,7 +625,7 @@ fn race_like_dispatch_churn_keeps_runtime_consistent() {
         .dispatch(
           "services",
           "stop",
-          rind_core::rpayload!({ "name": Ustr::from("test@worker"), "force": true }),
+          rind_core::rpayload!({ "name": Ustr::from("test:worker"), "force": true }),
           context_id,
         )
         .expect("stop should queue");
@@ -644,14 +644,14 @@ fn race_like_dispatch_churn_keeps_runtime_consistent() {
       let sm = registry
         .singleton::<StateMachine>(StateMachine::KEY)
         .expect("state machine should exist");
-      if let Some(branches) = sm.states.get(&Ustr::from("test@base")) {
+      if let Some(branches) = sm.states.get(&Ustr::from("test:base")) {
         for b in branches {
-          assert_eq!(b.name, Ustr::from("test@base"));
+          assert_eq!(b.name, Ustr::from("test:base"));
         }
       }
 
       let service = registry
-        .as_one::<Service>("units", "test@worker")
+        .as_one::<Service>("units", "test:worker")
         .expect("service object should exist");
       assert!(
         service

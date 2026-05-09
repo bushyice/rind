@@ -22,7 +22,7 @@ pub struct VariableHeap {
 }
 
 impl VariableHeap {
-  pub const KEY: &str = "runtime@variable_heap";
+  pub const KEY: &str = "runtime:variable_heap";
 
   pub fn new(path: impl Into<PathBuf>) -> Self {
     Self {

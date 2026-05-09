@@ -155,6 +155,8 @@ impl EventBus {
 
 #[cfg(test)]
 mod tests {
+  use crate::rslvns;
+
   use super::*;
 
   #[test]
@@ -163,14 +165,14 @@ mod tests {
     let sub = bus.subscribe::<FlowEvent>();
 
     bus.emit(FlowEvent {
-      name: "test@state".into(),
+      name: rslvns!("test", "state").into(),
       payload: serde_json::json!({"id": 1}),
       action: FlowAction::Apply,
       flow_type: FlowEventType::State,
     });
 
     let event: FlowEvent = sub.try_recv().expect("should receive event");
-    assert_eq!(event.name.as_str(), "test@state");
+    assert_eq!(event.name.as_str(), rslvns!("test", "state"));
     assert_eq!(event.action, FlowAction::Apply);
   }
 

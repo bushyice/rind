@@ -1,7 +1,7 @@
 [[service]]
 name = "three"
 start-on = ["my_state"]
-on-start = [{ signal = "else@my_signal", payload = "hi" }]
+on-start = [{ signal = "else:my_signal", payload = "hi" }]
 run.exec = "/usr/bin/example-active"
 run.args = ["arg1", "arg2"]
 restart = false
@@ -12,7 +12,7 @@ name = "four"
 start-on = ["my_signal"]
 run.exec = "/usr/bin/ipc_so"
 run.args = ["arg1", "arg2"]
-on-start = [{ timer = "else@timeout_four" }]
+on-start = [{ timer = "else:timeout_four" }]
 singleton = true
 
 [[state]]
@@ -30,7 +30,7 @@ name = "four_starter"
 type = "uds"
 lifecycle = "owned"
 listen = "/var/sock/my.sock"
-owner = "else@four"
+owner = "else:four"
 permissions = ["any"]
 
 [[signal]]
@@ -44,4 +44,4 @@ payload = "json"
 [[timer]]
 name = "timeout_four"
 duration = "5s"
-finish = [{ service = "else@four", stop = true }]
+finish = [{ service = "else:four", stop = true }]

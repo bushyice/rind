@@ -96,7 +96,7 @@ pub struct PermissionStore {
 }
 
 impl PermissionStore {
-  pub const KEY: &str = "runtime@permission_store";
+  pub const KEY: &str = "runtime:permission_store";
 
   pub fn new(users: UserStoreShared) -> Self {
     Self {
@@ -366,11 +366,8 @@ mod tests {
       "alice:x:1000:2000:Alice:/home/alice:/bin/sh\n",
     )
     .expect("passwd should be written");
-    fs::write(
-      etc.join("shadow"),
-      "alice:$6$hash$hash:1:0:99999:7:::\n",
-    )
-    .expect("shadow should be written");
+    fs::write(etc.join("shadow"), "alice:$6$hash$hash:1:0:99999:7:::\n")
+      .expect("shadow should be written");
     fs::write(etc.join("group"), "wheel:x:2000:alice\n").expect("group should be written");
     write_perms(&etc.join("rperms"));
 
