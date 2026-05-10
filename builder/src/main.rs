@@ -544,7 +544,15 @@ fn prepare_rootfs(profile: &Profile, fs_ext4: &mut Ext4Fs) {
       .join(&libname);
       copy_host_path_to_ext4(fs_ext4, &src, &format!("/usr/lib/{}", libname), &disk_perms);
       let mut buf = Vec::new();
+      let config = cbindgen::Config {
+        enumeration: cbindgen::EnumConfig {
+          prefix_with_name: true,
+          ..Default::default()
+        },
+        ..Default::default()
+      };
       cbindgen::Builder::new()
+        .with_config(config)
         .with_crate(parts[2])
         .with_language(cbindgen::Language::C)
         .with_pragma_once(true)
@@ -1245,7 +1253,9 @@ fn handle_command(c: &str, profile: &Profile, fs_ext4: &mut Option<Ext4Fs>, no_o
             e
           })
           .expect("Mount failed");
-        if fs.is_read_only() {
+        if fs.is_read_only()
+          || matches!(fs.open("/.test", OpenFlags::CREATE | OpenFlags::WRITE), Err(e) if e.to_string().trim() == "read-only filesystem")
+        {
           let _ = fs.umount();
           Command::new("e2fsck")
             .args(&["-p", "-f", output.to_str().unwrap()])

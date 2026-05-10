@@ -33,13 +33,13 @@ For more information and architectural details, visit [rind.bushyice.com](https:
 ## Requirements
 
 - `qemu`
-- `cpio`
-- `gzip`
 - `mkfs.ext4`
+- `e2fsck`
+- `just` (optional)
 
 ## Build System
 
-You can build with the builder at `/builder`. It's a rust builder so you can just `cargo build` in the `builder` folder and copy the `builder` binary into where you can use it comfortably. I personally use it via `cargo install --path builder`.
+You can build with the builder at `/builder`. It's a rust builder so you can just `cargo build` in the `builder` folder and copy the `builder` binary into where you can use it comfortably. I personally use it via just with `just build XXXX`
 
 ### Build Configuration
 
@@ -48,10 +48,10 @@ Inside of `builder.toml`, you can configure settings for how you want the builde
 ## Build Commands
 
 To get help, you can just execute the builder executable without any arguments and it will print help, but here's a quick start:
-- When you build first time do: `builder ar` or `builder i`
-- When you change code and rebuild: `builder bpdr` (build, prepare rootfs, prepare disk image, run)
-- If you changed something like bzimage or maybe busybox configs, do: `builder i`
-- If you just wanna run and don't wanna clean up the disk image, do: `builder r` (eg. rebooting or testing persistence)
+- When you build first time do: `builder iubp`
+- When you change code and rebuild: `builder xbpr` (build, prepare rootfs, run, x = existing disk image)
+- If you changed something like bzimage or busybox configs or new packages, do: `builder xi`
+- If you ever need to reset, do: `builder iubp`
 
 ## Devenv
 

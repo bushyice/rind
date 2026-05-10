@@ -22,40 +22,42 @@
  * SOFTWARE.
  */
 
+#pragma once
+
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 
 typedef enum TransportProtocolMethod {
-  STDIO = 0,
-  UDS = 1,
+  TransportProtocolMethod_STDIO = 0,
+  TransportProtocolMethod_UDS = 1,
 } TransportProtocolMethod;
 
 typedef enum MessageType {
-  Signal = 0,
-  State = 1,
-  Enquiry = 2,
-  Response = 3,
+  MessageType_Signal = 0,
+  MessageType_State = 1,
+  MessageType_Enquiry = 2,
+  MessageType_Response = 3,
 } MessageType;
 
 typedef enum MessageAction {
-  Remove = 0,
-  Set = 1,
+  MessageAction_Remove = 0,
+  MessageAction_Set = 1,
 } MessageAction;
 
 typedef enum PayloadType {
-  String = 0,
-  Json = 1,
+  PayloadType_String = 0,
+  PayloadType_Json = 1,
 } PayloadType;
 
 typedef enum InvokeType {
-  Valid = 0,
-  Ok = 1,
-  InvokeError = 2,
-  Unknown = 3,
-  RequestInput = 4,
-  Enquire = 5,
+  InvokeType_Valid = 0,
+  InvokeType_Ok = 1,
+  InvokeType_Error = 2,
+  InvokeType_Unknown = 3,
+  InvokeType_RequestInput = 4,
+  InvokeType_Enquire = 5,
 } InvokeType;
 
 typedef struct TransportProtocol {

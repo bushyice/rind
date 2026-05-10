@@ -8,14 +8,14 @@ static void on_message(MessageContainer msg) {
 }
 
 int main(void) {
-  TransportProtocol tp = init_tp(UDS, "/run/rind-tp/tp_demo:transport_state.sock");
+  TransportProtocol tp = init_tp(TransportProtocolMethod_UDS, "/run/rind-tp/tp_demo:transport_state.sock");
 
-  MessageContainer msg = create_message(State, Set);
-  PayloadContainer payload = create_message_payload(String, "hello");
+  MessageContainer msg = create_message(MessageType_State, MessageAction_Set);
+  PayloadContainer payload = create_message_payload(PayloadType_String, "hello");
   set_message_payload(&msg, payload);
   set_message_name(&msg, "tp_demo:transport_state");
 
-  InvokeCommand cmd = create_invoke(Enquire, "list", NULL);
+  InvokeCommand cmd = create_invoke(InvokeType_Enquire, "list", NULL);
   InvokeCommand res = invoke(cmd);
 
   printf("%s\n", res.payload);
@@ -24,7 +24,6 @@ int main(void) {
   send_message(&tp, msg);
 
   for (;;) {
-    // printf("Ping\n");
     sleep(1);
   }
   return 0;

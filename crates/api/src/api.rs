@@ -45,7 +45,7 @@ pub enum MessageType {
 pub enum InvokeType {
   Valid = 0,
   Ok = 1,
-  InvokeError = 2,
+  Error = 2,
   Unknown = 3,
   RequestInput = 4,
   Enquire = 5,
@@ -72,7 +72,7 @@ impl Into<Message> for InvokeCommand {
       r#type: match self.r#type {
         InvokeType::Enquire => rind_ipc::MessageType::Enquire,
         InvokeType::Ok => rind_ipc::MessageType::Ok,
-        InvokeType::InvokeError => rind_ipc::MessageType::Error,
+        InvokeType::Error => rind_ipc::MessageType::Error,
         InvokeType::Valid => rind_ipc::MessageType::Valid,
         InvokeType::RequestInput => rind_ipc::MessageType::RequestInput,
         InvokeType::Unknown => rind_ipc::MessageType::Unknown,
@@ -465,7 +465,7 @@ pub extern "C" fn invoke(command: InvokeCommand) -> InvokeCommand {
     return InvokeCommand {
       action: null_mut(),
       payload: null_mut(),
-      r#type: InvokeType::InvokeError,
+      r#type: InvokeType::Error,
     };
   };
 
@@ -474,7 +474,7 @@ pub extern "C" fn invoke(command: InvokeCommand) -> InvokeCommand {
     return InvokeCommand {
       action: null_mut(),
       payload: null_mut(),
-      r#type: InvokeType::InvokeError,
+      r#type: InvokeType::Error,
     };
   };
   let len = (payload.len() as u32).to_be_bytes();
@@ -483,7 +483,7 @@ pub extern "C" fn invoke(command: InvokeCommand) -> InvokeCommand {
     return InvokeCommand {
       action: null_mut(),
       payload: null_mut(),
-      r#type: InvokeType::InvokeError,
+      r#type: InvokeType::Error,
     };
   }
 
@@ -491,7 +491,7 @@ pub extern "C" fn invoke(command: InvokeCommand) -> InvokeCommand {
     return InvokeCommand {
       action: null_mut(),
       payload: null_mut(),
-      r#type: InvokeType::InvokeError,
+      r#type: InvokeType::Error,
     };
   }
 
@@ -501,7 +501,7 @@ pub extern "C" fn invoke(command: InvokeCommand) -> InvokeCommand {
     return InvokeCommand {
       action: null_mut(),
       payload: null_mut(),
-      r#type: InvokeType::InvokeError,
+      r#type: InvokeType::Error,
     };
   }
 
@@ -513,7 +513,7 @@ pub extern "C" fn invoke(command: InvokeCommand) -> InvokeCommand {
     return InvokeCommand {
       action: null_mut(),
       payload: null_mut(),
-      r#type: InvokeType::InvokeError,
+      r#type: InvokeType::Error,
     };
   }
 
@@ -524,7 +524,7 @@ pub extern "C" fn invoke(command: InvokeCommand) -> InvokeCommand {
       return InvokeCommand {
         action: null_mut(),
         payload: str.into_raw(),
-        r#type: InvokeType::InvokeError,
+        r#type: InvokeType::Error,
       };
     }
   };
@@ -544,7 +544,7 @@ pub extern "C" fn invoke(command: InvokeCommand) -> InvokeCommand {
       r#type: match m.r#type {
         rind_ipc::MessageType::Enquire => InvokeType::Enquire,
         rind_ipc::MessageType::Ok => InvokeType::Ok,
-        rind_ipc::MessageType::Error => InvokeType::InvokeError,
+        rind_ipc::MessageType::Error => InvokeType::Error,
         rind_ipc::MessageType::Valid => InvokeType::Valid,
         rind_ipc::MessageType::RequestInput => InvokeType::RequestInput,
         rind_ipc::MessageType::Unknown => InvokeType::Unknown,
@@ -555,7 +555,7 @@ pub extern "C" fn invoke(command: InvokeCommand) -> InvokeCommand {
       return InvokeCommand {
         action: null_mut(),
         payload: str.into_raw(),
-        r#type: InvokeType::InvokeError,
+        r#type: InvokeType::Error,
       };
     }
   }
