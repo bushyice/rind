@@ -81,7 +81,7 @@ impl UnitsOrchestrator {
             if !sub_entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
               continue;
             }
-            if sub_path.extension().map_or(true, |ext| ext != "toml") {
+            if sub_path.extension().map_or(true, |ext| ext != "kdl") {
               continue;
             }
             let group = Ustr::from(format!(
@@ -103,7 +103,7 @@ impl UnitsOrchestrator {
             })?;
             ctx
               .metadata
-              .load_group_from_toml(&mut metadata, group, &content)
+              .load_group_from_kdl(&mut metadata, group, &content)
               .map_err(|e| {
                 CoreError::Custom(format!(
                   "failed to parse unit file {}: {e}",
@@ -119,7 +119,7 @@ impl UnitsOrchestrator {
         continue;
       }
 
-      if path.extension().map_or(true, |ext| ext != "toml") {
+      if path.extension().map_or(true, |ext| ext != "kdl") {
         continue;
       }
 
@@ -136,7 +136,7 @@ impl UnitsOrchestrator {
 
       ctx
         .metadata
-        .load_group_from_toml(&mut metadata, group.clone(), &content)
+        .load_group_from_kdl(&mut metadata, group.clone(), &content)
         .map_err(|e| {
           CoreError::Custom(format!("failed to parse unit file {}: {e}", path.display()))
         })?;
@@ -185,52 +185,62 @@ impl UnitsOrchestrator {
   }
 
   fn add_builtin_defs(metadata: &mut Metadata) {
-    let builtin_toml = r#"
-[[state]]
-name = "active"
-payload = "string"
+    let builtin_kdl = r#"
+state {
+  name "active"
+  payload "string"
+}
 
-[[state]]
-name = "inactive"
-payload = "string"
+state {
+  name "inactive"
+  payload "string"
+}
 
-[[state]]
-name = "suspended"
-payload = "string"
+state {
+  name "suspended"
+  payload "string"
+}
 
-[[state]]
-name = "user_session"
-payload = "json"
-branch = ["session_id"]
+state {
+  name "user_session"
+  payload "json"
+  branch "session_id"
+}
 
-[[state]]
-name = "user_auto_login"
-payload = "json"
-branch = ["tty"]
+state {
+  name "user_auto_login"
+  payload "json"
+  branch "tty"
+}
 
-[[signal]]
-name = "activate"
-payload = "string"
+signal {
+  name "activate"
+  payload "string"
+}
 
-[[signal]]
-name = "deactivate"
-payload = "string"
+signal {
+  name "deactivate"
+  payload "string"
+}
 
-[[signal]]
-name = "request_login"
-payload = "json"
+signal {
+  name "request_login"
+  payload "json"
+}
 
-[[signal]]
-name = "request_logout"
-payload = "json"
+signal {
+  name "request_logout"
+  payload "json"
+}
 
-[[signal]]
-name = "boot"
-payload = "string"
+signal {
+  name "boot"
+  payload "string"
+}
 
 "#;
 
-    let _ = metadata.from_toml(builtin_toml, BUILTIN_UNIT);
+    let _ = metadata.from_kdl(builtin_kdl, BUILTIN_UNIT);
   }
 }
 

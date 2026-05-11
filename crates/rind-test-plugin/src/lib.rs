@@ -115,11 +115,12 @@ fn resolve_metadata(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> 
     "component" => Ok(metadata.of::<MyModel>("themodel")),
     "built_in" => {
       metadata
-        .from_toml(
+        .from_kdl(
           r#"
-        [[state]]
-        name = "state"
-        payload = "json"
+        state {
+          name "state"
+          payload "json"
+        }
       "#,
           "myplugin",
         )

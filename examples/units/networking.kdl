@@ -1,0 +1,4 @@
+network {
+  name "eth0"
+  method "dhcp"
+}

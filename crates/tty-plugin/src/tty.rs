@@ -431,32 +431,37 @@ fn inject_builtin(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {
   match name {
     "built_in" => {
       metadata
-        .from_toml(
+        .from_kdl(
           r#"
-          [[variable]]
-          name = "ttys"
-          default = ["/dev/tty1", "/dev/tty2"]
+          variable {
+            name "ttys"
+            default "/dev/tty1" "/dev/tty2"
+          }
 
-          [[state]]
-          name = "login_required"
-          payload = "json"
-          branch = ["tty"]
-          stop-on = [{
-            name = "rind:user_session",
-            branch = "tty"
-          }]
+          state {
+            name "login_required"
+            payload "json"
+            branch "tty"
+            stop-on {
+              name "rind:user_session"
+              branch "tty"
+            }
+          }
 
-          [[signal]]
-          name = "switch"
-          payload = "string"
+          signal {
+            name "switch"
+            payload "string"
+          }
 
-          [[state]]
-          name = "taken"
-          payload = "string"
+          state {
+            name "taken"
+            payload "string"
+          }
 
-          [[state]]
-          name = "active"
-          payload = "string"
+          state {
+            name "active"
+            payload "string"
+          }
       "#,
           "tty",
         )

@@ -25,13 +25,13 @@ impl MetadataRegistry {
     self.metadata.insert(name, Arc::new(metadata));
   }
 
-  pub fn load_group_from_toml(
+  pub fn load_group_from_kdl(
     &mut self,
     metadata: &mut Metadata,
     group: impl Into<Ustr>,
     source: &str,
   ) -> anyhow::Result<()> {
-    metadata.from_toml(source, group)?;
+    metadata.from_kdl(source, group)?;
     self.indexes.clear();
     Ok(())
   }
@@ -539,16 +539,18 @@ mod tests {
     let mut registry = MetadataRegistry::default();
 
     let src = r#"
-[[service]]
-name = "web"
-run = "/bin/webd"
+service {
+name "web"
+run "/bin/webd"
+}
 
-[[service]]
-name = "api"
+service {
+name "api"
+}
 "#;
 
     registry
-      .load_group_from_toml(&mut metadata, "demo", src)
+      .load_group_from_kdl(&mut metadata, "demo", src)
       .expect("group should parse");
     registry.insert_metadata(metadata);
     registry

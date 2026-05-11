@@ -19,6 +19,8 @@ license = "MPL-2.0"
 once_cell = "*"
 # sdlang = "*"
 toml = "*"
+kdl = "*"
+serde-kdl2 = "*"
 glob = "*"
 nix = { version = "*", features = ["process", "acct", "socket", "term", "poll", "user", "ioctl", "fs", "signal", "mount", "event", "time", "net"] }
 libc = "*"

@@ -212,25 +212,29 @@ fn inject_networking(name: &str, mut metadata: Metadata) -> CoreResult<Metadata>
     "component" => Ok(metadata.of::<NetworkConfig>("network")),
     "built_in" => {
       metadata
-        .from_toml(
+        .from_kdl(
           r#"
-          [[state]]
-          name = "interface"
-          payload = "json"
-          branch = ["name"]
+          state {
+            name "interface"
+            payload "json"
+            branch "name"
+          }
 
-          [[state]]
-          name = "online"
-          payload = "none"
+          state {
+            name "online"
+            payload "none"
+          }
 
-          [[state]]
-          name = "configured"
-          payload = "json"
-          branch = ["name"]
+          state {
+            name "configured"
+            payload "json"
+            branch "name"
+          }
 
-          [[state]]
-          name = "dns_ready"
-          payload = "none"
+          state {
+            name "dns_ready"
+            payload "none"
+          }
       "#,
           "net",
         )

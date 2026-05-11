@@ -365,7 +365,6 @@ impl FlowRuntime {
     match subscriber {
       TransportMethod::Type(id) => id.0.as_str(),
       TransportMethod::Options { id, .. } => id.0.as_str(),
-      TransportMethod::Object { id, .. } => id.0.as_str(),
     }
   }
 

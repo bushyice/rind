@@ -47,75 +47,107 @@ fn setup_runtime_with_metadata() -> (RuntimeHandle, MetadataRegistry, Resources,
     .of::<Service>("service");
 
   let source = r#"
-[[state]]
-name = "base"
-payload = "json"
-branch = ["id"]
+state {
+name "base"
+payload "json"
+branch "id"
+}
 
-[[state]]
-name = "derived"
-payload = "json"
-after = [{ state = "test:base" }]
-branch = ["id"]
+state {
+name "derived"
+payload "json"
+after {
+state "test:base"
+}
+branch "id"
+}
 
-[[timer]]
-name = "tick"
-duration = "5s"
+timer {
+name "tick"
+duration "5s"
+}
 
-[[socket]]
-name = "listener"
-type = "tcp"
-listen = "127.0.0.1:0"
+socket {
+name "listener"
+type "tcp"
+listen "127.0.0.1:0"
+}
 
-[[service]]
-name = "worker"
-run.exec = "/bin/sh"
-run.args = ["-c", "exit 0"]
-restart = false
+service {
+name "worker"
+run {
+exec "/bin/sh"
+args "-c" "exit 0"
+}
+restart #false
+}
 
-[[signal]]
-name = "sig1"
-payload = "string"
+signal {
+name "sig1"
+payload "string"
+}
 
-[[signal]]
-name = "sig2"
-payload = "string"
-after = [{ signal = "test:sig1" }]
+signal {
+name "sig2"
+payload "string"
+after {
+signal "test:sig1"
+}
+}
 
-[[signal]]
-name = "sock_hit"
-payload = "none"
+signal {
+name "sock_hit"
+payload "none"
+}
 
-[[service]]
-name = "sig_worker"
-run.exec = "/bin/sh"
-run.args = ["-c", "sleep 1"]
-start-on = [{ signal = "test:sig2" }]
-restart = false
+service {
+name "sig_worker"
+run {
+exec "/bin/sh"
+args "-c" "sleep 1"
+}
+start-on {
+signal "test:sig2"
+}
+restart #false
+}
 
-[[service]]
-name = "retry_worker"
-run.exec = "/bin/sh"
-run.args = ["-c", "sleep 2"]
-restart = { max_retries = 1 }
+service {
+name "retry_worker"
+run {
+exec "/bin/sh"
+args "-c" "sleep 2"
+}
+restart #true
+}
 
-[[service]]
-name = "sock_worker"
-run.exec = "/bin/sh"
-run.args = ["-c", "sleep 1"]
-start-on = [{ signal = "test:sock_hit" }]
-restart = false
+service {
+name "sock_worker"
+run {
+exec "/bin/sh"
+args "-c" "sleep 1"
+}
+start-on {
+signal "test:sock_hit"
+}
+restart #false
+}
 
-[[socket]]
-name = "trigger_sock"
-type = "tcp"
-listen = "127.0.0.1:0"
-trigger = [{ signal = "test:sock_hit" }]
+socket {
+  name "trigger_sock"
+  type "tcp"
+  listen "127.0.0.1:0"
+  trigger {
+    - {
+    signal "test:sock_hit"
+    }
+  }
+}
 "#;
 
   units
-    .from_toml(source, "test")
-    .expect("unit toml should parse");
+    .from_kdl(source, "test")
+    .expect("unit kdl should parse");
   metadata.insert_metadata(units);
   metadata
     .ensure_index_for_type::<State>("units")
@@ -163,6 +195,55 @@ fn flush(
   runtime
     .flush_context(context_id, metadata, resources)
     .expect("flush should succeed");
+}
+
+#[test]
+fn example_unit_files_parse_kdl() {
+  let mut units = Metadata::new("units")
+    .of::<State>("state")
+    .of::<Signal>("signal")
+    .of::<Timer>("timer")
+    .of::<Socket>("socket")
+    .of::<Service>("service");
+
+  for entry in
+    std::fs::read_dir(PathBuf::from("../../").join("examples/units")).expect("couldn't read folder")
+  {
+    let Ok(entry) = entry else {
+      continue;
+    };
+    let path = entry.path();
+
+    if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+      continue;
+    }
+
+    if path.extension().map_or(true, |ext| ext != "kdl") {
+      continue;
+    }
+
+    let group = Ustr::from(
+      path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("unknown"),
+    );
+
+    let content = std::fs::read_to_string(&path)
+      .expect(&format!("failed to read unit file {}", path.display()));
+
+    if let Err(err) = units.from_kdl(content.as_str(), group.clone()) {
+      let mut details = format!(
+        "failed to parse unit file {}\n  group: {}\n  error: {err}",
+        path.display(),
+        group
+      );
+      for (idx, cause) in err.chain().skip(1).enumerate() {
+        details.push_str(&format!("\n  cause[{idx}]: {cause}"));
+      }
+      panic!("{details}");
+    }
+  }
 }
 
 #[test]
@@ -378,6 +459,11 @@ fn service_runtime_start_and_child_exit_updates_instance_group() {
 
 #[test]
 fn signal_transcendence_chain_starts_dependent_service() {
+  if !std::path::Path::new("/bin/sh").exists() {
+    eprintln!("skipping signal chain test because /bin/sh is not available");
+    return;
+  }
+
   let (runtime, metadata, mut resources, context_id) = setup_runtime_with_metadata();
 
   runtime
@@ -423,6 +509,11 @@ fn signal_transcendence_chain_starts_dependent_service() {
 
 #[test]
 fn socket_trigger_emits_signal_that_starts_service() {
+  if !std::path::Path::new("/bin/sh").exists() {
+    eprintln!("skipping socket trigger test because /bin/sh is not available");
+    return;
+  }
+
   let (runtime, metadata, mut resources, context_id) = setup_runtime_with_metadata();
 
   runtime

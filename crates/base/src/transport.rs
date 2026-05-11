@@ -46,16 +46,27 @@ pub struct TransportProtocolId(pub Ustr);
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(untagged)]
+pub enum TransportMethodOptions {
+  One(String),
+  Many(Vec<String>),
+}
+
+impl TransportMethodOptions {
+  pub fn iter(&self) -> impl Iterator<Item = &String> {
+    match self {
+      TransportMethodOptions::One(u) => std::slice::from_ref(u).iter(),
+      TransportMethodOptions::Many(u) => u.iter().into(),
+    }
+  }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(untagged)]
 pub enum TransportMethod {
   Type(TransportProtocolId),
   Options {
     id: TransportProtocolId,
-    options: Vec<Ustr>,
-    permissions: Option<Vec<Ustr>>,
-  },
-  Object {
-    id: TransportProtocolId,
-    options: serde_json::Value,
+    options: TransportMethodOptions,
     permissions: Option<Vec<Ustr>>,
   },
 }
@@ -64,11 +75,6 @@ impl TransportMethod {
   pub fn get_permissions(&self) -> Option<Vec<Ustr>> {
     match self.clone() {
       TransportMethod::Options {
-        id: _,
-        options: _,
-        permissions,
-      } => permissions,
-      TransportMethod::Object {
         id: _,
         options: _,
         permissions,

@@ -35,47 +35,22 @@ pub struct RunOption {
   pub exec: Ustr,
   #[serde(default)]
   pub args: Vec<Ustr>,
-  pub env: Option<HashMap<Ustr, Ustr>>,
+  pub env: Option<HashMap<String, String>>,
   pub variable: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(untagged)]
-pub enum RunOptions {
-  One(RunOption),
-  Many(Vec<RunOption>),
-}
-
-impl RunOptions {
-  pub fn as_one(&self) -> &RunOption {
-    match self {
-      RunOptions::One(k) => k,
-      RunOptions::Many(k) => k.first().unwrap(),
-    }
-  }
-
-  pub fn as_many(&self) -> impl Iterator<Item = &RunOption> {
-    match self {
-      RunOptions::One(k) => std::slice::from_ref(k).iter(),
-      RunOptions::Many(k) => k.iter(),
-    }
-  }
-
-  pub fn to_string(&self) -> Vec<String> {
-    self
-      .as_many()
-      .map(|x| {
-        format!(
-          "{} {}",
-          x.exec,
-          x.args
-            .iter()
-            .map(|a| a.as_str())
-            .collect::<Vec<_>>()
-            .join(" ")
-        )
-      })
-      .collect::<Vec<String>>()
+impl RunOption {
+  pub fn to_string(&self) -> String {
+    format!(
+      "{} {}",
+      self.exec,
+      self
+        .args
+        .iter()
+        .map(|a| a.as_str())
+        .collect::<Vec<_>>()
+        .join(" ")
+    )
   }
 }
 
@@ -198,8 +173,6 @@ impl DerefMut for ChildInstanceGroup {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BranchingConfig {
-  #[serde(default)]
-  pub enabled: bool,
   #[serde(rename = "source-state")]
   pub source_state: Ustr,
   #[serde(default)]
@@ -300,7 +273,8 @@ pub enum ServiceSpace {
 pub struct Service {
   // Metadata
   pub name: Ustr,
-  pub run: RunOptions,
+  // pub run: Vec<RunOption>,
+  pub run: RunOption,
   pub after: Option<Vec<Ustr>>,
   #[serde(rename = "start-on")]
   pub start_on: Option<Vec<FlowItem>>,
@@ -745,25 +719,24 @@ impl ServiceRuntime {
       }
     }
 
-    for run in service.metadata.run.as_many() {
-      let resolved = self.resolve_run_option(run, variable_heap);
-      let run_ref = resolved.as_ref().unwrap_or(run);
-      let instance = self.spawn_process(
-        service,
-        run_ref,
-        log,
-        dispatch,
-        branch_ctx,
-        sockets_map,
-        sm,
-        variable_heap,
-        registry_key.clone(),
-        notifier.clone(),
-        resources,
-      )?;
+    let resolved = self.resolve_run_option(&service.metadata.run, variable_heap);
+    let run_ref = resolved.as_ref().unwrap_or(&service.metadata.run);
+    let instance = self.spawn_process(
+      service,
+      run_ref,
+      log,
+      dispatch,
+      branch_ctx,
+      sockets_map,
+      sm,
+      variable_heap,
+      registry_key.clone(),
+      notifier.clone(),
+      resources,
+    )?;
 
-      instances.push(instance);
-    }
+    instances.push(instance);
+
     Ok(instances)
   }
 
@@ -794,7 +767,7 @@ impl ServiceRuntime {
       .unwrap_or_default();
     let env = table.get("env").and_then(|v| v.as_table()).map(|t| {
       t.iter()
-        .filter_map(|(k, v)| v.as_str().map(|s| (Ustr::from(k.as_str()), Ustr::from(s))))
+        .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
         .collect()
     });
 
@@ -932,22 +905,22 @@ impl ServiceRuntime {
             options,
             permissions: _,
           } if id.0.as_str() == "env" => {
-            for option in options {
+            for option in options.iter() {
               let Some((key, value)) = option.split_once('=') else {
                 continue;
               };
               if let Some(state_name) = value.strip_prefix("state:") {
                 if let Some(val) = resolve_state(state_name) {
-                  envs.insert(Ustr::from(key), Ustr::from(val));
+                  envs.insert(key.to_string(), val);
                 }
               } else if let (Some(variables), Some(variable)) =
                 (variables, value.strip_prefix("var:"))
               {
                 if let Some(val) = variables.get(variable) {
-                  envs.insert(Ustr::from(key), Ustr::from(val.to_string()));
+                  envs.insert(key.to_string(), val.to_string());
                 }
               } else {
-                envs.insert(Ustr::from(key), Ustr::from(value));
+                envs.insert(key.to_string(), value.to_string());
               }
             }
           }
@@ -956,7 +929,7 @@ impl ServiceRuntime {
             options,
             permissions: _,
           } if id.0.as_str() == "args" => {
-            for option in options {
+            for option in options.iter() {
               if let Some(state_name) = option.strip_prefix("state:") {
                 let payload = resolve_state(state_name).unwrap_or_default();
                 if !payload.is_empty() {
@@ -969,7 +942,7 @@ impl ServiceRuntime {
                   args.push(Ustr::from(val.to_string()));
                 }
               } else {
-                args.push(option.clone());
+                args.push(option.to_ustr());
               }
             }
           }
@@ -991,35 +964,32 @@ impl ServiceRuntime {
         .map(|i| (3 + i).to_string())
         .collect::<Vec<_>>()
         .join(",");
-      envs.insert(Ustr::from("RIND_SOCKET_FDS"), Ustr::from(inherited_fds));
+      envs.insert("RIND_SOCKET_FDS".to_string(), inherited_fds);
       envs.insert(
-        Ustr::from("RIND_SOCKET_COUNT"),
-        Ustr::from(activation_fds.len().to_string()),
+        "RIND_SOCKET_COUNT".to_string(),
+        activation_fds.len().to_string(),
       );
-      envs.insert(
-        Ustr::from("LISTEN_FDS"),
-        Ustr::from(activation_fds.len().to_string()),
-      );
+      envs.insert("LISTEN_FDS".to_string(), activation_fds.len().to_string());
       if !activation_names.is_empty() {
         let names = activation_names
           .iter()
           .map(|x| x.as_str())
           .collect::<Vec<_>>()
           .join(":");
-        envs.insert(Ustr::from("RIND_SOCKET_NAMES"), Ustr::from(names.clone()));
-        envs.insert(Ustr::from("LISTEN_FDNAMES"), Ustr::from(names));
+        envs.insert("RIND_SOCKET_NAMES".to_string(), names.clone());
+        envs.insert("LISTEN_FDNAMES".to_string(), names);
       }
     }
 
     if let Some(watchdog) = &watchdog_cfg {
       envs.insert(
-        Ustr::from("RIND_WATCHDOG_GRACE_MS"),
-        Ustr::from(watchdog.grace_ms.to_string()),
+        "RIND_WATCHDOG_GRACE_MS".to_string(),
+        watchdog.grace_ms.to_string(),
       );
       if let Some(interval_ms) = watchdog.interval_ms {
         envs.insert(
-          Ustr::from("RIND_WATCHDOG_INTERVAL_MS"),
-          Ustr::from(interval_ms.to_string()),
+          "RIND_WATCHDOG_INTERVAL_MS".to_string(),
+          interval_ms.to_string(),
         );
       }
     }
@@ -1091,14 +1061,10 @@ impl ServiceRuntime {
           cmd.current_dir(format!("{}{}", home, &dir.as_str()[1..]));
         }
 
-        envs.extend(
-          read_env_file(&format!("{home}/.env"))
-            .into_iter()
-            .map(|(k, v)| (Ustr::from(k), Ustr::from(v))),
-        );
+        envs.extend(read_env_file(&format!("{home}/.env")));
 
-        envs.insert(Ustr::from("HOME"), Ustr::from(home));
-        envs.insert(Ustr::from("USER"), username);
+        envs.insert("HOME".into(), home);
+        envs.insert("USER".into(), username.to_string());
       }
 
       if let Some(key) = branch_key {
@@ -1701,7 +1667,6 @@ fn is_stdio_transport(method: &TransportMethod) -> bool {
   match method {
     TransportMethod::Type(id) => id.0.as_str() == "stdio",
     TransportMethod::Options { id, .. } => id.0.as_str() == "stdio",
-    TransportMethod::Object { id, .. } => id.0.as_str() == "stdio",
   }
 }
 
@@ -2194,9 +2159,7 @@ impl Runtime for ServiceRuntime {
                       if let Some(ref branching) = service.metadata.branching {
                         match (emit_trig.action, emit_event.as_ref(), is_running) {
                           (FlowAction::Revert, Some(event), true)
-                            if branching.key.is_some()
-                              && branching.enabled == true
-                              && event.name == branching.source_state =>
+                            if branching.key.is_some() && event.name == branching.source_state =>
                           {
                             let key = Self::branch_key_from_payload(
                               &event.payload,
@@ -2299,7 +2262,7 @@ impl Runtime for ServiceRuntime {
                   continue;
                 }
 
-                if !meta.branching.as_ref().map(|b| b.enabled).unwrap_or(false) && is_running {
+                if !meta.branching.as_ref().is_some() && is_running {
                   continue;
                 }
 
@@ -2309,139 +2272,137 @@ impl Runtime for ServiceRuntime {
                   })?;
 
                 if let Some(branching) = &ser.metadata.branching {
-                  if branching.enabled {
-                    let mut branches = sm
-                      .states
-                      .get(&branching.source_state)
-                      .cloned()
-                      .unwrap_or_default();
+                  let mut branches = sm
+                    .states
+                    .get(&branching.source_state)
+                    .cloned()
+                    .unwrap_or_default();
 
-                    // this might allow for signal branching
-                    if let Some(event) = emit_event.as_ref() {
-                      if event.r#type == FlowType::Signal && event.name == branching.source_state {
-                        branches.push(event.clone());
-                      }
+                  // this might allow for signal branching
+                  if let Some(event) = emit_event.as_ref() {
+                    if event.r#type == FlowType::Signal && event.name == branching.source_state {
+                      branches.push(event.clone());
+                    }
+                  }
+
+                  let mut started = 0usize;
+                  for branch in branches {
+                    let Some(key) =
+                      Self::branch_key_from_payload(&branch.payload, branching.key.as_deref())
+                    else {
+                      continue;
+                    };
+
+                    if ser.instances.iter().any(|i| {
+                      i.key == key
+                        && (i.state == ServiceState::Active || i.state == ServiceState::Starting)
+                    }) {
+                      continue;
                     }
 
-                    let mut started = 0usize;
-                    for branch in branches {
-                      let Some(key) =
-                        Self::branch_key_from_payload(&branch.payload, branching.key.as_deref())
-                      else {
-                        continue;
-                      };
-
-                      if ser.instances.iter().any(|i| {
-                        i.key == key
-                          && (i.state == ServiceState::Active || i.state == ServiceState::Starting)
-                      }) {
-                        continue;
-                      }
-
-                      if let Some(onlys) = &branching.only {
-                        let mut matched = false;
-                        for spec in onlys {
-                          if self.check_branch_match(spec, key.as_str(), sm, Some(vh)) {
-                            matched = true;
-                            break;
-                          }
-                        }
-                        if !matched {
-                          continue;
-                        }
-                      }
-
-                      if let Some(excepts) = &branching.except {
-                        let mut skipped = false;
-                        for spec in excepts {
-                          if self.check_branch_match(spec, key.as_str(), sm, Some(vh)) {
-                            skipped = true;
-                            break;
-                          }
-                        }
-                        if skipped {
-                          continue;
-                        }
-                      }
-
-                      if let Some(max) = branching.max_instances {
-                        if ser.instances.len() >= max || started >= max {
+                    if let Some(onlys) = &branching.only {
+                      let mut matched = false;
+                      for spec in onlys {
+                        if self.check_branch_match(spec, key.as_str(), sm, Some(vh)) {
+                          matched = true;
                           break;
                         }
                       }
-                      let branch_ctx = ServiceBranchContext {
-                        key: Some(key.clone()),
-                        payload: Some(branch.payload.clone()),
-                        forced_user: None,
-                      };
-                      match self.spawn_all(
-                        ser,
-                        log,
-                        dispatch,
-                        Some(&branch_ctx),
-                        &sockets_map,
-                        Some(sm),
-                        Some(vh),
-                        service_key.clone().into(),
-                        ctx.notifier.clone(),
-                        ctx.resources,
-                      ) {
-                        Ok(instances) => {
-                          ser.instances.extend(instances);
-                          self.register_stdio_transport(ser, dispatch, None);
-
-                          if !is_running {
-                            if let Some(inst) = ser.instances.as_one_mut() {
-                              inst.state = ServiceState::Active;
-                              self.run_triggers(ser.metadata.on_start.as_ref(), Some(sm), dispatch);
-                            }
-
-                            let _ = dispatch.dispatch(
-                              "services",
-                              "reconcile_stacks",
-                              rpayload!({
-                                "service": service_name.clone(),
-                                "action": ServiceEventKind::Started
-                              }),
-                            );
-
-                            let _ = dispatch.dispatch(
-                              "timer",
-                              "reconcile_timers",
-                              rpayload!({
-                                "service": service_name.clone(),
-                                "action": ServiceEventKind::Started
-                              }),
-                            );
-                          }
-
-                          started += 1;
-                          log.log(
-                            LogLevel::Info,
-                            "service-runtime",
-                            "started branched service instance",
-                            [
-                              ("service".to_string(), service_name.to_string()),
-                              ("branch".into(), key.to_string()),
-                            ]
-                            .into(),
-                          );
-                        }
-                        Err(e) => {
-                          let mut fields = self.log_fields(ser, "start");
-                          fields.insert("branch".into(), key.to_string());
-                          fields.insert("error".into(), e.to_string());
-                          log.log(
-                            LogLevel::Error,
-                            "service-runtime",
-                            "failed to start branched service instance",
-                            fields,
-                          );
-                        }
+                      if !matched {
+                        continue;
                       }
                     }
-                    continue;
+
+                    if let Some(excepts) = &branching.except {
+                      let mut skipped = false;
+                      for spec in excepts {
+                        if self.check_branch_match(spec, key.as_str(), sm, Some(vh)) {
+                          skipped = true;
+                          break;
+                        }
+                      }
+                      if skipped {
+                        continue;
+                      }
+                    }
+
+                    if let Some(max) = branching.max_instances {
+                      if ser.instances.len() >= max || started >= max {
+                        break;
+                      }
+                    }
+                    let branch_ctx = ServiceBranchContext {
+                      key: Some(key.clone()),
+                      payload: Some(branch.payload.clone()),
+                      forced_user: None,
+                    };
+                    match self.spawn_all(
+                      ser,
+                      log,
+                      dispatch,
+                      Some(&branch_ctx),
+                      &sockets_map,
+                      Some(sm),
+                      Some(vh),
+                      service_key.clone().into(),
+                      ctx.notifier.clone(),
+                      ctx.resources,
+                    ) {
+                      Ok(instances) => {
+                        ser.instances.extend(instances);
+                        self.register_stdio_transport(ser, dispatch, None);
+
+                        if !is_running {
+                          if let Some(inst) = ser.instances.as_one_mut() {
+                            inst.state = ServiceState::Active;
+                            self.run_triggers(ser.metadata.on_start.as_ref(), Some(sm), dispatch);
+                          }
+
+                          let _ = dispatch.dispatch(
+                            "services",
+                            "reconcile_stacks",
+                            rpayload!({
+                              "service": service_name.clone(),
+                              "action": ServiceEventKind::Started
+                            }),
+                          );
+
+                          let _ = dispatch.dispatch(
+                            "timer",
+                            "reconcile_timers",
+                            rpayload!({
+                              "service": service_name.clone(),
+                              "action": ServiceEventKind::Started
+                            }),
+                          );
+                        }
+
+                        started += 1;
+                        log.log(
+                          LogLevel::Info,
+                          "service-runtime",
+                          "started branched service instance",
+                          [
+                            ("service".to_string(), service_name.to_string()),
+                            ("branch".into(), key.to_string()),
+                          ]
+                          .into(),
+                        );
+                      }
+                      Err(e) => {
+                        let mut fields = self.log_fields(ser, "start");
+                        fields.insert("branch".into(), key.to_string());
+                        fields.insert("error".into(), e.to_string());
+                        log.log(
+                          LogLevel::Error,
+                          "service-runtime",
+                          "failed to start branched service instance",
+                          fields,
+                        );
+                      }
+                    }
                   }
+                  continue;
                 }
 
                 self.start_service(

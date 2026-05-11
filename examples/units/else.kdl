@@ -1,0 +1,71 @@
+service {
+  name "three"
+  start-on "my_state"
+  on-start {
+    - {
+      signal "else:my_signal"
+      payload "hi"
+    }
+  }
+  run {
+    exec "/usr/bin/example-active"
+    args "arg1" "arg2"
+  }
+  restart #false
+}
+
+service {
+  name "four"
+  start-on "my_signal"
+  run {
+    exec "/usr/bin/ipc_so"
+    args "arg1" "arg2"
+  }
+  on-start {
+    - {
+      timer "else:timeout_four"
+    }
+  }
+  singleton #true
+}
+
+state {
+  name "my_state"
+  payload "json"
+  branch "id"
+}
+
+state {
+  name "some_state"
+  payload "string"
+}
+
+socket {
+  name "four_starter"
+  type "uds"
+  lifecycle "owned"
+  listen "/var/sock/my.sock"
+  owner "else:four"
+  permissions "any"
+}
+
+signal {
+  name "my_signal"
+  payload "string"
+}
+
+signal {
+  name "my_signal_2"
+  payload "json"
+}
+
+timer {
+  name "timeout_four"
+  duration "5s"
+  finish {
+    - {
+      service "else:four"
+      stop #true
+    }
+  }
+}

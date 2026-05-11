@@ -61,7 +61,7 @@ fn resolve_params() -> (String, String, u64) {
 
 fn main() {
   let (tty, user, session_id) = resolve_params();
-  println!("{tty}");
+  println!("{tty} {user}");
   let Ok(file) = OpenOptions::new().read(true).write(true).open(tty.as_str()) else {
     eprintln!("TTY file {} not found", tty);
     return;

@@ -10,6 +10,8 @@ path = "src/core.rs"
 [dependencies]
 rind-macros = { path = "../macros" }
 toml.workspace = true
+kdl.workspace = true
+serde-kdl2.workspace = true
 serde.workspace = true
 once_cell.workspace = true
 anyhow.workspace = true

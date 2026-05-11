@@ -1,0 +1,16 @@
+service {
+  name "one"
+  run {
+    exec "/usr/bin/example-active"
+    args "arg1" "arg2"
+  }
+  restart #false
+}
+
+service {
+  name "two"
+  run {
+    exec "/usr/bin/example-inactive"
+    args "arg1" "arg2"
+  }
+}

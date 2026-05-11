@@ -76,15 +76,20 @@ pub fn get_peer_cred(fd: i32) -> std::io::Result<ucred> {
 
 /// Resolve identifier namespaces such as `rind:active`
 /// ## Examples
-/// ```
-/// rslvns!("rind", "active") // "rind:active"
-/// rslvns!("units", "rind", "active") // "units:rind:active"
-/// rslvns!(u "rind", "active") // ustr of "rind:active"
-/// rslvns!(u "units", "rind", "active") // ustr of "units:rind:active"
-/// rslvns!(norm "units:rind:active") // "rind:active"
-/// rslvns!(norm "units:" "units:rind:active") // "rind:active"
-/// rslvns!(res "rind:active") // ("rind", "active")
-/// rslvns!(res "units:rind:active") // ("rind", "active")
+/// ```rust
+/// use rind_core::rslvns;
+/// use crate::rind_core::types::ToUstr;
+///
+/// fn main(){
+///   rslvns!("rind", "active"); // "rind:active"
+///   rslvns!("units", "rind", "active"); // "units:rind:active"
+///   rslvns!(u "rind", "active"); // ustr of "rind:active"
+///   rslvns!(u "units", "rind", "active"); // ustr of "units:rind:active"
+///   rslvns!(norm "units:rind:active"); // "rind:active"
+///   rslvns!(norm "units:" "units:rind:active"); // "rind:active"
+///   rslvns!(res "rind:active"); // ("rind", "active")
+///   rslvns!(res "units:rind:active"); // ("rind", "active")
+/// }
 /// ```
 #[macro_export]
 macro_rules! rslvns {

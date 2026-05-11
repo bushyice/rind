@@ -1,0 +1,22 @@
+service {
+  name "example-active"
+  run {
+    exec "/usr/bin/example-active"
+    args "arg1" "arg2"
+  }
+  restart #false
+}
+
+service {
+  name "example-inactive"
+  run {
+    exec "/usr/bin/example-inactive"
+    args "arg1" "arg2"
+  }
+  restart #true
+}
+
+themodel {
+  name "example"
+  data "mydata"
+}

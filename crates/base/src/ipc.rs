@@ -147,7 +147,8 @@ fn build_ipc_list_response(
           .iter()
           .map(|svc| ServiceSerialized {
             after: svc.after.clone(),
-            run: svc.run.as_many().map(|x| x.exec.clone()).collect(),
+            // run: svc.run.iter().map(|x| x.to_string().to_ustr()).collect(),
+            run: svc.run.to_string().to_ustr(),
             last_state: ser_instances
               .get(svc.name())
               .map_or("Inactive".to_string(), |x| x.0.clone()),
@@ -221,12 +222,13 @@ fn build_ipc_list_response(
         last_state: service.instances.last_state(),
         pid: service.instances.pid().get(0).cloned(),
         restart: service.metadata.restart.as_ref().map_or(false, |_| true),
-        run: service
-          .metadata
-          .run
-          .as_many()
-          .map(|x| x.exec.clone())
-          .collect(),
+        run: service.metadata.run.to_string().to_ustr(),
+        // run: service
+        //   .metadata
+        //   .run
+        //   .iter()
+        //   .map(|x| x.to_string().to_ustr())
+        //   .collect(),
       }
       .stringify(),
     )

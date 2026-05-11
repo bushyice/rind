@@ -48,7 +48,7 @@ pub struct ServiceSerialized {
   pub last_state: String,
   pub after: Option<Vec<Ustr>>,
   pub restart: bool,
-  pub run: Vec<Ustr>,
+  pub run: Ustr,
   pub pid: Option<u32>,
 }
 
@@ -201,7 +201,7 @@ mod tests {
       last_state: "Active".to_string(),
       after: Some(vec!["db".to_string().into()]),
       restart: true,
-      run: vec!["hello".to_string().into()],
+      run: "hello".into(),
       pid: Some(1),
     }];
     let out = serialize_many(&services);
