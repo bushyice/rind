@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::flow::{Signal, State, StateMachine, state_path};
+use crate::loader::{RegisterLoader, load_units_from};
 use crate::mount::Mount;
 use crate::permissions::{PERM_LOGIN, PERM_RUN0, PERM_SYSTEM_SERVICES, Permission};
 use crate::services::Service;
@@ -152,6 +153,8 @@ impl UnitsOrchestrator {
 
     Self::add_builtin_defs(&mut metadata);
 
+    load_units_from(ctx, &mut metadata, &self.units_dir)?;
+
     metadata = EXTENSIONS.with(|extensions| {
       extensions
         .get()
@@ -255,6 +258,13 @@ impl Orchestrator for UnitsOrchestrator {
   }
 
   fn preload(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
+    EXTENSIONS.with(|extensions| {
+      extensions
+        .get()
+        .expect("extension manager not initialized")
+        .act("register", &mut RegisterLoader)
+    })?;
+
     let metadata = &*ctx.metadata;
     let users = self.users.clone();
     let permissions = ctx.runtime.with_instances(|instances| {

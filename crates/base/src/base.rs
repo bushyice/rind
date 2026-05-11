@@ -1,5 +1,6 @@
 pub mod flow;
 pub mod ipc;
+pub mod loader;
 pub mod mount;
 pub mod permissions;
 pub mod reaper;
@@ -24,6 +25,7 @@ pub mod prelude {
   pub use super::user::*;
   pub use flow::*;
   pub use ipc::*;
+  pub use loader::*;
   pub use mount::*;
   pub use reaper::*;
   pub use services::*;
