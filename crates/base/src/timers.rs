@@ -65,15 +65,13 @@ impl Runtime for TimerRuntime {
     match action {
       "start" => {
         let name = payload.get::<Ustr>("name")?;
-        let timer_key = Ustr::from(format!("units:{}", name));
-
-        if ctx.registry.instances.contains_key(&timer_key) {
+        if ctx.registry.as_one::<Timer>("*", name.clone()).is_ok() {
           return Ok(None);
         }
 
         let timer = ctx
           .registry
-          .instantiate_one::<Timer>("units", name.clone(), |metadata| {
+          .instantiate_one::<Timer>("*", name.clone(), |metadata| {
             let duration_str = metadata.duration.as_str();
             let duration = parse_duration(duration_str)
               .ok_or_else(|| CoreError::Custom(format!("invalid duration: {}", duration_str)))?;
@@ -121,7 +119,7 @@ impl Runtime for TimerRuntime {
       "stop" => {
         let name = payload.get::<Ustr>("name")?;
 
-        let timer = ctx.registry.uninstantiate_one::<Timer>("units", name)?;
+        let timer = ctx.registry.uninstantiate_one::<Timer>("*", name)?;
         ctx.resources.terminate(timer.fd);
         log.log(
           LogLevel::Info,
@@ -135,26 +133,27 @@ impl Runtime for TimerRuntime {
         );
       }
       "reconcile_timers" => {
-        let service_name = normalize_uaddr(payload.get::<Ustr>("service")?, "units:");
+        let service_name = normalize_uaddr(payload.get::<Ustr>("service")?, "");
+        let service_name = Ustr::from(service_name.as_str().split('@').next().unwrap_or(""));
         let event_action = payload.get::<ServiceEventKind>("action")?;
 
-        let metadata = ctx
-          .registry
-          .metadata
-          .metadata("units")
-          .ok_or_else(|| CoreError::MetadataNotFound("units".to_string()))?;
         let mut dependents = Vec::new();
-        for group in metadata.groups() {
-          if let Some(timers) = ctx
-            .registry
-            .metadata
-            .group_items::<Timer>("units", group.clone())
-          {
-            for timer in timers {
-              if let Some(ref dependencies) = timer.after
-                && dependencies.contains(&service_name)
-              {
-                dependents.push(Ustr::from(format!("{}:{}", group, timer.name)));
+        for meta_name in ctx.registry.metadata.metadata_names() {
+          let Some(meta) = ctx.registry.metadata.metadata(meta_name.clone()) else {
+            continue;
+          };
+          for group in meta.groups() {
+            if let Some(timers) = ctx
+              .registry
+              .metadata
+              .group_items::<Timer>(meta_name.clone(), group.clone())
+            {
+              for timer in timers {
+                if let Some(ref dependencies) = timer.after
+                  && dependencies.contains(&service_name)
+                {
+                  dependents.push(Ustr::from(format!("{}:{}", group, timer.name)));
+                }
               }
             }
           }
@@ -183,7 +182,7 @@ impl Runtime for TimerRuntime {
           .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
             (StateMachine::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, _)| {
-              if let Ok(timer) = registry.uninstantiate_one::<Timer>("units", name) {
+              if let Ok(timer) = registry.uninstantiate_one::<Timer>("*", name) {
                 if let Some(triggers) = &timer.metadata.finish {
                   trigger_events(triggers.clone(), Some(sm), dispatch);
                 }

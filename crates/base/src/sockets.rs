@@ -176,7 +176,7 @@ impl SocketRuntime {
 
   fn rebuild_trigger_index(&mut self, metadata: &MetadataRegistry) {
     self.trigger_index.clear();
-    let sockets = metadata.items::<Socket>("units").unwrap_or_default();
+    let sockets = metadata.items::<Socket>("*").unwrap_or_default();
 
     for (group, meta) in sockets {
       let key = Ustr::from(format!("{}:{}", group, meta.name));
@@ -210,7 +210,7 @@ impl SocketRuntime {
     registry: &mut InstanceRegistry,
     sr: &mut SocketRegistry,
   ) -> CoreResult<()> {
-    let sock = registry.instantiate_one("units", name.clone(), |metadata| {
+    let sock = registry.instantiate_one("*", name.clone(), |metadata| {
       let owned_fd = self
         .create_socket(&metadata)
         .map_err(|e| CoreError::Custom(format!("failed to create socket {name}: {e}")))?;
@@ -247,7 +247,7 @@ impl SocketRuntime {
     registry: &mut InstanceRegistry,
     sr: &mut SocketRegistry,
   ) -> CoreResult<()> {
-    let socket = registry.uninstantiate_one::<Socket>("units", name.clone())?;
+    let socket = registry.uninstantiate_one::<Socket>("*", name.clone())?;
     let fd = socket.fd;
 
     resources.terminate(fd);
@@ -372,7 +372,7 @@ impl Runtime for SocketRuntime {
               } else {
                 registry
                   .metadata
-                  .items::<Socket>("units")
+                  .items::<Socket>("*")
                   .unwrap_or_default()
                   .into_iter()
                   .map(|(group, meta)| Ustr::from(format!("{}:{}", group, meta.name)))
@@ -395,13 +395,13 @@ impl Runtime for SocketRuntime {
               for socket_name in target_keys {
                 let Some(meta) = registry
                   .metadata
-                  .find::<Socket>("units", socket_name.as_str())
+                  .find::<Socket>("*", socket_name.as_str())
                 else {
                   continue;
                 };
 
                 let is_active =
-                  if let Ok(sock) = registry.as_one::<Socket>("units", socket_name.as_str()) {
+                  if let Ok(sock) = registry.as_one::<Socket>("*", socket_name.as_str()) {
                     sock.active
                   } else {
                     false
@@ -530,7 +530,7 @@ impl Runtime for SocketRuntime {
           let sock = self.instances.get(&fd).ok_or(CoreError::InvalidState(
             "Socket for fd was not found".into(),
           ))?;
-          let Ok(socket) = ctx.registry.as_one::<Socket>("units", sock.clone()) else {
+          let Ok(socket) = ctx.registry.as_one::<Socket>("*", sock.clone()) else {
             continue;
           };
 
@@ -539,7 +539,7 @@ impl Runtime for SocketRuntime {
       }
       "clear" => {
         let name = payload.get::<Ustr>("name")?;
-        let socket = ctx.registry.as_one::<Socket>("units", name.clone())?;
+        let socket = ctx.registry.as_one::<Socket>("*", name.clone())?;
         self.clear_socket(socket);
       }
       "drain_incoming" => {
@@ -547,7 +547,7 @@ impl Runtime for SocketRuntime {
         let name = self.instances.get(&fd).ok_or(CoreError::InvalidState(
           "Socket for fd was not found".into(),
         ))?;
-        let socket = ctx.registry.as_one::<Socket>("units", name.clone())?;
+        let socket = ctx.registry.as_one::<Socket>("*", name.clone())?;
         ctx.resources.pause(fd);
 
         let pm = ctx
@@ -656,7 +656,7 @@ pub fn handle_ipc_start_socket(
     return Err(CoreError::PermissionDenied);
   };
 
-  let sock = ctx.registry.metadata.find::<Socket>("units", &payload.name);
+  let sock = ctx.registry.metadata.find::<Socket>("*", &payload.name);
   let caller = pm.users.lookup_by_uid(uid);
   let can_manage = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
     true
@@ -718,7 +718,7 @@ pub fn handle_ipc_stop_socket(
     return Err(CoreError::PermissionDenied);
   };
 
-  let sock = ctx.registry.metadata.find::<Socket>("units", &payload.name);
+  let sock = ctx.registry.metadata.find::<Socket>("*", &payload.name);
   let caller = pm.users.lookup_by_uid(uid);
   let can_manage = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
     true

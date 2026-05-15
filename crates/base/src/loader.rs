@@ -37,6 +37,7 @@ fn load_in_dir(
   ctx: &mut OrchestratorContext<'_>,
   units_dir: &Path,
   metadata: &mut Metadata,
+  trigger: &Option<impl Fn(&str, &Ustr, &mut Metadata) -> CoreResult<()>>,
 ) -> CoreResult<()> {
   let dir = std::fs::read_dir(&units_dir).map_err(|e| {
     CoreError::Custom(format!(
@@ -50,7 +51,7 @@ fn load_in_dir(
     let path = entry.path();
 
     if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-      load_in_dir(ctx, &path, metadata)?;
+      load_in_dir(ctx, &path, metadata, trigger)?;
     } else {
       let extension = path.extension().and_then(|x| x.to_str()).unwrap_or("toml");
 
@@ -71,9 +72,13 @@ fn load_in_dir(
         continue;
       };
 
-      loader(metadata, &content, group, units_dir, ctx).map_err(|e| {
+      loader(metadata, &content, group.clone(), units_dir, ctx).map_err(|e| {
         CoreError::Custom(format!("failed to parse unit file {}: {e}", path.display()))
       })?;
+
+      if let Some(trigger) = trigger {
+        trigger(&content, &group, metadata)?;
+      }
 
       drop(loaders);
     }
@@ -86,8 +91,9 @@ pub fn load_units_from(
   ctx: &mut OrchestratorContext<'_>,
   metadata: &mut Metadata,
   units_dir: &Path,
+  trigger: Option<impl Fn(&str, &Ustr, &mut Metadata) -> CoreResult<()>>,
 ) -> CoreResult<()> {
-  load_in_dir(ctx, units_dir, metadata)?;
+  load_in_dir(ctx, units_dir, metadata, &trigger)?;
   Ok(())
 }
 

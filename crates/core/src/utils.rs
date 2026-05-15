@@ -3,7 +3,31 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::{collections::HashMap, os::fd::AsRawFd};
 
+use crate::rslvns;
 use crate::types::Ustr;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopedName {
+  pub parent: Ustr,
+  pub child: Ustr,
+  pub scope: Ustr,
+}
+
+pub fn parse_scoped_name(path: &str) -> ScopedName {
+  let (parent, child, scope) = rslvns!(res path);
+  ScopedName {
+    parent: Ustr::from(parent),
+    child: Ustr::from(child),
+    scope: Ustr::from(scope),
+  }
+}
+
+pub fn compose_scoped_name(parent: &str, child: &str, scope: Option<&str>) -> String {
+  match scope {
+    Some(scope) if !scope.is_empty() && scope != "static" => format!("{parent}:{child}@{scope}"),
+    _ => format!("{parent}:{child}"),
+  }
+}
 
 pub fn read_env_file(path: &str) -> HashMap<String, String> {
   let mut out = HashMap::new();
@@ -77,14 +101,17 @@ pub fn get_peer_cred(fd: i32) -> std::io::Result<ucred> {
 /// Resolve identifier namespaces such as `rind:active`
 /// ## Examples
 /// ```
-/// rslvns!("rind", "active") // "rind:active"
-/// rslvns!("units", "rind", "active") // "units:rind:active"
-/// rslvns!(u "rind", "active") // ustr of "rind:active"
-/// rslvns!(u "units", "rind", "active") // ustr of "units:rind:active"
-/// rslvns!(norm "units:rind:active") // "rind:active"
-/// rslvns!(norm "units:" "units:rind:active") // "rind:active"
-/// rslvns!(res "rind:active") // ("rind", "active")
-/// rslvns!(res "units:rind:active") // ("rind", "active")
+/// use rind_core::rslvns;
+/// use rind_core::types::ToUstr;
+///
+/// let _ = rslvns!("rind", "active"); // "rind:active"
+/// let _ = rslvns!("units", "rind", "active"); // "units:rind:active"
+/// let _ = rslvns!(u "rind", "active"); // ustr of "rind:active"
+/// let _ = rslvns!(u "units", "rind", "active"); // ustr of "units:rind:active"
+/// let _ = rslvns!(norm "rind:active@static"); // "rind:active"
+/// let _ = rslvns!(norm "@scope" "rind:active@scope"); // "rind:active"
+/// let _ = rslvns!(res "rind:active"); // ("rind", "active", "static")
+/// let _ = rslvns!(res "units:rind:active@s"); // ("rind", "active", "s")
 /// ```
 #[macro_export]
 macro_rules! rslvns {
@@ -102,21 +129,21 @@ macro_rules! rslvns {
     rslvns!($u, $p, $c).to_ustr()
   };
 
-  (norm $path:expr) => {{ rslvns!(norm "units:" $path) }};
-  (norm $prefix:literal $path:expr) => {{ $path.trim_start_matches($prefix) }};
+  (scp $p:expr, $c:expr) => {
+    format!("{}@{}", $c, $p)
+  };
+
+  (norm $path:expr) => {{ rslvns!(norm "@static" $path) }};
+  (norm $prefix:literal $path:expr) => {{ $path.trim_end_matches($prefix) }};
 
   (res $path:expr) => {{
-    let mut parts = $path.rsplitn(3, ':');
+    let mut scoped_parts = $path.splitn(2, '@');
+    let name = scoped_parts.next().unwrap_or("");
+    let scope = scoped_parts.next().unwrap_or("static");
+    let mut parts = name.rsplitn(3, ':');
     let child = parts.next().unwrap_or("");
     let parent = parts.next().unwrap_or("");
-    (parent, child)
-  }};
-
-  (res? $path:expr) => {{
-    let mut parts = $path.rsplitn(3, ':');
-    let child = parts.next()?;
-    let parent = parts.next()?;
-    (parent, child)
+    (parent, child, scope)
   }};
 }
 
@@ -125,8 +152,8 @@ macro_rules! rslvns {
 pub fn resolve_namespace() {
   assert_eq!(rslvns!("a", "b"), "a:b");
   assert_eq!(rslvns!("u", "a", "b"), "u:a:b");
-  assert_eq!(rslvns!(norm "units:a:b"), "a:b");
-  assert_eq!(rslvns!(norm "u:" "u:a:b"), "a:b");
-  assert_eq!(rslvns!(res "a:b"), ("a", "b"));
-  assert_eq!(rslvns!(res "u:a:b"), ("a", "b"));
+  assert_eq!(rslvns!(norm "a:b@static"), "a:b");
+  assert_eq!(rslvns!(norm "@s" "a:b@s"), "a:b");
+  assert_eq!(rslvns!(res "a:b"), ("a", "b", "static"));
+  assert_eq!(rslvns!(res "a:b@s"), ("a", "b", "s"));
 }

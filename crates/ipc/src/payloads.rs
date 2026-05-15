@@ -43,3 +43,17 @@ pub struct NetworkPayload {
   pub address: Option<String>,
   pub gateway: Option<String>,
 }
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct ScopeCreatePayload {
+  pub scope: String,
+  #[serde(default)]
+  pub lifetime_state: Option<String>,
+  #[serde(default)]
+  pub attributes: serde_json::Value,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+pub struct ScopeDestroyPayload {
+  pub scope: String,
+}

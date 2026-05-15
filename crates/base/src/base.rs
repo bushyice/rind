@@ -1,9 +1,11 @@
+pub mod dunits;
 pub mod flow;
 pub mod ipc;
 pub mod loader;
 pub mod mount;
 pub mod permissions;
 pub mod reaper;
+pub mod scopes;
 pub mod services;
 pub mod sockets;
 pub mod timers;
@@ -23,11 +25,13 @@ pub mod prelude {
   pub use super::core::prelude::*;
   pub use super::permissions::*;
   pub use super::user::*;
+  pub use dunits::*;
   pub use flow::*;
   pub use ipc::*;
   pub use loader::*;
   pub use mount::*;
   pub use reaper::*;
+  pub use scopes::*;
   pub use services::*;
   pub use sockets::*;
   pub use timers::*;

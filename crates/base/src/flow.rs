@@ -11,6 +11,7 @@ use crate::triggers::{
   merge_json, payload_compatible, payload_signature, payload_to_filter,
 };
 use crate::variables::VariableHeap;
+use crate::scopes::ScopeStore;
 
 pub const FLOW_RUNTIME_ID: &str = "flow";
 
@@ -294,6 +295,8 @@ pub struct Signal {
 pub struct StateMachine {
   pub states: HashMap<Ustr, Vec<FlowInstance>>,
   persistence: StatePersistence,
+  persistence_root: PathBuf,
+  scoped_persistence: HashMap<Ustr, StatePersistence>,
 }
 
 impl StateMachine {
@@ -302,6 +305,8 @@ impl StateMachine {
   pub fn from_persistence(persistence: StatePersistence) -> Self {
     Self {
       persistence: persistence,
+      persistence_root: state_root_path(),
+      scoped_persistence: HashMap::new(),
       states: Default::default(),
     }
   }
@@ -321,6 +326,111 @@ impl StateMachine {
         )
       })
       .collect();
+
+    if self.persistence_root.exists() {
+      if let Ok(entries) = std::fs::read_dir(&self.persistence_root) {
+        for entry in entries.flatten() {
+          if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+          }
+          let scope = entry
+            .file_name()
+            .to_str()
+            .map(Ustr::from)
+            .unwrap_or_else(|| Ustr::from("static"));
+          if scope == Ustr::from("static") {
+            continue;
+          }
+          let _ = self.load_scope_from_persistence(scope.as_str());
+        }
+      }
+    }
+    Ok(())
+  }
+
+  fn scope_from_state_name(name: &str) -> Ustr {
+    let mut parts = name.rsplitn(2, '@');
+    let scope = parts.next().unwrap_or("static");
+    let left = parts.next();
+    if left.is_some() {
+      Ustr::from(scope)
+    } else {
+      Ustr::from("static")
+    }
+  }
+
+  fn scoped_state_path(root: &PathBuf, scope: &str) -> PathBuf {
+    root.join(scope).join("state.bin")
+  }
+
+  fn persistence_for_scope(&mut self, scope: &str) -> StatePersistence {
+    if scope == "static" {
+      return self.persistence.clone();
+    }
+    if let Some(p) = self.scoped_persistence.get(&Ustr::from(scope)) {
+      return p.clone();
+    }
+    let p = StatePersistence::new(Self::scoped_state_path(&self.persistence_root, scope));
+    self.scoped_persistence.insert(Ustr::from(scope), p.clone());
+    p
+  }
+
+  pub fn load_scope_from_persistence(&mut self, scope: &str) -> Result<(), CoreError> {
+    let persistence = self.persistence_for_scope(scope);
+    let snapshot = persistence.load()?;
+    for (name, entries) in snapshot {
+      let key = Ustr::from(name);
+      let vals = entries
+        .into_iter()
+        .map(FlowInstance::from)
+        .filter(|x| !x.name.as_str().is_empty())
+        .collect::<Vec<_>>();
+      self.states.insert(key, vals);
+    }
+    Ok(())
+  }
+
+  pub fn drop_scope(&mut self, scope: &str) -> Result<(), CoreError> {
+    let suffix = format!("@{scope}");
+    self
+      .states
+      .retain(|k, _| scope == "static" && !k.as_str().contains('@') || !k.as_str().ends_with(&suffix));
+
+    if scope != "static" {
+      let scope_dir = self.persistence_root.join(scope);
+      if scope_dir.exists() {
+        let _ = std::fs::remove_dir_all(scope_dir);
+      }
+      self.scoped_persistence.remove(&Ustr::from(scope));
+    }
+
+    Ok(())
+  }
+
+  pub fn save_all_scopes(&mut self) -> Result<(), CoreError> {
+    let mut per_scope: HashMap<Ustr, StateSnapshot> = HashMap::new();
+    for (name, branches) in &self.states {
+      if name.as_str().contains(":_") {
+        continue;
+      }
+      let scope = Self::scope_from_state_name(name.as_str());
+      per_scope
+        .entry(scope)
+        .or_default()
+        .insert(
+          name.to_string(),
+          branches.iter().map(StateEntry::from).collect::<Vec<_>>(),
+        );
+    }
+    // Always materialize static persistence so the scoped layout exists
+    // even before the first persisted flow state is written.
+    per_scope.entry(Ustr::from("static")).or_default();
+
+    for (scope, snapshot) in per_scope {
+      let persistence = self.persistence_for_scope(scope.as_str());
+      persistence.save_sync(&snapshot)?;
+    }
+
     Ok(())
   }
 
@@ -438,9 +548,8 @@ impl FlowRuntime {
       .and_then(|d| d.subscribers.clone())
   }
 
-  fn save_state_machine(&self, sm: &StateMachine) -> Result<(), CoreError> {
-    let snapshot = sm.snapshot_for_persistence();
-    sm.persistence.save(snapshot);
+  fn save_state_machine(&self, sm: &mut StateMachine) -> Result<(), CoreError> {
+    sm.save_all_scopes()?;
     Ok(())
   }
 
@@ -966,15 +1075,22 @@ impl FlowRuntime {
     let mut state_defs = HashMap::new();
     let mut signal_defs = HashMap::new();
 
-    if let Some(m) = metadata.metadata("units") {
+    for meta_name in metadata.metadata_names() {
+      let Some(m) = metadata.metadata(meta_name.clone()) else {
+        continue;
+      };
       for group in m.groups() {
-        if let Some(states) = metadata.group_items::<State>("units", group.clone()) {
+        if let Some(states) = metadata.group_items::<State>(meta_name.clone(), group.clone()) {
           for s in states {
+            let key = Ustr::from(format!("{group}:{}@{}", s.name, meta_name));
+            state_defs.insert(key.clone(), s.clone());
             state_defs.insert(Ustr::from(format!("{group}:{}", s.name)), s);
           }
         }
-        if let Some(signals) = metadata.group_items::<Signal>("units", group.clone()) {
+        if let Some(signals) = metadata.group_items::<Signal>(meta_name.clone(), group.clone()) {
           for s in signals {
+            let key = Ustr::from(format!("{group}:{}@{}", s.name, meta_name));
+            signal_defs.insert(key.clone(), s.clone());
             signal_defs.insert(Ustr::from(format!("{group}:{}", s.name)), s);
           }
         }
@@ -1124,6 +1240,23 @@ impl Runtime for FlowRuntime {
         if let Some(notifier) = &ctx.notifier {
           notifier.notify()?;
         }
+
+        if let Some(sm) = ctx.registry.singleton::<StateMachine>(StateMachine::KEY) {
+          let should_drop_scope = sm
+            .states
+            .get(&name)
+            .map(|branches| branches.is_empty())
+            .unwrap_or(true);
+          if should_drop_scope {
+            let scope_name = crate::scopes::GLOBAL_SCOPE_STORE
+              .lock()
+              .ok()
+              .and_then(|s| s.scope_for_state(name.as_str()));
+            if let Some(scope_name) = scope_name {
+              let _ = ScopeStore::remove_scope_global(scope_name.as_str());
+            }
+          }
+        }
       }
       "emit_signal" => {
         let name = payload.get::<Ustr>("name")?;
@@ -1199,6 +1332,21 @@ pub fn state_path() -> PathBuf {
   } else {
     PathBuf::from("/var/lib/system-state")
   }
+}
+
+pub fn state_root_path() -> PathBuf {
+  if let Ok(path) = std::env::var("RIND_STATE_ROOT") {
+    PathBuf::from(path)
+  } else {
+    PathBuf::from("/var/system-states")
+  }
+}
+
+pub fn state_scope_path(scope: &str) -> PathBuf {
+  if scope == "static" && let Ok(path) = std::env::var("RIND_STATE_PATH") {
+    return PathBuf::from(path);
+  }
+  state_root_path().join(scope).join("state.bin")
 }
 
 pub fn condition_is_active(

@@ -155,11 +155,11 @@ fn inject_ipc_list(
         .singleton::<StateMachine>(StateMachine::KEY)
         .ok_or(CoreError::RuntimeStopped)?;
 
-      if let Some(groups) = registry.metadata.groups("units") {
+      for (metadata, groups) in registry.metadata.all_groups() {
         for group in groups {
           if let Some(cfgs) = registry
             .metadata
-            .group_items::<NetworkConfig>("units", group)
+            .group_items::<NetworkConfig>(metadata.as_str(), group)
           {
             for cfg in cfgs {
               let config = {
@@ -598,18 +598,17 @@ impl NetworkingRuntime {
   fn load_network_configs(
     ctx: &mut RuntimeContext<'_>,
   ) -> Vec<(String, std::sync::Arc<NetworkConfigMetadata>)> {
-    let Some(m) = ctx.registry.metadata.metadata("units") else {
-      return Vec::new();
-    };
     let mut out = Vec::new();
-    for group in m.groups() {
-      if let Some(cfgs) = ctx
-        .registry
-        .metadata
-        .group_items::<NetworkConfig>("units", group.clone())
-      {
-        for c in cfgs {
-          out.push((group.to_string(), c));
+    for (metadata, groups) in ctx.registry.metadata.all_groups() {
+      for group in groups {
+        if let Some(cfgs) = ctx
+          .registry
+          .metadata
+          .group_items::<NetworkConfig>(metadata.as_str(), group.clone())
+        {
+          for c in cfgs {
+            out.push((group.to_string(), c));
+          }
         }
       }
     }

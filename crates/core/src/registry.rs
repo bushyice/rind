@@ -9,6 +9,7 @@ use crate::{
   metadata::{Metadata, Model, NamedItem},
   rslvns,
   types::ToUstr,
+  utils::parse_scoped_name,
 };
 
 use crate::types::Ustr;
@@ -20,6 +21,37 @@ pub struct MetadataRegistry {
 }
 
 impl MetadataRegistry {
+  pub(crate) fn resolve_metadata_key(&self, metadata: Ustr, full_name: &str) -> Ustr {
+    if metadata.as_str() == "*" {
+      let scope = parse_scoped_name(full_name).scope;
+      if self.metadata.contains_key(&scope) {
+        return scope;
+      }
+      let units = Ustr::from("units");
+      if self.metadata.contains_key(&units) {
+        return units;
+      }
+      let statik = Ustr::from("static");
+      if self.metadata.contains_key(&statik) {
+        return statik;
+      }
+      if let Some(first) = self.metadata.keys().next() {
+        return first.clone();
+      }
+    }
+
+    if self.metadata.contains_key(&metadata) {
+      return metadata;
+    }
+
+    let scope = parse_scoped_name(full_name).scope;
+    if self.metadata.contains_key(&scope) {
+      scope
+    } else {
+      metadata
+    }
+  }
+
   pub fn insert_metadata(&mut self, metadata: Metadata) {
     let name = metadata.name.clone();
     self.metadata.insert(name, Arc::new(metadata));
@@ -55,6 +87,18 @@ impl MetadataRegistry {
     metadata: impl Into<Ustr>,
   ) -> Option<Vec<(Ustr, Arc<T::M>)>> {
     let metadata = metadata.into();
+    if metadata.as_str() == "*" {
+      let mut out = Vec::new();
+      for m in self.metadata.values() {
+        out.extend(m.groups().flat_map(|group| {
+          m.get_in_group::<T>(group.clone())
+            .into_iter()
+            .flatten()
+            .map(move |item| (group.clone(), item.clone()))
+        }));
+      }
+      return Some(out);
+    }
     let m = self.metadata.get(&metadata)?;
 
     Some(
@@ -67,6 +111,14 @@ impl MetadataRegistry {
         })
         .collect(),
     )
+  }
+
+  pub fn all_groups(&self) -> HashMap<Ustr, Vec<Ustr>> {
+    let mut out: HashMap<Ustr, Vec<Ustr>> = HashMap::new();
+    for (u, m) in self.metadata.iter() {
+      out.entry(u.clone()).or_default().extend(m.groups());
+    }
+    out
   }
 
   pub fn groups(&self, metadata: impl Into<Ustr>) -> Option<Vec<Ustr>> {
@@ -111,7 +163,8 @@ impl MetadataRegistry {
   {
     let metadata = metadata.into();
     let full_name = full_name.into();
-    let (group, _) = rslvns!(res full_name); //full_name.as_str().split_once(':')?;
+    let metadata = self.resolve_metadata_key(metadata, full_name.as_str());
+    let (group, _, _) = rslvns!(res full_name); //full_name.as_str().split_once(':')?;
 
     if let Some(idx) = self.indexes.get(&TypeId::of::<T>())?.get(&full_name) {
       self
@@ -133,7 +186,8 @@ impl MetadataRegistry {
   {
     let metadata = metadata.into();
     let full_name = full_name.into();
-    let (group, item_name) = rslvns!(res? full_name);
+    let metadata = self.resolve_metadata_key(metadata, full_name.as_str());
+    let (group, item_name, _) = rslvns!(res full_name);
     self
       .group_items::<T>(metadata, group)?
       .iter()
@@ -164,6 +218,10 @@ impl MetadataRegistry {
     self.metadata.get(&metadata.into()).map(|x| x.clone())
   }
 
+  pub fn metadata_names(&self) -> impl Iterator<Item = Ustr> + '_ {
+    self.metadata.keys().cloned()
+  }
+
   pub fn remove_metadata(&mut self, metadata: impl Into<Ustr>) -> bool {
     let metadata = metadata.into();
     let removed = self.metadata.remove(&metadata).is_some();
@@ -192,6 +250,11 @@ pub trait HandleTuple: Sized {
 }
 
 impl<'a> InstanceRegistry<'a> {
+  fn resolved_metadata_and_full_name(&self, metadata: Ustr, name: Ustr) -> (Ustr, Ustr) {
+    let resolved = self.metadata.resolve_metadata_key(metadata, name.as_str());
+    (resolved.clone(), rslvns!(scp resolved, name).to_ustr())
+  }
+
   pub fn new(metadata: &'a MetadataRegistry, instances: &'a mut InstanceMap) -> Self {
     Self {
       metadata,
@@ -210,7 +273,7 @@ impl<'a> InstanceRegistry<'a> {
   {
     let metadata = metadata.into();
     let name = name.into();
-    let full_name = rslvns!(metadata, name).to_ustr();
+    let (metadata, full_name) = self.resolved_metadata_and_full_name(metadata, name.clone());
     let metadata_item = if name.as_str().contains(':') {
       self.metadata.find::<T>(metadata.clone(), name.clone())
     } else {
@@ -244,7 +307,7 @@ impl<'a> InstanceRegistry<'a> {
   {
     let metadata = metadata.into();
     let name = name.into();
-    let full_name = rslvns!(u metadata, name);
+    let (metadata, full_name) = self.resolved_metadata_and_full_name(metadata, name.clone());
     let insts = self.instances.get(&full_name);
     if let None = insts {
       self.instantiate(metadata, name, instantiate)
@@ -274,7 +337,7 @@ impl<'a> InstanceRegistry<'a> {
   {
     let metadata = metadata.into();
     let name = name.into();
-    let full_name = rslvns!(u metadata, name);
+    let (_, full_name) = self.resolved_metadata_and_full_name(metadata, name);
     Ok(
       self
         .instances
@@ -296,7 +359,7 @@ impl<'a> InstanceRegistry<'a> {
   {
     let metadata = metadata.into();
     let name = name.into();
-    let full_name = rslvns!(u metadata, name);
+    let (_, full_name) = self.resolved_metadata_and_full_name(metadata, name);
     Ok(
       self
         .instances
@@ -331,7 +394,7 @@ impl<'a> InstanceRegistry<'a> {
   {
     let metadata = metadata.into();
     let name = name.into();
-    let full_name = rslvns!(u metadata, name);
+    let (_, full_name) = self.resolved_metadata_and_full_name(metadata, name);
     Ok(
       self
         .instances
@@ -349,7 +412,7 @@ impl<'a> InstanceRegistry<'a> {
   {
     let metadata = metadata.into();
     let name = name.into();
-    let full_name = rslvns!(u metadata, name);
+    let (_, full_name) = self.resolved_metadata_and_full_name(metadata, name);
     let instances = self
       .instances
       .get(&full_name)
@@ -374,7 +437,7 @@ impl<'a> InstanceRegistry<'a> {
   {
     let metadata = metadata.into();
     let name = name.into();
-    let full_name = rslvns!(u metadata, name);
+    let (_, full_name) = self.resolved_metadata_and_full_name(metadata, name);
     let instances = self
       .instances
       .get_mut(&full_name)

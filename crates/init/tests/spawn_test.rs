@@ -26,6 +26,17 @@ fn wait_for_socket(path: &Path, timeout: Duration) -> bool {
   false
 }
 
+fn wait_for_path(path: &Path, timeout: Duration) -> bool {
+  let start = Instant::now();
+  while start.elapsed() < timeout {
+    if path.exists() {
+      return true;
+    }
+    std::thread::sleep(Duration::from_millis(50));
+  }
+  false
+}
+
 fn stop_child(child: &mut Child) {
   let _ = child.kill();
   let _ = child.wait();
@@ -33,13 +44,17 @@ fn stop_child(child: &mut Child) {
 
 #[test]
 fn init_uses_env_paths_and_persists_state_with_ipc_start() {
+  let _ = fs::remove_file("/tmp/rind.sock");
   let units_dir = temp_dir("units");
   let state_path = temp_dir("state").join("state.bin");
+  let state_root = temp_dir("state-root");
+  let scoped_state_path = state_root.join("static").join("state.bin");
   let vars_path = temp_dir("vars").join("variables.toml");
   let log_dir = temp_dir("logs");
   fs::create_dir_all(&units_dir).expect("units dir should be created");
   fs::create_dir_all(state_path.parent().expect("state parent"))
     .expect("state parent should exist");
+  fs::create_dir_all(&state_root).expect("state root should exist");
   fs::create_dir_all(vars_path.parent().expect("vars parent")).expect("vars parent should exist");
 
   let unit_file = units_dir.join("test.toml");
@@ -60,6 +75,7 @@ restart = false
   let mut child = Command::new(init_bin)
     .env("RIND_UNITS_DIR", &units_dir)
     .env("RIND_STATE_PATH", &state_path)
+    .env("RIND_STATE_ROOT", &state_root)
     .env("RIND_VARIABLES_PATH", &vars_path)
     .env("RIND_LOG_DIR", &log_dir)
     .env("RIND_PUMP_INTERVAL", "1")
@@ -98,10 +114,14 @@ restart = false
     response
   );
 
-  std::thread::sleep(Duration::from_millis(700));
+  let _ = wait_for_path(&state_path, Duration::from_secs(2))
+    || wait_for_path(&scoped_state_path, Duration::from_secs(2));
   stop_child(&mut child);
 
-  assert!(state_path.exists(), "state snapshot path should be created");
+  assert!(
+    state_path.exists() || scoped_state_path.exists(),
+    "state snapshot path should be created (legacy or scoped)"
+  );
 
   let mut has_log_segment = false;
   if let Ok(entries) = fs::read_dir(&log_dir) {

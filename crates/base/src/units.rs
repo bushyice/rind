@@ -1,21 +1,16 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::flow::{Signal, State, StateMachine, state_path};
-use crate::loader::{RegisterLoader, load_units_from};
-use crate::mount::Mount;
-use crate::permissions::{PERM_LOGIN, PERM_RUN0, PERM_SYSTEM_SERVICES, Permission};
-use crate::services::Service;
-use crate::sockets::Socket;
-use crate::timers::Timer;
+use crate::dunits::create_units_metadata;
+use crate::flow::{StateMachine, state_scope_path};
+use crate::loader::RegisterLoader;
+use crate::permissions::{PERM_LOGIN, PERM_RUN0, PERM_SYSTEM_SERVICES};
+use crate::scopes::ScopeStore;
 use crate::user::Run0QueueState;
 use crate::variables::{Variable, VariableHeap, variables_path};
 use rind_core::prelude::*;
 use rind_core::user::{PamHandle, UserStore};
 use rind_ipc::recv::IpcSourcemap;
-
-pub const UNITS_META: &str = "units";
-const BUILTIN_UNIT: &str = "rind";
 
 pub struct UnitsOrchestrator {
   units_dir: PathBuf,
@@ -45,195 +40,7 @@ impl UnitsOrchestrator {
     ctx: &mut OrchestratorContext<'_>,
     permissions: &PermissionStore,
   ) -> Result<(), CoreError> {
-    let mut metadata = Metadata::new(UNITS_META)
-      .of::<Service>("service")
-      .of::<Timer>("timer")
-      .of::<Mount>("mount")
-      .of::<Socket>("socket")
-      .of::<State>("state")
-      .of::<Signal>("signal")
-      .of::<Permission>("permission")
-      .of::<Variable>("variable");
-
-    metadata = EXTENSIONS.with(|extensions| {
-      extensions
-        .get()
-        .expect("extension manager not initialized")
-        .resolve("component", metadata)
-    })?;
-
-    let dir = std::fs::read_dir(&self.units_dir).map_err(|e| {
-      CoreError::Custom(format!(
-        "failed to read units dir {}: {e}",
-        self.units_dir.display()
-      ))
-    })?;
-
-    for entry in dir {
-      let entry = entry.map_err(|e| CoreError::Custom(format!("dir entry error: {e}")))?;
-      let path = entry.path();
-
-      if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-        if let Ok(sub_dir) = std::fs::read_dir(&path) {
-          for sub_entry in sub_dir {
-            let sub_entry =
-              sub_entry.map_err(|e| CoreError::Custom(format!("dir entry error: {e}")))?;
-            let sub_path = sub_entry.path();
-            if !sub_entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-              continue;
-            }
-            if sub_path.extension().map_or(true, |ext| ext != "toml") {
-              continue;
-            }
-            let group = Ustr::from(format!(
-              "{}/{}",
-              path
-                .file_name()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown"),
-              sub_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown")
-            ));
-            let content = std::fs::read_to_string(&sub_path).map_err(|e| {
-              CoreError::Custom(format!(
-                "failed to read unit file {}: {e}",
-                sub_path.display()
-              ))
-            })?;
-            ctx
-              .metadata
-              .load_group_from_toml(&mut metadata, group, &content)
-              .map_err(|e| {
-                CoreError::Custom(format!(
-                  "failed to parse unit file {}: {e}",
-                  sub_path.display()
-                ))
-              })?;
-          }
-        }
-        continue;
-      }
-
-      if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-        continue;
-      }
-
-      if path.extension().map_or(true, |ext| ext != "toml") {
-        continue;
-      }
-
-      let group = Ustr::from(
-        path
-          .file_stem()
-          .and_then(|s| s.to_str())
-          .unwrap_or("unknown"),
-      );
-
-      let content = std::fs::read_to_string(&path).map_err(|e| {
-        CoreError::Custom(format!("failed to read unit file {}: {e}", path.display()))
-      })?;
-
-      ctx
-        .metadata
-        .load_group_from_toml(&mut metadata, group.clone(), &content)
-        .map_err(|e| {
-          CoreError::Custom(format!("failed to parse unit file {}: {e}", path.display()))
-        })?;
-
-      if content.contains("permission") {
-        if let Some(items) = metadata.get_in_group::<Permission>(group) {
-          for perm in items {
-            permissions.reg_perm(PermissionId(perm.id), perm.name.clone())?;
-          }
-        }
-      }
-    }
-
-    Self::add_builtin_defs(&mut metadata);
-
-    load_units_from(ctx, &mut metadata, &self.units_dir)?;
-
-    metadata = EXTENSIONS.with(|extensions| {
-      extensions
-        .get()
-        .expect("extension manager not initialized")
-        .resolve("built_in", metadata)
-    })?;
-
-    EXTENSIONS.with(|extensions| {
-      extensions
-        .get()
-        .expect("extension manager not initialized")
-        .act("loaded_units", &mut metadata)
-    })?;
-
-    ctx.metadata.insert_metadata(metadata);
-    ctx.metadata.ensure_index_for_type::<Service>(UNITS_META)?;
-    ctx.metadata.ensure_index_for_type::<Mount>(UNITS_META)?;
-    ctx.metadata.ensure_index_for_type::<Socket>(UNITS_META)?;
-    ctx.metadata.ensure_index_for_type::<Timer>(UNITS_META)?;
-    ctx.metadata.ensure_index_for_type::<State>(UNITS_META)?;
-    ctx.metadata.ensure_index_for_type::<Signal>(UNITS_META)?;
-
-    EXTENSIONS.with(|extensions| {
-      extensions
-        .get()
-        .expect("extension manager not initialized")
-        .act("create_index", ctx.metadata)
-    })?;
-
-    Ok(())
-  }
-
-  fn add_builtin_defs(metadata: &mut Metadata) {
-    let builtin_toml = r#"
-[[state]]
-name = "active"
-payload = "string"
-
-[[state]]
-name = "inactive"
-payload = "string"
-
-[[state]]
-name = "suspended"
-payload = "string"
-
-[[state]]
-name = "user_session"
-payload = "json"
-branch = ["session_id"]
-
-[[state]]
-name = "user_auto_login"
-payload = "json"
-branch = ["tty"]
-
-[[signal]]
-name = "activate"
-payload = "string"
-
-[[signal]]
-name = "deactivate"
-payload = "string"
-
-[[signal]]
-name = "request_login"
-payload = "json"
-
-[[signal]]
-name = "request_logout"
-payload = "json"
-
-[[signal]]
-name = "boot"
-payload = "string"
-
-"#;
-
-    let _ = metadata.from_toml(builtin_toml, BUILTIN_UNIT);
+    create_units_metadata("static", ctx, &self.units_dir, Some(permissions))
   }
 }
 
@@ -276,9 +83,23 @@ impl Orchestrator for UnitsOrchestrator {
         .clone()
     })?;
 
-    if ctx.metadata.metadata(UNITS_META).is_none() {
+    if ctx.metadata.metadata("static").is_none() {
       self.load_all_units(ctx, &permissions)?;
       self.load_permissions(&permissions)?;
+    }
+
+    for spec in ScopeStore::desired_scopes() {
+      if spec.name.as_str() == "static" {
+        continue;
+      }
+      if ctx.metadata.metadata(spec.name.clone()).is_none() {
+        let _ = create_units_metadata(spec.name.as_str(), ctx, &self.units_dir, Some(&permissions));
+      }
+      ScopeStore::upsert_global(
+        spec.name.clone(),
+        spec.attributes.clone(),
+        spec.lifetime_state.clone(),
+      );
     }
 
     let metadata = &*ctx.metadata;
@@ -289,10 +110,16 @@ impl Orchestrator for UnitsOrchestrator {
         let mut registry = InstanceRegistry::new(metadata, instances);
 
         let _ = registry.singleton_or_insert_with::<StateMachine>(StateMachine::KEY, || {
-          let mut state = StateMachine::from_persistence(StatePersistence::new(state_path()));
+          let mut state =
+            StateMachine::from_persistence(StatePersistence::new(state_scope_path("static")));
           let _ = state.load_from_persistence();
+          let _ = state.save_all_scopes();
           state
         });
+        let scopes = registry
+          .singleton_or_insert_with::<ScopeStore>(ScopeStore::KEY, || ScopeStore::default());
+        scopes.upsert("static", Default::default(), None);
+        ScopeStore::upsert_global("static", Default::default(), None);
 
         let _ = registry.singleton_or_insert_with::<Arc<PamHandle>>(PamHandle::KEY, || {
           Arc::new(PamHandle::new(users.clone()))
@@ -305,9 +132,15 @@ impl Orchestrator for UnitsOrchestrator {
             heap
           });
 
-        if let Some(units) = ctx.metadata.metadata(UNITS_META) {
+        for meta_name in ctx.metadata.metadata_names() {
+          let Some(units) = ctx.metadata.metadata(meta_name.clone()) else {
+            continue;
+          };
           for group in units.groups() {
-            if let Some(vars) = units.get_in_group::<Variable>(group) {
+            if let Some(vars) = ctx
+              .metadata
+              .group_items::<Variable>(meta_name.clone(), group)
+            {
               for var in vars {
                 variable_heap.register(var.name.clone(), var.default.clone(), var.env.clone());
               }

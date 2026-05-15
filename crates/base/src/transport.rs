@@ -373,7 +373,7 @@ impl Runtime for TransportRuntime {
                     }
 
                     // one-shot perms (is this good?)
-                    if let Some(state) = ctx.registry.metadata.find::<State>("units", name.as_str())
+                    if let Some(state) = ctx.registry.metadata.find::<State>("*", name.as_str())
                       && let Some(perms) = &state.permissions
                       && !perms
                         .iter()
@@ -403,7 +403,7 @@ impl Runtime for TransportRuntime {
               TransportMessageType::Signal => {
                 if let Some(name) = &msg.name {
                   // same with state perms, one-shot
-                  if let Some(state) = ctx.registry.metadata.find::<Signal>("units", name.as_str())
+                  if let Some(state) = ctx.registry.metadata.find::<Signal>("*", name.as_str())
                     && let Some(perms) = &state.permissions
                     && !perms
                       .iter()

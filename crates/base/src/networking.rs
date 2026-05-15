@@ -318,18 +318,20 @@ impl NetworkingRuntime {
   fn load_network_configs(
     ctx: &mut RuntimeContext<'_>,
   ) -> Vec<(String, std::sync::Arc<NetworkConfigMetadata>)> {
-    let Some(m) = ctx.registry.metadata.metadata("units") else {
-      return Vec::new();
-    };
     let mut out = Vec::new();
-    for group in m.groups() {
-      if let Some(cfgs) = ctx
-        .registry
-        .metadata
-        .group_items::<NetworkConfig>("units", group.clone())
-      {
-        for c in cfgs {
-          out.push((group.to_string(), c));
+    for meta_name in ctx.registry.metadata.metadata_names() {
+      let Some(m) = ctx.registry.metadata.metadata(meta_name.clone()) else {
+        continue;
+      };
+      for group in m.groups() {
+        if let Some(cfgs) = ctx
+          .registry
+          .metadata
+          .group_items::<NetworkConfig>(meta_name.clone(), group.clone())
+        {
+          for c in cfgs {
+            out.push((group.to_string(), c));
+          }
         }
       }
     }

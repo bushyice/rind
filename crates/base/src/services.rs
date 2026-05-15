@@ -25,6 +25,7 @@ use crate::flow::{
 };
 use crate::permissions::PERM_SYSTEM_SERVICES;
 use crate::prelude::trigger_events;
+use crate::scopes::ScopeStore;
 use crate::sockets::get_all_sockets;
 use crate::transport::{TransportMessage, TransportMethod, start_stdout_listener};
 use crate::variables::VariableHeap;
@@ -382,6 +383,18 @@ impl Default for ServiceRuntime {
 }
 
 impl ServiceRuntime {
+  fn instance_key_name(key: &str) -> Ustr {
+    Ustr::from(key.split('@').next().unwrap_or(key))
+  }
+
+  fn ensure_scoped_name(name: &str) -> Ustr {
+    if name.contains('@') {
+      Ustr::from(name)
+    } else {
+      Ustr::from(format!("{name}@static"))
+    }
+  }
+
   fn sanitize_cgroup_component(input: &str) -> String {
     input
       .chars()
@@ -647,6 +660,7 @@ impl ServiceRuntime {
     service: &Service,
     branch_ctx: Option<&ServiceBranchContext>,
     sm: Option<&StateMachine>,
+    _scope: Option<&str>,
   ) -> anyhow::Result<Option<Ustr>> {
     if let Some(user) = branch_ctx.and_then(|ctx| ctx.forced_user.as_ref()) {
       return Ok(Some(user.clone()));
@@ -689,11 +703,24 @@ impl ServiceRuntime {
         Ok(None)
       }
     }
+    .or_else(|err| Err(err))
+  }
+
+  fn resolve_scope_default_user(
+    &self,
+    service: &Service,
+    scope: Option<&str>,
+  ) -> Option<Ustr> {
+    if !matches!(service.metadata.space, ServiceSpace::System) {
+      return None;
+    }
+    let scope = scope?;
+    ScopeStore::user_for_scope(scope)
   }
 
   fn rebuild_trigger_index(&mut self, metadata: &MetadataRegistry) {
     self.trigger_index.clear();
-    let services = metadata.items::<Service>("units").unwrap_or_default();
+    let services = metadata.items::<Service>("*").unwrap_or_default();
 
     for (group, meta) in services {
       let key = Ustr::from(format!("{}:{}", group, meta.name));
@@ -736,10 +763,10 @@ impl ServiceRuntime {
     let mut instances = Vec::new();
 
     if let Some(sm) = sm {
-      let key = registry_key.trim_start_matches("units:");
+      let key = Self::instance_key_name(registry_key.as_str());
 
       if let Some(inst) = sm.states.get("rind:inactive")
-        && inst.iter().any(|x| x.payload.to_string_payload() == key)
+        && inst.iter().any(|x| x.payload.to_string_payload() == key.as_str())
       {
         return Ok(instances);
       }
@@ -862,14 +889,20 @@ impl ServiceRuntime {
     notifier: Option<Notifier>,
     resources: &mut Resources,
   ) -> anyhow::Result<ChildInstance> {
-    let full_name = registry_key
-      .strip_prefix("units:")
-      .map(|n| n.to_ustr())
-      .unwrap();
+    let (full_name, scope_name) = {
+      let key = registry_key.as_str();
+      if let Some((name, scope)) = key.rsplit_once('@') {
+        (Ustr::from(name), Some(scope))
+      } else {
+        (registry_key.clone(), None)
+      }
+    };
     let mut args = run.args.clone();
     let mut envs = run.env.clone().unwrap_or_default();
     let branch_key = branch_ctx.and_then(|ctx| ctx.key.as_ref());
-    let resolved_user = self.resolve_service_user(service, branch_ctx, sm)?;
+    let resolved_user = self
+      .resolve_service_user(service, branch_ctx, sm, scope_name)?
+      .or_else(|| self.resolve_scope_default_user(service, scope_name));
     let watchdog_cfg = service.metadata.watchdog.clone();
     if let Some(ns) = &service.metadata.namespaces {
       if ns.pid {
@@ -1356,9 +1389,8 @@ impl ServiceRuntime {
       let full_name = service_key
         .cloned()
         .unwrap_or(service.metadata.name.clone())
-        .strip_prefix("units:")
-        .map(|n| n.to_ustr())
-        .unwrap_or(service.metadata.name.clone());
+        .to_string();
+      let full_name = Self::instance_key_name(&full_name);
 
       let _ = dispatch.dispatch(
         "sockets",
@@ -1461,7 +1493,7 @@ impl ServiceRuntime {
           || inst.state == ServiceState::Stopping
       });
 
-      let full_name = service_key.strip_prefix("units:")?.to_ustr();
+      let full_name = Self::instance_key_name(service_key.as_str());
       let _ = dispatch.dispatch(
         "sockets",
         "clear_for",
@@ -1791,6 +1823,7 @@ pub struct EmitTrigger {
   pub flow_type: Option<FlowType>,
   pub payload: Option<FlowPayload>,
   pub action: FlowAction,
+  pub scope: Option<Ustr>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -1850,7 +1883,7 @@ pub fn handle_ipc_start(
   let svc = ctx
     .registry
     .metadata
-    .find::<Service>("units", &payload.name);
+    .find::<Service>("*", &payload.name);
   let caller = pm.users.lookup_by_uid(uid);
   let can_manage = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
     true
@@ -1922,7 +1955,7 @@ pub fn handle_ipc_stop(
   let svc = ctx
     .registry
     .metadata
-    .find::<Service>("units", &payload.name);
+    .find::<Service>("*", &payload.name);
   let caller = pm.users.lookup_by_uid(uid);
   let can_manage = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
     true
@@ -2036,10 +2069,7 @@ impl Runtime for ServiceRuntime {
         }
       }
       "watchdog_ping" => {
-        let mut service = payload.get::<Ustr>("service")?;
-        if !service.starts_with("units:") {
-          service = Ustr::from(format!("units:{}", service));
-        }
+        let service = payload.get::<Ustr>("service")?;
         let branch = payload.get::<Ustr>("branch").ok();
         let fds: Vec<RawFd> = self
           .watchdog_fds
@@ -2058,8 +2088,8 @@ impl Runtime for ServiceRuntime {
           .collect();
 
         if let Some(service_meta) = ctx.registry.metadata.find::<Service>(
-          "units",
-          service.strip_prefix("units:").unwrap_or(service.as_str()),
+          "*",
+          service.as_str(),
         ) && let Some(watchdog) = &service_meta.watchdog
         {
           for fd in fds {
@@ -2076,11 +2106,8 @@ impl Runtime for ServiceRuntime {
           .registry
           .metadata
           .find::<Service>(
-            "units",
-            binding
-              .service_key
-              .strip_prefix("units:")
-              .unwrap_or(binding.service_key.as_str()),
+            "*",
+            Self::instance_key_name(binding.service_key.as_str()).as_str(),
           )
           .and_then(|svc| svc.watchdog.as_ref().map(|wd| wd.action))
           .unwrap_or(WatchdogAction::Restart);
@@ -2098,7 +2125,7 @@ impl Runtime for ServiceRuntime {
               "services",
               "stop",
               rpayload!({
-                "name": binding.service_key.strip_prefix("units:").unwrap_or(binding.service_key.as_str()).to_ustr(),
+                "name": Self::instance_key_name(binding.service_key.as_str()),
                 "force": true,
                 "only_user": binding.user.clone()
               }),
@@ -2109,7 +2136,7 @@ impl Runtime for ServiceRuntime {
               "services",
               "stop",
               rpayload!({
-                "name": binding.service_key.strip_prefix("units:").unwrap_or(binding.service_key.as_str()).to_ustr(),
+                "name": Self::instance_key_name(binding.service_key.as_str()),
                 "force": true,
                 "only_user": binding.user.clone()
               }),
@@ -2118,7 +2145,7 @@ impl Runtime for ServiceRuntime {
               "services",
               "start",
               rpayload!({
-                "name": binding.service_key.strip_prefix("units:").unwrap_or(binding.service_key.as_str()).to_ustr(),
+                "name": Self::instance_key_name(binding.service_key.as_str()),
                 "only_user": binding.user
               }),
             );
@@ -2147,7 +2174,7 @@ impl Runtime for ServiceRuntime {
               } else {
                 registry
                   .metadata
-                  .items::<Service>("units")
+                  .items::<Service>("*")
                   .unwrap_or_default()
                   .into_iter()
                   .map(|(group, meta)| Ustr::from(format!("{}:{}", group, meta.name)))
@@ -2173,7 +2200,7 @@ impl Runtime for ServiceRuntime {
 
                 let Some(meta) = registry
                   .metadata
-                  .find::<Service>("units", service_name.as_str())
+                  .find::<Service>("*", service_name.as_str())
                 else {
                   continue;
                 };
@@ -2182,7 +2209,7 @@ impl Runtime for ServiceRuntime {
                   continue;
                 };
 
-                let service_key = Ustr::from(format!("units:{}", service_name));
+                let service_key = Self::ensure_scoped_name(service_name.as_str());
 
                 if let Some(instances) = registry.instances.get_mut(&service_key) {
                   for instance in instances.iter_mut() {
@@ -2304,7 +2331,7 @@ impl Runtime for ServiceRuntime {
                 }
 
                 let ser =
-                  registry.instantiate_one("units", &format!("{unit}:{}", meta.name), |x| {
+                  registry.instantiate_one("*", &format!("{unit}:{}", meta.name), |x| {
                     Ok(Service::new(x))
                   })?;
 
@@ -2490,9 +2517,9 @@ impl Runtime for ServiceRuntime {
           .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
             (StateMachine::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, vh)| {
-              let service_key = format!("units:{}", name);
+              let service_key = Self::ensure_scoped_name(name.as_str());
               let service = registry
-                .instantiate_one::<Service>("units", name.clone(), |x| Ok(Service::new(x)))?;
+                .instantiate_one::<Service>("*", name.clone(), |x| Ok(Service::new(x)))?;
               if let Some(user) = only_user.clone() {
                 let launch_ctx = ServiceBranchContext {
                   key: None,
@@ -2508,7 +2535,7 @@ impl Runtime for ServiceRuntime {
                   &sockets_map,
                   Some(sm),
                   Some(vh),
-                  service_key.to_ustr(),
+                  service_key.clone(),
                   ctx.notifier.clone(),
                   ctx.resources,
                 ) {
@@ -2523,7 +2550,7 @@ impl Runtime for ServiceRuntime {
                       "services",
                       "reconcile_stacks",
                       rpayload!({
-                        "service": service_key.to_ustr(),
+                        "service": service_key.clone(),
                         "id": service.id.0,
                         "action": ServiceEventKind::Started
                       }),
@@ -2533,7 +2560,7 @@ impl Runtime for ServiceRuntime {
                       "timer",
                       "reconcile_timers",
                       rpayload!({
-                        "service": service_key.to_ustr(),
+                        "service": service_key.clone(),
                         "id": service.id.0,
                         "action": ServiceEventKind::Started
                       }),
@@ -2601,7 +2628,7 @@ impl Runtime for ServiceRuntime {
             (StateMachine::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, _)| {
               let service = registry
-                .instantiate_one::<Service>("units", name.clone(), |x| Ok(Service::new(x)))?;
+                .instantiate_one::<Service>("*", name.clone(), |x| Ok(Service::new(x)))?;
               let only_user = payload.get::<Ustr>("only_user").ok();
 
               self.stop_service(
@@ -2638,7 +2665,7 @@ impl Runtime for ServiceRuntime {
               let keys: Vec<Ustr> = registry
                 .instances
                 .keys()
-                .filter(|k| k.starts_with("units:"))
+                .filter(|k| k.contains('@'))
                 .cloned()
                 .collect();
 
@@ -2687,19 +2714,19 @@ impl Runtime for ServiceRuntime {
                 if let Some(svc) = ctx
                   .registry
                   .metadata
-                  .find::<Service>("units", name.as_str())
+                  .find::<Service>("*", name.as_str())
                 {
                   all_services.push((name, svc));
                 }
               }
 
               for (full_name, svc_meta) in &all_services {
-                let service_key = Ustr::from(format!("units:{}", full_name));
+                let service_key = Self::ensure_scoped_name(full_name.as_str());
                 if let Some(afters) = &svc_meta.after {
                   pending.push((full_name.clone(), afters.clone(), svc_meta.clone()));
                 } else {
                   let service =
-                    match registry.instantiate_one::<Service>("units", full_name.as_str(), |x| {
+                    match registry.instantiate_one::<Service>("*", full_name.as_str(), |x| {
                       Ok(Service::new(x))
                     }) {
                       Ok(service) => Ok(service),
@@ -2733,10 +2760,10 @@ impl Runtime for ServiceRuntime {
                 let mut progress = false;
                 pending.retain(|(name, afters, _meta)| {
                   if afters.iter().all(|a| started.contains(a)) {
-                    let service_key = Ustr::from(format!("units:{}", name));
+                    let service_key = Self::ensure_scoped_name(name.as_str());
                     if let Ok(service) =
                       registry
-                        .instantiate_one::<Service>("units", name.clone(), |x| Ok(Service::new(x)))
+                        .instantiate_one::<Service>("*", name.clone(), |x| Ok(Service::new(x)))
                     {
                       self.start_service(
                         service,
@@ -2778,28 +2805,27 @@ impl Runtime for ServiceRuntime {
         }
       }
       "reconcile_stacks" => {
-        let service = normalize_uaddr(payload.get::<Ustr>("service")?, "units:");
+        let service = Self::instance_key_name(payload.get::<Ustr>("service")?.as_str());
         let action = payload.get::<ServiceEventKind>("action")?;
         let notifier = ctx.notifier.clone();
 
-        let metadata = ctx
-          .registry
-          .metadata
-          .metadata("units")
-          .ok_or_else(|| CoreError::MetadataNotFound("units".to_string()))?;
-
         let mut dependents: Vec<(Ustr, Arc<ServiceMetadata>)> = Vec::new();
-        for group in metadata.groups() {
-          if let Some(svcs) = ctx
-            .registry
-            .metadata
-            .group_items::<Service>("units", group.clone())
-          {
-            for svc in svcs {
-              if let Some(ref dependencies) = svc.after
-                && dependencies.contains(&service)
-              {
-                dependents.push((Ustr::from(format!("{group}:{}", svc.name)), svc));
+        for meta_name in ctx.registry.metadata.metadata_names() {
+          let Some(meta) = ctx.registry.metadata.metadata(meta_name.clone()) else {
+            continue;
+          };
+          for group in meta.groups() {
+            if let Some(svcs) = ctx
+              .registry
+              .metadata
+              .group_items::<Service>(meta_name.clone(), group.clone())
+            {
+              for svc in svcs {
+                if let Some(ref dependencies) = svc.after
+                  && dependencies.contains(&service)
+                {
+                  dependents.push((Ustr::from(format!("{group}:{}", svc.name)), svc));
+                }
               }
             }
           }
@@ -2820,7 +2846,7 @@ impl Runtime for ServiceRuntime {
                 (StateMachine::KEY.into(), VariableHeap::KEY.into()),
                 |registry, (sm, _)| {
                   for (dependent, _) in dependents {
-                    if let Ok(service) = registry.as_one_mut::<Service>("units", dependent.as_str())
+                    if let Ok(service) = registry.as_one_mut::<Service>("*", dependent.as_str())
                     {
                       self.stop_service(
                         service,
@@ -2850,7 +2876,7 @@ impl Runtime for ServiceRuntime {
                 |registry, (sm, vh)| {
                   for (dependent, svc) in dependents {
                     let should_start = svc.after.as_ref().unwrap().iter().any(|a| {
-                      if let Ok(ref svc) = registry.as_one::<Service>("units", a.as_str()) {
+                      if let Ok(ref svc) = registry.as_one::<Service>("*", a.as_str()) {
                         !svc.instances.is_empty()
                           && !svc.instances.iter().any(|x| {
                             x.state == ServiceState::Inactive
@@ -2864,9 +2890,9 @@ impl Runtime for ServiceRuntime {
                     });
 
                     if should_start {
-                      let service_key = Ustr::from(format!("units:{}", dependent));
+                      let service_key = Self::ensure_scoped_name(dependent.as_str());
                       let service =
-                        registry.instantiate_one::<Service>("units", dependent.as_str(), |x| {
+                        registry.instantiate_one::<Service>("*", dependent.as_str(), |x| {
                           Ok(Service::new(x))
                         })?;
                       self.start_service(
