@@ -14,7 +14,10 @@ use owo_colors::OwoColorize;
 use rind_core::logging::{LogEntry, LogLevel};
 use rind_ipc::{
   Message, MessageType,
-  payloads::{ListPayload, LogoutPayload, Run0AuthPayload, SSPayload},
+  payloads::{
+    ListPayload, LogoutPayload, Run0AuthPayload, SSPayload, ScopeCreatePayload,
+    ScopeDestroyPayload,
+  },
   send::send_message,
   ser::{
     ServiceSerialized, SocketSerialized, StateSerialized, UnitItemsSerialized, UnitSerialized,
@@ -104,6 +107,9 @@ enum Commands {
 
     #[arg(short = 't', long)]
     r#type: Option<String>,
+
+    #[arg(long)]
+    scope: Option<String>,
   },
 
   Start {
@@ -115,6 +121,9 @@ enum Commands {
 
     #[arg(short = 'p', long)]
     persist: bool,
+
+    #[arg(long)]
+    scope: Option<String>,
   },
 
   Stop {
@@ -129,6 +138,9 @@ enum Commands {
 
     #[arg(short = 'p', long)]
     persist: bool,
+
+    #[arg(long)]
+    scope: Option<String>,
   },
 
   Invoke {
@@ -137,11 +149,40 @@ enum Commands {
 
     #[arg(name = "PAYLOAD")]
     payload: String,
+
+    #[arg(long)]
+    scope: Option<String>,
+  },
+  Scope {
+    #[command(subcommand)]
+    action: ScopeCommands,
   },
   ReloadUnits,
   SoftReboot,
   Reboot,
   Shutdown,
+}
+
+#[derive(clap::Subcommand)]
+enum ScopeCommands {
+  Create {
+    #[arg(name = "NAME")]
+    name: String,
+
+    #[arg(long)]
+    lifetime_state: Option<String>,
+
+    #[arg(long = "attr", value_name = "KEY=VALUE")]
+    attrs: Vec<String>,
+
+    #[arg(long)]
+    user: Option<String>,
+  },
+  Destroy {
+    #[arg(name = "NAME")]
+    name: String,
+  },
+  List,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -356,6 +397,31 @@ pub fn handle_message(message: Message) {
   }
 }
 
+fn apply_scope_name(name: &str, scope: Option<&str>) -> String {
+  let Some(scope) = scope else {
+    return name.to_string();
+  };
+  if scope.is_empty() || scope == "static" || name.contains('@') {
+    return name.to_string();
+  }
+  format!("{name}@{scope}")
+}
+
+fn parse_scope_attrs(attrs: &[String]) -> Result<HashMap<String, String>, String> {
+  let mut out = HashMap::new();
+  for attr in attrs {
+    let Some((k, v)) = attr.split_once('=') else {
+      return Err(format!("invalid --attr value '{attr}', expected KEY=VALUE"));
+    };
+    let key = k.trim();
+    if key.is_empty() {
+      return Err(format!("invalid --attr value '{attr}', key cannot be empty"));
+    }
+    out.insert(key.to_string(), v.trim().to_string());
+  }
+  Ok(out)
+}
+
 fn main() {
   let cli = Cli::parse();
 
@@ -463,8 +529,9 @@ fn main() {
       port,
       mut r#type,
       name,
+      scope,
     } => {
-      let name = name.unwrap_or_default();
+      let name = apply_scope_name(&name.unwrap_or_default(), scope.as_deref());
       let result = send_msg!(
         "list",
         serde_json::to_string(&ListPayload {
@@ -543,9 +610,64 @@ fn main() {
         );
       }
     }
-    Commands::Invoke { name, payload } => {
+    Commands::Invoke {
+      name,
+      payload,
+      scope,
+    } => {
+      let payload = if let Some(scope) = scope.filter(|s| !s.is_empty() && s != "static") {
+        match serde_json::from_str::<serde_json::Value>(&payload) {
+          Ok(mut v) => {
+            if let Some(obj) = v.as_object_mut()
+              && let Some(name) = obj.get("name").and_then(|x| x.as_str())
+            {
+              obj.insert(
+                "name".to_string(),
+                serde_json::Value::String(apply_scope_name(name, Some(&scope))),
+              );
+            }
+            serde_json::to_string(&v).unwrap_or(payload)
+          }
+          Err(_) => payload,
+        }
+      } else {
+        payload
+      };
       handle_send_raw!(name.as_str(), payload);
     }
+    Commands::Scope { action } => match action {
+      ScopeCommands::Create {
+        name,
+        lifetime_state,
+        attrs,
+        user,
+      } => {
+        let mut attributes = match parse_scope_attrs(&attrs) {
+          Ok(v) => v,
+          Err(err) => {
+            report_error("invalid scope attributes", err);
+            return;
+          }
+        };
+        if let Some(user) = user {
+          attributes.insert("user".to_string(), user);
+        }
+        handle_send!(
+          "create_scope",
+          &ScopeCreatePayload {
+            scope: name,
+            lifetime_state,
+            attributes,
+          }
+        );
+      }
+      ScopeCommands::Destroy { name } => {
+        handle_send!("destroy_scope", &ScopeDestroyPayload { scope: name });
+      }
+      ScopeCommands::List => {
+        handle_send_raw!("list_scopes", "{}".to_string());
+      }
+    },
     Commands::ReloadUnits => {
       handle_send_raw!("reload_units", "{}".to_string());
     }
@@ -562,7 +684,9 @@ fn main() {
       name,
       r#type,
       persist,
+      scope,
     } => {
+      let name = apply_scope_name(&name, scope.as_deref());
       let action = if r#type == "socket" || r#type == "soc" {
         "start_socket"
       } else if r#type == "service" || r#type == "svc" {
@@ -585,7 +709,9 @@ fn main() {
       r#type,
       force,
       persist,
+      scope,
     } => {
+      let name = apply_scope_name(&name, scope.as_deref());
       let action = if r#type == "socket" || r#type == "soc" {
         "stop_socket"
       } else if r#type == "service" || r#type == "svc" {

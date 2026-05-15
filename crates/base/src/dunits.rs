@@ -60,6 +60,10 @@ payload = "json"
 name = "boot"
 payload = "string"
 
+[[signal]]
+name = "ready"
+payload = "none"
+
 "#;
 
   let _ = metadata.from_toml(builtin_toml, "rind");
@@ -148,7 +152,7 @@ pub fn create_units_metadata<P: AsRef<Path>>(
 pub fn create_dynamic_scope<P: AsRef<Path>>(
   scope: impl Into<Ustr>,
   lifetime_state: Option<Ustr>,
-  attributes: HashMap<Ustr, serde_json::Value>,
+  attributes: HashMap<Ustr, String>,
   ctx: &mut OrchestratorContext<'_>,
   units_dir: P,
 ) -> CoreResult<()> {

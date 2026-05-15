@@ -24,10 +24,10 @@ use crate::user::{handle_ipc_login, handle_ipc_logout, handle_ipc_run0};
 use crate::variables::VariableHeap;
 use rind_core::prelude::*;
 use rind_core::types::Ustr;
+use rind_ipc::payloads::{ScopeCreatePayload, ScopeDestroyPayload};
 use rind_ipc::ser::{
   MountSerialized, ServiceSerialized, UnitItemsSerialized, UnitSerialized, serialize_many,
 };
-use rind_ipc::payloads::{ScopeCreatePayload, ScopeDestroyPayload};
 
 pub const IPC_RUNTIME_ID: &str = "ipc";
 
@@ -71,67 +71,58 @@ fn build_ipc_list_response(
     .ok_or_else(|| CoreError::InvalidState("state machine store not found".into()))?;
 
   Ok(if payload.unit_type == "unit" {
-    let services = if let Some(services) = ctx
-      .registry
-      .metadata
-      .group_items::<Service>("*", Ustr::from(payload.name.as_str()))
-    {
-      services
-    } else {
-      Vec::new()
-    };
-    let mounts = if let Some(mounts) = ctx
-      .registry
-      .metadata
-      .group_items::<Mount>("*", Ustr::from(payload.name.as_str()))
-    {
-      mounts
-    } else {
-      Vec::new()
-    };
-    let sockets = if let Some(sockets) = ctx
-      .registry
-      .metadata
-      .group_items::<Socket>("*", Ustr::from(payload.name.as_str()))
-    {
-      sockets
-    } else {
-      Vec::new()
-    };
-    let states = if let Some(states) = ctx
-      .registry
-      .metadata
-      .group_items::<State>("*", Ustr::from(payload.name.as_str()))
-    {
-      states
-    } else {
-      Vec::new()
-    };
-    let signals = if let Some(signals) = ctx
-      .registry
-      .metadata
-      .group_items::<Signal>("*", Ustr::from(payload.name.as_str()))
-    {
-      signals
-    } else {
-      Vec::new()
-    };
+    let target_group = Ustr::from(payload.name.as_str());
+    let mut services = Vec::new();
+    let mut mounts = Vec::new();
+    let mut sockets = Vec::new();
+    let mut states = Vec::new();
+    let mut signals = Vec::new();
+    for (scope, items) in ctx.registry.metadata.all_items::<Service>() {
+      for (group, meta) in items {
+        if group == target_group {
+          services.push((scope.clone(), meta));
+        }
+      }
+    }
+    for (scope, items) in ctx.registry.metadata.all_items::<Mount>() {
+      for (group, meta) in items {
+        if group == target_group {
+          mounts.push((scope.clone(), meta));
+        }
+      }
+    }
+    for (scope, items) in ctx.registry.metadata.all_items::<Socket>() {
+      for (group, meta) in items {
+        if group == target_group {
+          sockets.push((scope.clone(), meta));
+        }
+      }
+    }
+    for (scope, items) in ctx.registry.metadata.all_items::<State>() {
+      for (group, meta) in items {
+        if group == target_group {
+          states.push((scope.clone(), meta));
+        }
+      }
+    }
+    for (scope, items) in ctx.registry.metadata.all_items::<Signal>() {
+      for (group, meta) in items {
+        if group == target_group {
+          signals.push((scope.clone(), meta));
+        }
+      }
+    }
 
     let ser_instances: HashMap<Ustr, (String, Vec<u32>)> = services
       .iter()
-      .filter_map(|ser| {
-        ctx
-          .registry
-          .as_one::<Service>(
-            "*",
-            Ustr::from(format!("{}:{}", payload.name, ser.name)),
+      .filter_map(|(scope, ser)| {
+        let scoped = Ustr::from(format!("{}:{}@{}", payload.name, ser.name, scope));
+        ctx.registry.as_one::<Service>("*", scoped).ok().map(|x| {
+          (
+            ser.name.clone(),
+            (x.instances.last_state(), x.instances.pid()),
           )
-          .map_or(None, |x| {
-            Some((
-              ser.name.clone(),
-              (x.instances.last_state(), x.instances.pid()),
-            ))
-          })
+        })
       })
       .collect();
 
@@ -139,7 +130,7 @@ fn build_ipc_list_response(
       UnitItemsSerialized {
         mounts: mounts
           .iter()
-          .map(|mnt| MountSerialized {
+          .map(|(_, mnt)| MountSerialized {
             fstype: mnt.fstype.clone(),
             mounted: is_mounted(&mnt.target).unwrap_or(false),
             source: mnt.source.clone(),
@@ -148,7 +139,7 @@ fn build_ipc_list_response(
           .collect(),
         services: services
           .iter()
-          .map(|svc| ServiceSerialized {
+          .map(|(_, svc)| ServiceSerialized {
             after: svc.after.clone(),
             run: svc.run.as_many().map(|x| x.exec.clone()).collect(),
             last_state: ser_instances
@@ -163,11 +154,14 @@ fn build_ipc_list_response(
           .collect(),
         sockets: sockets
           .iter()
-          .map(|x| SocketSerialized {
+          .map(|(scope, x)| SocketSerialized {
             name: x.name.clone(),
             active: ctx
               .registry
-              .as_one::<Socket>("*", Ustr::from(format!("{}:{}", payload.name, x.name)))
+              .as_one::<Socket>(
+                "*",
+                Ustr::from(format!("{}:{}@{}", payload.name, x.name, scope)),
+              )
               .is_ok(),
             listen: x.listen.clone(),
             triggers: x.trigger.as_ref().map_or(0, |x| x.len()),
@@ -176,11 +170,18 @@ fn build_ipc_list_response(
           .collect(),
         states: states
           .iter()
-          .map(|st| StateSerialized {
+          .map(|(scope, st)| StateSerialized {
             name: st.name.clone(),
             instances: sm
               .states
-              .get(&Ustr::from(format!("{}:{}", payload.name, st.name)))
+              .get(&Ustr::from(format!(
+                "{}:{}@{}",
+                payload.name, st.name, scope
+              )))
+              .or_else(|| {
+                sm.states
+                  .get(&Ustr::from(format!("{}:{}", payload.name, st.name)))
+              })
               .map_or(Default::default(), |x| {
                 x.iter().map(|x| x.payload.to_json()).collect()
               }),
@@ -189,7 +190,7 @@ fn build_ipc_list_response(
           .collect(),
         signals: signals
           .iter()
-          .map(|st| SignalSerialized {
+          .map(|(_, st)| SignalSerialized {
             name: st.name.clone(),
           })
           .collect(),
@@ -297,10 +298,7 @@ fn build_ipc_list_response(
         &states
           .iter()
           .filter_map(|(name, inst)| {
-            let def = ctx
-              .registry
-              .metadata
-              .find::<State>("*", name.as_str())?;
+            let def = ctx.registry.metadata.find::<State>("*", name.as_str())?;
             let branches = def.branch.as_ref()?;
             Some(StateSerialized {
               name: name.clone(),
@@ -321,15 +319,14 @@ fn build_ipc_list_response(
 
     if let Some(groups) = ctx.registry.metadata.groups("*") {
       for group in groups {
-        let services = if let Some(services) = ctx
-          .registry
-          .metadata
-          .group_items::<Service>("*", group.clone())
-        {
-          services
-        } else {
-          Vec::new()
-        };
+        let mut services = Vec::new();
+        for (scope, items) in ctx.registry.metadata.all_items::<Service>() {
+          for (g, s) in items {
+            if g == group {
+              services.push((scope.clone(), s));
+            }
+          }
+        }
         let mounts = if let Some(mounts) = ctx
           .registry
           .metadata
@@ -339,24 +336,22 @@ fn build_ipc_list_response(
         } else {
           Vec::new()
         };
-        let sockets = if let Some(sockets) = ctx
-          .registry
-          .metadata
-          .group_items::<Socket>("*", group.clone())
-        {
-          sockets
-        } else {
-          Vec::new()
-        };
-        let states = if let Some(states) = ctx
-          .registry
-          .metadata
-          .group_items::<State>("*", group.clone())
-        {
-          states
-        } else {
-          Vec::new()
-        };
+        let mut sockets = Vec::new();
+        for (scope, items) in ctx.registry.metadata.all_items::<Socket>() {
+          for (g, s) in items {
+            if g == group {
+              sockets.push((scope.clone(), s));
+            }
+          }
+        }
+        let mut states = Vec::new();
+        for (scope, items) in ctx.registry.metadata.all_items::<State>() {
+          for (g, s) in items {
+            if g == group {
+              states.push((scope.clone(), s));
+            }
+          }
+        }
 
         let signals = if let Some(signals) = ctx
           .registry
@@ -374,29 +369,30 @@ fn build_ipc_list_response(
           .count();
         let active_services = services
           .iter()
-          .filter(|s| {
+          .filter(|(scope, s)| {
             ctx
               .registry
-              .instances::<Service>("*", Ustr::from(format!("{group}:{}", s.name)))
+              .instances::<Service>("*", Ustr::from(format!("{group}:{}@{}", s.name, scope)))
               .ok()
               .map_or(false, |x| x.iter().any(|x| x.instances.is_active()))
           })
           .count();
         let active_sockets = sockets
           .iter()
-          .filter(|s| {
+          .filter(|(scope, s)| {
             ctx
               .registry
-              .instances::<Socket>("*", Ustr::from(format!("{group}:{}", s.name)))
+              .instances::<Socket>("*", Ustr::from(format!("{group}:{}@{}", s.name, scope)))
               .ok()
               .map_or(false, |x| x.iter().any(|x| x.active))
           })
           .count();
         let active_states = states
           .iter()
-          .filter(|s| {
+          .filter(|(scope, s)| {
             sm.states
-              .get(&Ustr::from(format!("{group}:{}", s.name)))
+              .get(&Ustr::from(format!("{group}:{}@{}", s.name, scope)))
+              .or_else(|| sm.states.get(&Ustr::from(format!("{group}:{}", s.name))))
               .is_some()
           })
           .count();
@@ -449,7 +445,13 @@ pub fn handle_ipc_list(
   let payload = msg
     .parse_payload::<ListPayload>()
     .map_err(CoreError::Custom)?;
-  build_ipc_list_response(payload, ctx)
+  Ok(
+    build_ipc_list_response(payload, ctx)
+      .or_else(|x| {
+        Ok::<Message, Message>(Message::from_type(MessageType::Error).with(x.to_string()))
+      })
+      .unwrap(),
+  )
 }
 
 pub fn handle_ipc_set(
@@ -542,13 +544,8 @@ pub fn handle_ipc_create_scope(
     return Err(CoreError::Custom("invalid scope name".into()));
   }
 
-  let attrs_obj = payload
-    .attributes
-    .as_object()
-    .cloned()
-    .unwrap_or_default();
   let mut attrs = std::collections::HashMap::new();
-  for (k, v) in attrs_obj {
+  for (k, v) in payload.attributes {
     attrs.insert(Ustr::from(k), v);
   }
 
@@ -560,7 +557,10 @@ pub fn handle_ipc_create_scope(
     store.upsert(scope, attrs, lifetime_state.clone());
   }
 
-  if let Some(sm) = ctx.registry.singleton_mut::<StateMachine>(StateMachine::KEY) {
+  if let Some(sm) = ctx
+    .registry
+    .singleton_mut::<StateMachine>(StateMachine::KEY)
+  {
     let _ = sm.load_scope_from_persistence(scope);
   }
   ctx.lifecycle.request(LifecycleAction::ReloadUnits);
@@ -591,7 +591,10 @@ pub fn handle_ipc_destroy_scope(
   if let Some(store) = ctx.registry.singleton_mut::<ScopeStore>(ScopeStore::KEY) {
     let _ = store.remove_scope(scope);
   }
-  if let Some(sm) = ctx.registry.singleton_mut::<StateMachine>(StateMachine::KEY) {
+  if let Some(sm) = ctx
+    .registry
+    .singleton_mut::<StateMachine>(StateMachine::KEY)
+  {
     let _ = sm.drop_scope(scope);
   }
   ctx.lifecycle.request(LifecycleAction::ReloadUnits);
@@ -712,7 +715,11 @@ impl Runtime for IpcRuntime {
         ipcsrc.register("set_variable", handle_ipc_set, PermissionExpr::All);
         ipcsrc.register("remove_variable", handle_ipc_remove, PermissionExpr::All);
         ipcsrc.register("create_scope", handle_ipc_create_scope, PermissionExpr::All);
-        ipcsrc.register("destroy_scope", handle_ipc_destroy_scope, PermissionExpr::All);
+        ipcsrc.register(
+          "destroy_scope",
+          handle_ipc_destroy_scope,
+          PermissionExpr::All,
+        );
         ipcsrc.register("list_scopes", handle_ipc_list_scopes, PermissionExpr::All);
         ipcsrc.register("reload_units", handle_ipc_reload_units, PermissionExpr::All);
         ipcsrc.register("reboot", handle_ipc_reboot, PermissionExpr::All);

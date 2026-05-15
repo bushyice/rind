@@ -6,14 +6,13 @@ use rind_core::types::Ustr;
 #[derive(Debug, Clone, Default)]
 pub struct ScopeInfo {
   pub name: Ustr,
-  pub attributes: HashMap<Ustr, serde_json::Value>,
+  pub attributes: HashMap<Ustr, String>,
   pub lifetime_state: Option<Ustr>,
 }
 
 impl ScopeInfo {
   pub fn user(&self) -> Option<Ustr> {
-    let value = self.attributes.get(&Ustr::from("user"))?;
-    value.as_str().map(Ustr::from)
+    self.attributes.get(&Ustr::from("user")).map(Ustr::from)
   }
 }
 
@@ -34,7 +33,7 @@ impl ScopeStore {
   pub fn upsert(
     &mut self,
     name: impl Into<Ustr>,
-    attributes: HashMap<Ustr, serde_json::Value>,
+    attributes: HashMap<Ustr, String>,
     lifetime_state: Option<Ustr>,
   ) {
     let name = name.into();
@@ -83,9 +82,16 @@ impl ScopeStore {
     self.scopes.values().cloned().collect()
   }
 
+  pub fn has_global(name: impl Into<Ustr>) -> bool {
+    let store = GLOBAL_SCOPE_STORE
+      .lock()
+      .expect("scope store lock poisoned");
+    store.scopes.contains_key(&name.into())
+  }
+
   pub fn upsert_global(
     name: impl Into<Ustr>,
-    attributes: HashMap<Ustr, serde_json::Value>,
+    attributes: HashMap<Ustr, String>,
     lifetime_state: Option<Ustr>,
   ) {
     let mut store = GLOBAL_SCOPE_STORE
@@ -117,7 +123,7 @@ impl ScopeStore {
 
   pub fn desired_scope_upsert(
     name: impl Into<Ustr>,
-    attributes: HashMap<Ustr, serde_json::Value>,
+    attributes: HashMap<Ustr, String>,
     lifetime_state: Option<Ustr>,
   ) {
     let name = name.into();

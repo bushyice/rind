@@ -16,3 +16,9 @@ clean-state: mr
 
 build cmd:
   cargo run --manifest-path builder/Cargo.toml -- {{cmd}}
+
+run:
+  cargo run --manifest-path builder/Cargo.toml -- xbpr
+
+test:
+  cargo nextest r

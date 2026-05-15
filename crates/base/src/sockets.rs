@@ -1,5 +1,5 @@
 use rind_ipc::payloads::SSPayload;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -364,19 +364,31 @@ impl Runtime for SocketRuntime {
             (StateMachine::KEY.into(), SocketRegistry::KEY.into()),
             |registry, (sm, sr)| {
               let target_keys = if let Some(event_name) = emit_trig.state.as_ref() {
-                self
-                  .trigger_index
-                  .get(event_name)
-                  .cloned()
-                  .unwrap_or_default()
+                let mut out = HashSet::new();
+                let direct = event_name.clone();
+                let static_alias = if event_name.as_str().ends_with("@static") {
+                  Ustr::from(event_name.as_str().trim_end_matches("@static"))
+                } else {
+                  Ustr::from(format!("{}@static", event_name))
+                };
+                for key in [direct, static_alias] {
+                  if let Some(found) = self.trigger_index.get(&key) {
+                    out.extend(found.iter().cloned());
+                  }
+                }
+                out
               } else {
                 registry
                   .metadata
-                  .items::<Socket>("*")
-                  .unwrap_or_default()
+                  .all_items::<Socket>()
                   .into_iter()
-                  .map(|(group, meta)| Ustr::from(format!("{}:{}", group, meta.name)))
-                  .collect::<std::collections::HashSet<Ustr>>()
+                  .flat_map(|(scope, services)| {
+                    services
+                      .iter()
+                      .map(|(group, meta)| Ustr::from(format!("{}:{}@{}", group, meta.name, scope)))
+                      .collect::<HashSet<Ustr>>()
+                  })
+                  .collect::<HashSet<Ustr>>()
               };
 
               let emit_event = match (
@@ -393,10 +405,7 @@ impl Runtime for SocketRuntime {
               };
 
               for socket_name in target_keys {
-                let Some(meta) = registry
-                  .metadata
-                  .find::<Socket>("*", socket_name.as_str())
-                else {
+                let Some(meta) = registry.metadata.find::<Socket>("*", socket_name.as_str()) else {
                   continue;
                 };
 

@@ -1,0 +1,7 @@
+
+[[service]]
+name = "uservice1"
+run.exec = "/usr/bin/example-active"
+run.args = ["makano-test"]
+space = "user"
+start-on = ["rind:user_session@static"]

@@ -75,6 +75,15 @@ impl MetadataRegistry {
   ) -> Option<Vec<Arc<T::M>>> {
     let metadata = metadata.into();
     let group = group.into();
+    if metadata.as_str() == "*" {
+      let mut out = Vec::new();
+      for m in self.metadata.values() {
+        if let Some(items) = m.get_in_group::<T>(group.clone()) {
+          out.extend(items.iter().cloned());
+        }
+      }
+      return Some(out);
+    }
     self
       .metadata
       .get(&metadata)?
@@ -113,6 +122,22 @@ impl MetadataRegistry {
     )
   }
 
+  pub fn all_items<T: Model + 'static>(&self) -> HashMap<Ustr, Vec<(Ustr, Arc<T::M>)>> {
+    let mut out: HashMap<Ustr, Vec<(Ustr, Arc<T::M>)>> = HashMap::new();
+    for (u, m) in self.metadata.iter() {
+      out
+        .entry(u.clone())
+        .or_default()
+        .extend(m.groups().flat_map(|group| {
+          m.get_in_group::<T>(group.clone())
+            .into_iter()
+            .flatten()
+            .map(move |item| (group.clone(), item.clone()))
+        }));
+    }
+    out
+  }
+
   pub fn all_groups(&self) -> HashMap<Ustr, Vec<Ustr>> {
     let mut out: HashMap<Ustr, Vec<Ustr>> = HashMap::new();
     for (u, m) in self.metadata.iter() {
@@ -123,6 +148,15 @@ impl MetadataRegistry {
 
   pub fn groups(&self, metadata: impl Into<Ustr>) -> Option<Vec<Ustr>> {
     let metadata = metadata.into();
+    if metadata.as_str() == "*" {
+      let mut groups = Vec::new();
+      for m in self.metadata.values() {
+        groups.extend(m.groups());
+      }
+      groups.sort();
+      groups.dedup();
+      return Some(groups);
+    }
     let m = self.metadata.get(&metadata)?;
 
     Some(m.groups().collect())

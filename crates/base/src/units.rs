@@ -92,8 +92,18 @@ impl Orchestrator for UnitsOrchestrator {
       if spec.name.as_str() == "static" {
         continue;
       }
+      let scope_units_dir = spec
+        .attributes
+        .get(&Ustr::from("units_dir"))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| self.units_dir.clone());
       if ctx.metadata.metadata(spec.name.clone()).is_none() {
-        let _ = create_units_metadata(spec.name.as_str(), ctx, &self.units_dir, Some(&permissions));
+        let _ = create_units_metadata(
+          spec.name.as_str(),
+          ctx,
+          &scope_units_dir,
+          Some(&permissions),
+        );
       }
       ScopeStore::upsert_global(
         spec.name.clone(),

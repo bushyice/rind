@@ -53,6 +53,7 @@ files = [
   "examples/units:/etc/units",
   "examples/fallback.toml:/etc/fallback.toml",
   "crates/api/examples/api.c:/home/makano/api.c",
+  "examples/units-makano:/home/makano/.local/share/rind/units",
 
   # glibc
   "@glibc:usr/bin:/usr/bin",

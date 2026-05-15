@@ -244,7 +244,11 @@ mod tests {
     }
   }
 
-  fn push_collect_start(store: &mut OrchestratorStore, id: &'static str, deps: &'static [&'static str]) {
+  fn push_collect_start(
+    store: &mut OrchestratorStore,
+    id: &'static str,
+    deps: &'static [&'static str],
+  ) {
     store.push(TestOrchestrator {
       id,
       deps,

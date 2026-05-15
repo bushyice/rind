@@ -244,6 +244,36 @@ fn process_lifecycle_action(
         Default::default(),
         boot.primary_context_id().unwrap_or(0),
       );
+      let _ = runtime.dispatch(
+        "sockets",
+        "bootstrap",
+        Default::default(),
+        boot.primary_context_id().unwrap_or(0),
+      );
+      let _ = runtime.dispatch(
+        "services",
+        "start_all",
+        Default::default(),
+        boot.primary_context_id().unwrap_or(0),
+      );
+      let _ = runtime.dispatch(
+        "sockets",
+        "setup_all",
+        Default::default(),
+        boot.primary_context_id().unwrap_or(0),
+      );
+      let _ = runtime.dispatch(
+        "services",
+        "evaluate_triggers",
+        Default::default(),
+        boot.primary_context_id().unwrap_or(0),
+      );
+      let _ = runtime.dispatch(
+        "sockets",
+        "evaluate_triggers",
+        Default::default(),
+        boot.primary_context_id().unwrap_or(0),
+      );
       let _ = runtime.flush_context(boot.primary_context_id().unwrap_or(0), metadata, resources);
       true
     }

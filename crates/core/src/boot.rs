@@ -121,7 +121,13 @@ impl BootEngine {
     runtime: &RuntimeHandle,
     resources: &mut Resources,
   ) -> Result<(), CoreError> {
-    metadata.remove_metadata("units");
+    let to_remove = metadata
+      .metadata_names()
+      .filter(|name| name.as_str() != "static")
+      .collect::<Vec<_>>();
+    for name in to_remove {
+      metadata.remove_metadata(name);
+    }
 
     for phase in [BootPhase::Start, BootPhase::End] {
       let context_id = self.alloc_context_id();

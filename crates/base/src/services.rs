@@ -660,7 +660,7 @@ impl ServiceRuntime {
     service: &Service,
     branch_ctx: Option<&ServiceBranchContext>,
     sm: Option<&StateMachine>,
-    _scope: Option<&str>,
+    scope: Option<&str>,
   ) -> anyhow::Result<Option<Ustr>> {
     if let Some(user) = branch_ctx.and_then(|ctx| ctx.forced_user.as_ref()) {
       return Ok(Some(user.clone()));
@@ -670,6 +670,12 @@ impl ServiceRuntime {
       ServiceSpace::System => Ok(None),
       ServiceSpace::UserSelective { user } => Ok(Some(user.clone())),
       ServiceSpace::User => {
+        if let Some(scope) = scope
+          && let Some(user) = ScopeStore::user_for_scope(scope)
+        {
+          return Ok(Some(user));
+        }
+
         if let Some(source) = &service.metadata.user_source
           && let Some(user) = self.resolve_user_from_source(source, branch_ctx, sm)?
         {
@@ -706,11 +712,7 @@ impl ServiceRuntime {
     .or_else(|err| Err(err))
   }
 
-  fn resolve_scope_default_user(
-    &self,
-    service: &Service,
-    scope: Option<&str>,
-  ) -> Option<Ustr> {
+  fn resolve_scope_default_user(&self, service: &Service, scope: Option<&str>) -> Option<Ustr> {
     if !matches!(service.metadata.space, ServiceSpace::System) {
       return None;
     }
@@ -720,29 +722,30 @@ impl ServiceRuntime {
 
   fn rebuild_trigger_index(&mut self, metadata: &MetadataRegistry) {
     self.trigger_index.clear();
-    let services = metadata.items::<Service>("*").unwrap_or_default();
 
-    for (group, meta) in services {
-      let key = Ustr::from(format!("{}:{}", group, meta.name));
+    for (scope, services) in metadata.all_items::<Service>() {
+      for (group, meta) in services {
+        let key = Ustr::from(format!("{}:{}@{}", group, meta.name, scope));
 
-      let mut interests = HashSet::new();
-      if let Some(start_on) = &meta.start_on {
-        for item in start_on {
-          interests.insert(item.name());
+        let mut interests = HashSet::new();
+        if let Some(start_on) = &meta.start_on {
+          for item in start_on {
+            interests.insert(item.name());
+          }
         }
-      }
-      if let Some(stop_on) = &meta.stop_on {
-        for item in stop_on {
-          interests.insert(item.name());
+        if let Some(stop_on) = &meta.stop_on {
+          for item in stop_on {
+            interests.insert(item.name());
+          }
         }
-      }
 
-      for interest in interests {
-        self
-          .trigger_index
-          .entry(interest.clone())
-          .or_default()
-          .insert(key.clone());
+        for interest in interests {
+          self
+            .trigger_index
+            .entry(interest.clone())
+            .or_default()
+            .insert(key.clone());
+        }
       }
     }
   }
@@ -766,7 +769,9 @@ impl ServiceRuntime {
       let key = Self::instance_key_name(registry_key.as_str());
 
       if let Some(inst) = sm.states.get("rind:inactive")
-        && inst.iter().any(|x| x.payload.to_string_payload() == key.as_str())
+        && inst
+          .iter()
+          .any(|x| x.payload.to_string_payload() == key.as_str())
       {
         return Ok(instances);
       }
@@ -1880,10 +1885,7 @@ pub fn handle_ipc_start(
     return Err(CoreError::PermissionDenied);
   };
 
-  let svc = ctx
-    .registry
-    .metadata
-    .find::<Service>("*", &payload.name);
+  let svc = ctx.registry.metadata.find::<Service>("*", &payload.name);
   let caller = pm.users.lookup_by_uid(uid);
   let can_manage = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
     true
@@ -1952,10 +1954,7 @@ pub fn handle_ipc_stop(
     return Err(CoreError::PermissionDenied);
   };
 
-  let svc = ctx
-    .registry
-    .metadata
-    .find::<Service>("*", &payload.name);
+  let svc = ctx.registry.metadata.find::<Service>("*", &payload.name);
   let caller = pm.users.lookup_by_uid(uid);
   let can_manage = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
     true
@@ -2087,10 +2086,8 @@ impl Runtime for ServiceRuntime {
           })
           .collect();
 
-        if let Some(service_meta) = ctx.registry.metadata.find::<Service>(
-          "*",
-          service.as_str(),
-        ) && let Some(watchdog) = &service_meta.watchdog
+        if let Some(service_meta) = ctx.registry.metadata.find::<Service>("*", service.as_str())
+          && let Some(watchdog) = &service_meta.watchdog
         {
           for fd in fds {
             let _ = self.refresh_watchdog_fd(fd, watchdog);
@@ -2166,18 +2163,30 @@ impl Runtime for ServiceRuntime {
             (StateMachine::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, vh)| {
               let target_keys = if let Some(event_name) = emit_trig.state.as_ref() {
-                self
-                  .trigger_index
-                  .get(event_name)
-                  .cloned()
-                  .unwrap_or_default()
+                let mut out = HashSet::new();
+                let direct = event_name.clone();
+                let static_alias = if event_name.as_str().ends_with("@static") {
+                  Ustr::from(event_name.as_str().trim_end_matches("@static"))
+                } else {
+                  Ustr::from(format!("{}@static", event_name))
+                };
+                for key in [direct, static_alias] {
+                  if let Some(found) = self.trigger_index.get(&key) {
+                    out.extend(found.iter().cloned());
+                  }
+                }
+                out
               } else {
                 registry
                   .metadata
-                  .items::<Service>("*")
-                  .unwrap_or_default()
+                  .all_items::<Service>()
                   .into_iter()
-                  .map(|(group, meta)| Ustr::from(format!("{}:{}", group, meta.name)))
+                  .flat_map(|(scope, services)| {
+                    services
+                      .iter()
+                      .map(|(group, meta)| Ustr::from(format!("{}:{}@{}", group, meta.name, scope)))
+                      .collect::<HashSet<Ustr>>()
+                  })
                   .collect::<HashSet<Ustr>>()
               };
 
@@ -2205,7 +2214,7 @@ impl Runtime for ServiceRuntime {
                   continue;
                 };
 
-                let Some((unit, _)) = service_name.split_once(':') else {
+                let Some((_unit, _)) = service_name.split_once(':') else {
                   continue;
                 };
 
@@ -2330,10 +2339,14 @@ impl Runtime for ServiceRuntime {
                   continue;
                 }
 
-                let ser =
-                  registry.instantiate_one("*", &format!("{unit}:{}", meta.name), |x| {
-                    Ok(Service::new(x))
-                  })?;
+                let (service_scope, service_base_name) =
+                  if let Some((base, scope)) = service_name.rsplit_once('@') {
+                    (Ustr::from(scope), Ustr::from(base))
+                  } else {
+                    (Ustr::from("static"), service_name.clone())
+                  };
+                let ser = registry
+                  .instantiate_one(service_scope, service_base_name, |x| Ok(Service::new(x)))?;
 
                 if let Some(branching) = &ser.metadata.branching {
                   if branching.enabled {
@@ -2518,8 +2531,8 @@ impl Runtime for ServiceRuntime {
             (StateMachine::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, vh)| {
               let service_key = Self::ensure_scoped_name(name.as_str());
-              let service = registry
-                .instantiate_one::<Service>("*", name.clone(), |x| Ok(Service::new(x)))?;
+              let service =
+                registry.instantiate_one::<Service>("*", name.clone(), |x| Ok(Service::new(x)))?;
               if let Some(user) = only_user.clone() {
                 let launch_ctx = ServiceBranchContext {
                   key: None,
@@ -2627,8 +2640,8 @@ impl Runtime for ServiceRuntime {
           .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
             (StateMachine::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, _)| {
-              let service = registry
-                .instantiate_one::<Service>("*", name.clone(), |x| Ok(Service::new(x)))?;
+              let service =
+                registry.instantiate_one::<Service>("*", name.clone(), |x| Ok(Service::new(x)))?;
               let only_user = payload.get::<Ustr>("only_user").ok();
 
               self.stop_service(
@@ -2711,11 +2724,7 @@ impl Runtime for ServiceRuntime {
               let mut all_services: Vec<(Ustr, Arc<ServiceMetadata>)> = Vec::new();
               for branch in active {
                 let name = Ustr::from(branch.payload.to_string_payload());
-                if let Some(svc) = ctx
-                  .registry
-                  .metadata
-                  .find::<Service>("*", name.as_str())
-                {
+                if let Some(svc) = ctx.registry.metadata.find::<Service>("*", name.as_str()) {
                   all_services.push((name, svc));
                 }
               }
@@ -2726,9 +2735,9 @@ impl Runtime for ServiceRuntime {
                   pending.push((full_name.clone(), afters.clone(), svc_meta.clone()));
                 } else {
                   let service =
-                    match registry.instantiate_one::<Service>("*", full_name.as_str(), |x| {
-                      Ok(Service::new(x))
-                    }) {
+                    match registry
+                      .instantiate_one::<Service>("*", full_name.as_str(), |x| Ok(Service::new(x)))
+                    {
                       Ok(service) => Ok(service),
                       Err(CoreError::MetadataNotFound(_)) => continue,
                       Err(e) => {
@@ -2846,8 +2855,7 @@ impl Runtime for ServiceRuntime {
                 (StateMachine::KEY.into(), VariableHeap::KEY.into()),
                 |registry, (sm, _)| {
                   for (dependent, _) in dependents {
-                    if let Ok(service) = registry.as_one_mut::<Service>("*", dependent.as_str())
-                    {
+                    if let Ok(service) = registry.as_one_mut::<Service>("*", dependent.as_str()) {
                       self.stop_service(
                         service,
                         StopMode::Graceful,

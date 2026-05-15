@@ -4,9 +4,16 @@ use crate::flow::{
 };
 use rind_core::prelude::*;
 
+fn same_flow_name(a: &Ustr, b: &Ustr) -> bool {
+  if a == b {
+    return true;
+  }
+  rslvns!(snorm a) == rslvns!(snorm b)
+}
+
 pub fn check_condition(cond: &FlowItem, trigger: &FlowInstance) -> bool {
   match cond {
-    FlowItem::Simple(name) => *name == trigger.name,
+    FlowItem::Simple(name) => same_flow_name(name, &trigger.name),
     FlowItem::Detailed {
       state,
       signal,
@@ -14,7 +21,7 @@ pub fn check_condition(cond: &FlowItem, trigger: &FlowInstance) -> bool {
       branch,
     } => {
       if let Some(state_name) = state {
-        if trigger.r#type != FlowType::State || *state_name != trigger.name {
+        if trigger.r#type != FlowType::State || !same_flow_name(state_name, &trigger.name) {
           return false;
         }
         if let Some(target_op) = target {
@@ -29,7 +36,7 @@ pub fn check_condition(cond: &FlowItem, trigger: &FlowInstance) -> bool {
         }
         true
       } else if let Some(sig_name) = signal {
-        if trigger.r#type != FlowType::Signal || *sig_name != trigger.name {
+        if trigger.r#type != FlowType::Signal || !same_flow_name(sig_name, &trigger.name) {
           return false;
         }
         if let Some(target_op) = target {

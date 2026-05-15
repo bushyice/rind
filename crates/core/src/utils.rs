@@ -130,11 +130,20 @@ macro_rules! rslvns {
   };
 
   (scp $p:expr, $c:expr) => {
-    format!("{}@{}", $c, $p)
+    if $c.contains("@") {
+      $c.to_string()
+    } else {
+      format!("{}@{}", $c, $p)
+    }
   };
 
   (norm $path:expr) => {{ rslvns!(norm "@static" $path) }};
   (norm $prefix:literal $path:expr) => {{ $path.trim_end_matches($prefix) }};
+
+  (snorm $path:expr) => {{
+    let mut scoped_parts = $path.splitn(2, '@');
+    scoped_parts.next().unwrap_or("")
+  }};
 
   (res $path:expr) => {{
     let mut scoped_parts = $path.splitn(2, '@');
