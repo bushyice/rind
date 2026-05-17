@@ -5,7 +5,11 @@ use std::{
   time::Instant,
 };
 
-use crate::{prelude::Resources, user::UserRecord};
+use crate::{
+  prelude::Resources,
+  types::{ToUstr, Ustr},
+  user::UserRecord,
+};
 
 use crate::events::EventBus;
 use crate::lifecycle::LifecycleQueue;
@@ -13,7 +17,7 @@ use crate::notifier::Notifier;
 use crate::registry::InstanceRegistry;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct RuntimeId(String);
+pub struct RuntimeId(Ustr);
 
 impl RuntimeId {
   pub fn as_str(&self) -> &str {
@@ -23,13 +27,13 @@ impl RuntimeId {
 
 impl From<String> for RuntimeId {
   fn from(value: String) -> Self {
-    Self(value)
+    Self(value.to_ustr())
   }
 }
 
 impl From<&str> for RuntimeId {
   fn from(value: &str) -> Self {
-    Self(value.to_string())
+    Self(value.to_ustr())
   }
 }
 

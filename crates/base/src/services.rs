@@ -121,7 +121,9 @@ pub enum ServiceState {
   Error(String),
 }
 
-use crate::executor::{Executor, ExecutorContext, InstanceHandle, NaturalExecutor};
+use crate::executor::{
+  Executor, ExecutorContext, ImaExecutor, InstanceHandle, NaturalExecutor, RemoteExecutor,
+};
 
 pub struct ChildInstance {
   pub key: Ustr,
@@ -377,11 +379,8 @@ impl Default for ServiceRuntime {
     let (stdio_tx, stdio_rx) = mpsc::channel();
     let mut executors: HashMap<Ustr, Box<dyn Executor>> = HashMap::new();
     executors.insert(Ustr::from("natural"), Box::new(NaturalExecutor));
-    executors.insert(
-      Ustr::from("remote"),
-      Box::new(crate::executor::RemoteExecutor),
-    );
-    executors.insert(Ustr::from("ima"), Box::new(crate::executor::ImaExecutor));
+    executors.insert(Ustr::from("remote"), Box::new(RemoteExecutor));
+    executors.insert(Ustr::from("ima"), Box::new(ImaExecutor));
 
     Self {
       event_rx: None,
@@ -661,7 +660,7 @@ impl ServiceRuntime {
       return Ok(Some(user.clone()));
     }
 
-    match &service.metadata.space {
+    let res = match &service.metadata.space {
       ServiceSpace::System => Ok(None),
       ServiceSpace::UserSelective { user } => Ok(Some(user.clone())),
       ServiceSpace::User => {
@@ -671,11 +670,12 @@ impl ServiceRuntime {
           return Ok(Some(user));
         }
 
-        if let Some(source) = &service.metadata.user_source
-          && let Some(user) = self.resolve_user_from_source(source, branch_ctx, sm)?
-        {
+    if let Some(source) = &service.metadata.user_source {
+        let user = self.resolve_user_from_source(source, branch_ctx, sm)?;
+        if let Some(user) = user {
           return Ok(Some(user));
         }
+    }
 
         if let Some(user) = branch_ctx.and_then(|ctx| ctx.key.as_ref()) {
           return Ok(Some(user.clone()));
@@ -703,8 +703,8 @@ impl ServiceRuntime {
 
         Ok(None)
       }
-    }
-    .or_else(|err| Err(err))
+    };
+    res.or_else(|err| Err(err))
   }
 
   fn resolve_scope_default_user(&self, service: &Service, scope: Option<&str>) -> Option<Ustr> {
@@ -1189,6 +1189,7 @@ impl ServiceRuntime {
       }
       Err(e) => {
         let err = format!("Failed to start service \"{}\": {e}", service.metadata.name);
+        service.last_state = ServiceState::Error(err.clone());
         let mut fields = self.log_fields(service, "start");
         fields.insert("error".into(), e.to_string());
         log.log(
@@ -1529,7 +1530,7 @@ impl ServiceRuntime {
     let _ = dispatch.dispatch(
       "transport",
       "unregister_stdio",
-      rpayload!({ "endpoint": service.metadata.name.to_string() }),
+      rpayload!({ "endpoint": service.metadata.name.clone() }),
     );
   }
 

@@ -8,10 +8,29 @@ kanban-plugin: board
 
 - [ ] **eBPF Loader**: (maybe?) Loading eBPF at system startup.
 - [ ] [Trivial] **Name fixes**: Rename concepts accordingly for better understanding.
+- [ ] **Shell entry**: A unified shell environment orchestrator that manages shell environment (e.g `devshell`).
+	- **Fragments**: The units that hold data such as `env`, `bins`, `libs`.
+	- **Resolvers**: Programs that translate configurations and inputs into sources.
+	- **Sources**: Structured configurations that will be used to generate fragments.
+	- **Providers**: Programs that turn sources into fragments.
+	- **Spawners**: Generate a shell command and just pass it or execute a command directly.
+	
+	**e.g**:
+	- NixShellEntry: Resolves `flake.nix`, provides with the nix provider to download and return from `/nix/store` before it finally just passing it to default spawner.
 
 
 ## Doing
 
+- [ ] **Executors**: Modular logic for managing services(or sockets) from an interface.
+	
+	**Services**:
+	  - [x] Executors
+	  - [x] Natural Executor
+	  - [ ] Internal Module Executor
+	
+	**Sockets**:
+	 - [ ] Spawners
+	 - [ ] Proxy
 - [ ] **Namespaces**: Service namespaces (user, network, mounts) in isolated envs.
 	- [x] Basic namespaces
 	- [ ] PID namespace proper `clone/fork+exec` flow (not `pre_exec+unshare`)
@@ -65,6 +84,12 @@ kanban-plugin: board
 
 ## Testing
 
+- [ ] **Dyn Units**: Units under the metadata `dyn-[XXXX]` that live isolated from the system units.
+	- [x] Dyn unit services/states/signals/...
+	- [x] Dyn unit registry.
+	- [ ] Dyn plugins.
+	- [x] Dyn unit configs(isolation and options).
+	- [ ] Dyn unit states and lifetime.
 - [ ] **Service TP state piping address name for `branch_ctx`**
 - [ ] **cgroups**: Using linux cgroups for service resource management.
 - [ ] **Watchdog**: Service requirement to ping rind in order not to be terminated.
@@ -109,6 +134,7 @@ kanban-plugin: board
 - [x] [FIX] **State transcendence**: Check and fix state transcendence if it doesn't work.
 - [x] **Networking as a plugin**: Move networking into a plugin to have more flexibility for a potentially optional(or replaceable) feature.
 - [ ] **Permissions**: Entity-based(users, groups) access control for internal actions.
+- [x] **Loaders**
 - [x] **TTY Manager Plugin**: A tty management plugin.
 	- [x] `tty@active` state
 	- [x] `tty@login_required` state/signal
