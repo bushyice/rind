@@ -9,9 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::ops::{Deref, DerefMut};
 use std::os::fd::{AsFd, AsRawFd, RawFd};
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -38,6 +36,8 @@ pub struct RunOption {
   pub args: Vec<Ustr>,
   pub env: Option<HashMap<Ustr, Ustr>>,
   pub variable: Option<String>,
+  #[serde(default)]
+  pub executor: Option<Ustr>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -121,10 +121,12 @@ pub enum ServiceState {
   Error(String),
 }
 
+use crate::executor::{Executor, ExecutorContext, InstanceHandle, NaturalExecutor};
+
 pub struct ChildInstance {
   pub key: Ustr,
   pub user: Option<Ustr>,
-  pub child: Option<Child>,
+  pub handle: Option<Box<dyn InstanceHandle>>,
   pub state: ServiceState,
   pub retry_count: u32,
   pub stop_time: Option<Instant>,
@@ -132,11 +134,15 @@ pub struct ChildInstance {
 }
 
 impl ChildInstance {
-  pub fn new(key: impl Into<Ustr>, user: Option<Ustr>, child: Option<Child>) -> Self {
+  pub fn new(
+    key: impl Into<Ustr>,
+    user: Option<Ustr>,
+    handle: Option<Box<dyn InstanceHandle>>,
+  ) -> Self {
     Self {
       key: key.into(),
       user,
-      child,
+      handle,
       state: ServiceState::Active,
       retry_count: 0,
       stop_time: None,
@@ -145,7 +151,7 @@ impl ChildInstance {
   }
 
   pub fn pid(&self) -> Option<u32> {
-    self.child.as_ref().map(|c| c.id())
+    self.handle.as_ref().and_then(|h| h.pid())
   }
 }
 
@@ -165,7 +171,7 @@ impl ChildInstanceGroup {
     self
       .0
       .iter()
-      .position(|inst| inst.child.as_ref().map(|c| c.id() as i32) == Some(pid))
+      .position(|inst| inst.pid() == Some(pid as u32))
   }
 
   pub fn is_active(&self) -> bool {
@@ -347,14 +353,15 @@ impl Service {
 
 pub struct ServiceRuntime {
   event_rx: Option<rind_core::events::Subscription<rind_core::prelude::FlowEvent>>,
-  stdio_tx: Sender<(Ustr, TransportMessage)>,
-  stdio_rx: Receiver<(Ustr, TransportMessage)>,
+  stdio_tx: Sender<(Ustr, TransportMessage, usize)>,
+  stdio_rx: Receiver<(Ustr, TransportMessage, usize)>,
   stdio_writers: Mutex<HashMap<Ustr, Vec<Sender<TransportMessage>>>>,
   pid_map: HashMap<u32, Ustr>,
   stopping_map: HashMap<u32, Instant>,
   trigger_index: HashMap<Ustr, HashSet<Ustr>>,
   watchdog_fds: HashMap<RawFd, WatchdogBinding>,
   watchdog_pids: HashMap<u32, RawFd>,
+  executors: HashMap<Ustr, Box<dyn Executor>>,
 }
 
 #[derive(Debug, Clone)]
@@ -368,6 +375,14 @@ struct WatchdogBinding {
 impl Default for ServiceRuntime {
   fn default() -> Self {
     let (stdio_tx, stdio_rx) = mpsc::channel();
+    let mut executors: HashMap<Ustr, Box<dyn Executor>> = HashMap::new();
+    executors.insert(Ustr::from("natural"), Box::new(NaturalExecutor));
+    executors.insert(
+      Ustr::from("remote"),
+      Box::new(crate::executor::RemoteExecutor),
+    );
+    executors.insert(Ustr::from("ima"), Box::new(crate::executor::ImaExecutor));
+
     Self {
       event_rx: None,
       stdio_tx,
@@ -378,6 +393,7 @@ impl Default for ServiceRuntime {
       trigger_index: HashMap::new(),
       watchdog_fds: HashMap::new(),
       watchdog_pids: HashMap::new(),
+      executors,
     }
   }
 }
@@ -446,7 +462,7 @@ impl ServiceRuntime {
     branch_ctx: Option<&ServiceBranchContext>,
     user: Option<&Ustr>,
     pid: u32,
-  ) -> anyhow::Result<()> {
+  ) -> CoreResult<()> {
     let Some(path) = Self::cgroup_path_for(service, branch_ctx, user) else {
       return Ok(());
     };
@@ -467,26 +483,6 @@ impl ServiceRuntime {
 
     std::fs::write(path.join("cgroup.procs"), pid.to_string())?;
     Ok(())
-  }
-
-  fn namespace_unshare_flags(ns: &ServiceNamespaces) -> libc::c_int {
-    let mut flags = 0;
-    if ns.mount {
-      flags |= libc::CLONE_NEWNS;
-    }
-    if ns.uts {
-      flags |= libc::CLONE_NEWUTS;
-    }
-    if ns.ipc {
-      flags |= libc::CLONE_NEWIPC;
-    }
-    if ns.net {
-      flags |= libc::CLONE_NEWNET;
-    }
-    if ns.cgroup {
-      flags |= libc::CLONE_NEWCGROUP;
-    }
-    flags
   }
 
   fn arm_watchdog_timer(
@@ -594,7 +590,7 @@ impl ServiceRuntime {
     source: &ServiceUserSource,
     branch_ctx: Option<&ServiceBranchContext>,
     sm: Option<&StateMachine>,
-  ) -> anyhow::Result<Option<Ustr>> {
+  ) -> CoreResult<Option<Ustr>> {
     let Some(sm) = sm else {
       return Ok(None);
     };
@@ -622,11 +618,10 @@ impl ServiceRuntime {
         return Ok(None);
       }
       if matches.len() > 1 {
-        return Err(anyhow::anyhow!(
+        return Err(CoreError::InvalidState(format!(
           "ambiguous users for state '{}' using match key '{}'",
-          source.state,
-          field
-        ));
+          source.state, field
+        )));
       }
       return Ok(matches.into_iter().next());
     }
@@ -647,10 +642,10 @@ impl ServiceRuntime {
       return Ok(None);
     }
     if users.len() > 1 {
-      return Err(anyhow::anyhow!(
+      return Err(CoreError::InvalidState(format!(
         "ambiguous users in state '{}' (set user-source.match-branch-key)",
         source.state
-      ));
+      )));
     }
     Ok(users.into_iter().next())
   }
@@ -661,7 +656,7 @@ impl ServiceRuntime {
     branch_ctx: Option<&ServiceBranchContext>,
     sm: Option<&StateMachine>,
     scope: Option<&str>,
-  ) -> anyhow::Result<Option<Ustr>> {
+  ) -> CoreResult<Option<Ustr>> {
     if let Some(user) = branch_ctx.and_then(|ctx| ctx.forced_user.as_ref()) {
       return Ok(Some(user.clone()));
     }
@@ -699,10 +694,10 @@ impl ServiceRuntime {
             return Ok(users.into_iter().next());
           }
           if users.len() > 1 {
-            return Err(anyhow::anyhow!(
+            return Err(CoreError::InvalidState(format!(
               "service '{}' is userspace but username is ambiguous; configure `user-source`",
               service.metadata.name
-            ));
+            )));
           }
         }
 
@@ -762,7 +757,7 @@ impl ServiceRuntime {
     registry_key: Ustr,
     notifier: Option<Notifier>,
     resources: &mut Resources,
-  ) -> anyhow::Result<Vec<ChildInstance>> {
+  ) -> CoreResult<Vec<ChildInstance>> {
     let mut instances = Vec::new();
 
     if let Some(sm) = sm {
@@ -835,6 +830,7 @@ impl ServiceRuntime {
       args,
       env,
       variable: None,
+      executor: None,
     })
   }
 
@@ -849,7 +845,7 @@ impl ServiceRuntime {
     registry_key: Ustr,
     notifier: Option<Notifier>,
     resources: &mut Resources,
-  ) -> anyhow::Result<()> {
+  ) -> CoreResult<()> {
     log.log(
       LogLevel::Info,
       "service-runtime",
@@ -893,7 +889,7 @@ impl ServiceRuntime {
     registry_key: Ustr,
     notifier: Option<Notifier>,
     resources: &mut Resources,
-  ) -> anyhow::Result<ChildInstance> {
+  ) -> CoreResult<ChildInstance> {
     let (full_name, scope_name) = {
       let key = registry_key.as_str();
       if let Some((name, scope)) = key.rsplit_once('@') {
@@ -909,20 +905,6 @@ impl ServiceRuntime {
       .resolve_service_user(service, branch_ctx, sm, scope_name)?
       .or_else(|| self.resolve_scope_default_user(service, scope_name));
     let watchdog_cfg = service.metadata.watchdog.clone();
-    if let Some(ns) = &service.metadata.namespaces {
-      if ns.pid {
-        return Err(anyhow::anyhow!(
-          "service '{}' requested pid namespace, but pid isolation is unsupported with current pre_exec+unshare model (requires clone/fork+exec redesign)",
-          service.metadata.name
-        ));
-      }
-      if ns.user {
-        return Err(anyhow::anyhow!(
-          "service '{}' requested user namespace, but user namespace setup is unsupported without uid/gid map configuration",
-          service.metadata.name
-        ));
-      }
-    }
 
     if let Some(transport) = &service.metadata.transport {
       if let Some(sm) = sm {
@@ -1062,103 +1044,53 @@ impl ServiceRuntime {
       }
     }
 
-    let child = unsafe {
-      let mut cmd = Command::new(run.exec.as_str());
-      let pre_exec_fds = activation_fds.clone();
-      let ns_flags = service
-        .metadata
-        .namespaces
-        .as_ref()
-        .map(Self::namespace_unshare_flags)
-        .unwrap_or(0);
-      cmd
-        .args(args.iter().map(|a| a.as_str()))
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .pre_exec(move || {
-          libc::setsid();
-          if ns_flags != 0 && libc::unshare(ns_flags) < 0 {
-            return Err(std::io::Error::last_os_error());
-          }
-          for (idx, fd) in pre_exec_fds.iter().enumerate() {
-            let target_fd = (3 + idx) as RawFd;
-            if *fd != target_fd && libc::dup2(*fd, target_fd) < 0 {
-              return Err(std::io::Error::last_os_error());
-            }
-            let flags = libc::fcntl(target_fd, libc::F_GETFD);
-            if flags >= 0 {
-              let _ = libc::fcntl(target_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
-            }
-          }
-          Ok(())
-        });
-      let user_info = if let Some(username) = resolved_user.as_ref() {
-        let store = rind_core::user::UserStore::load_system()
-          .map_err(|e| anyhow::anyhow!("failed to load user store: {e}"))?;
-        let Some(user) = store.lookup_by_name(username.as_str()) else {
-          return Err(anyhow::anyhow!(
-            "user '{}' not found for service '{}'",
-            username,
-            service.metadata.name
-          ));
-        };
-        Some((user.uid, user.gid, user.home.clone(), username.clone()))
-      } else {
-        None
-      };
+    let executor_name = run
+      .executor
+      .clone()
+      .unwrap_or_else(|| Ustr::from("natural"));
+    let executor = self
+      .executors
+      .get(&executor_name)
+      .ok_or_else(|| CoreError::Custom(format!("Executor {} not found", executor_name)))?;
 
-      if let Some(dir) = &service.metadata.working_dir {
-        cmd.current_dir(dir.as_str());
-      }
+    let mut handle = executor.spawn(ExecutorContext {
+      service,
+      run,
+      log,
+      branch_ctx,
+      sockets_map,
+      sm,
+      variables,
+      registry_key: registry_key.clone(),
+      notifier: notifier.clone(),
+      resources,
+      resolved_user: resolved_user.clone(),
+      envs,
+      args,
+    })?;
 
-      if matches!(service.metadata.space, ServiceSpace::User) && user_info.is_none() {
-        return Err(anyhow::anyhow!(
-          "failed to resolve userspace identity for '{}'",
+    if let Some(pid) = handle.pid() {
+      if let Err(e) = self.setup_cgroup_for_pid(service, branch_ctx, resolved_user.as_ref(), pid) {
+        let _ = handle.kill(Signal::SIGKILL);
+        return Err(CoreError::InvalidState(format!(
+          "failed to setup cgroup for service '{}': {e}",
           service.metadata.name
-        ));
+        )));
       }
+      self.pid_map.insert(pid, registry_key.clone());
 
-      if let Some((uid, gid, home, username)) = user_info {
-        cmd.uid(uid);
-        cmd.gid(gid);
-
-        if let Some(dir) = &service.metadata.working_dir
-          && dir.as_str().starts_with("~")
-        {
-          cmd.current_dir(format!("{}{}", home, &dir.as_str()[1..]));
-        }
-
-        envs.extend(
-          read_env_file(&format!("{home}/.env"))
-            .into_iter()
-            .map(|(k, v)| (Ustr::from(k), Ustr::from(v))),
+      if let Some(watchdog) = &watchdog_cfg {
+        let _ = self.arm_watchdog_timer(
+          registry_key.clone(),
+          branch_key.cloned(),
+          resolved_user.clone(),
+          pid,
+          watchdog,
+          resources,
         );
-
-        envs.insert(Ustr::from("HOME"), Ustr::from(home));
-        envs.insert(Ustr::from("USER"), username);
       }
-
-      if let Some(key) = branch_key {
-        cmd.env("RIND_BRANCH_KEY", key.as_str());
-      }
-      if !envs.is_empty() {
-        cmd.envs(envs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-      }
-      cmd.spawn()?
-    };
-
-    let pid = child.id();
-    if let Err(e) = self.setup_cgroup_for_pid(service, branch_ctx, resolved_user.as_ref(), pid) {
-      let _ = kill(Pid::from_raw(-(pid as i32)), Signal::SIGKILL);
-      return Err(anyhow::anyhow!(
-        "failed to setup cgroup for service '{}': {e}",
-        service.metadata.name
-      ));
     }
-    self.pid_map.insert(pid, registry_key.clone());
 
-    let mut child = child;
     if service
       .metadata
       .transport
@@ -1168,34 +1100,29 @@ impl ServiceRuntime {
     {
       start_stdout_listener(
         registry_key.clone(),
-        &mut child,
+        handle.take_stdout(),
         self.stdio_tx.clone(),
         notifier,
+        service.instances.len(), // TODO: use a better rigid way to handle indexing
       );
       let (tx, rx) = mpsc::channel::<TransportMessage>();
-      start_stdin_writer(registry_key.clone(), &mut child, log.clone(), rx);
+      start_stdin_writer(registry_key.clone(), handle.take_stdin(), log.clone(), rx);
       if let Ok(mut writers) = self.stdio_writers.lock() {
         writers.entry(registry_key.clone()).or_default().push(tx);
       }
     } else {
-      start_service_stream_logs(registry_key.clone(), &mut child, log.clone());
-    }
-
-    if let Some(watchdog) = &watchdog_cfg {
-      let _ = self.arm_watchdog_timer(
+      start_service_stream_logs(
         registry_key.clone(),
-        branch_key.cloned(),
-        resolved_user.clone(),
-        pid,
-        watchdog,
-        resources,
+        handle.take_stdout(),
+        handle.take_stderr(),
+        log.clone(),
       );
     }
 
     Ok(ChildInstance::new(
       branch_key.cloned().unwrap_or_default(),
       resolved_user,
-      Some(child),
+      Some(handle),
     ))
   }
 
@@ -1304,19 +1231,20 @@ impl ServiceRuntime {
         return;
       }
     }
-    if let Some(child) = inst.child.as_ref() {
-      let pgid = Pid::from_raw(-(child.id() as i32));
+    if let Some(handle) = inst.handle.as_mut() {
       let signal = if mode == StopMode::ForceKill {
         Signal::SIGKILL
       } else {
         Signal::SIGTERM
       };
-      let _ = kill(pgid, signal);
-      self.disarm_watchdog_pid(child.id(), resources);
+      let _ = handle.kill(signal);
+      if let Some(pid) = handle.pid() {
+        self.disarm_watchdog_pid(pid, resources);
+        self.stopping_map.insert(pid, Instant::now());
+      }
       inst.state = ServiceState::Stopping;
       inst.stop_time = Some(Instant::now());
       inst.manually_stopped = true;
-      self.stopping_map.insert(child.id(), Instant::now());
     } else {
       if inst.state == ServiceState::Active {
         self.run_triggers(service.on_stop.as_ref(), sm, dispatch);
@@ -1463,7 +1391,7 @@ impl ServiceRuntime {
       }
 
       inst.state = ServiceState::Exited(code);
-      inst.child = None;
+      inst.handle = None;
       (inst.manually_stopped, inst.retry_count)
     };
 
@@ -1594,7 +1522,7 @@ impl ServiceRuntime {
     {
       return;
     }
-    let active = service.instances.iter().any(|inst| inst.child.is_some());
+    let active = service.instances.iter().any(|inst| inst.handle.is_some());
     if active {
       return;
     }
@@ -1753,13 +1681,19 @@ fn parse_log_level(input: &str) -> LogLevel {
   }
 }
 
-fn start_service_stream_logs(service_name: Ustr, child: &mut Child, log: LogHandle) {
-  if let Some(stdout) = child.stdout.take() {
+fn start_service_stream_logs(
+  service_name: Ustr,
+  stdout: Option<Box<dyn std::io::Read + Send>>,
+  stderr: Option<Box<dyn std::io::Read + Send>>,
+  log: LogHandle,
+) {
+  if let Some(stdout) = stdout {
     let service_name = service_name.clone();
     let log = log.clone();
     std::thread::spawn(move || {
       let reader = BufReader::new(stdout);
-      for line in reader.lines().map_while(std::result::Result::ok) {
+      for line_res in reader.lines() {
+        let Ok(line) = line_res else { continue };
         if line.trim().is_empty() {
           continue;
         }
@@ -1771,10 +1705,11 @@ fn start_service_stream_logs(service_name: Ustr, child: &mut Child, log: LogHand
     });
   }
 
-  if let Some(stderr) = child.stderr.take() {
+  if let Some(stderr) = stderr {
     std::thread::spawn(move || {
       let reader = BufReader::new(stderr);
-      for line in reader.lines().map_while(std::result::Result::ok) {
+      for line_res in reader.lines() {
+        let Ok(line) = line_res else { continue };
         if line.trim().is_empty() {
           continue;
         }
@@ -1789,11 +1724,11 @@ fn start_service_stream_logs(service_name: Ustr, child: &mut Child, log: LogHand
 
 fn start_stdin_writer(
   service_name: Ustr,
-  child: &mut Child,
+  stdin: Option<Box<dyn std::io::Write + Send>>,
   log: LogHandle,
   rx: Receiver<TransportMessage>,
 ) {
-  let Some(mut stdin) = child.stdin.take() else {
+  let Some(mut stdin) = stdin else {
     return;
   };
 
@@ -2044,15 +1979,17 @@ impl Runtime for ServiceRuntime {
           }
         }
 
-        while let Ok((service_name, message)) = self.stdio_rx.try_recv() {
+        while let Ok((service_name, message, index)) = self.stdio_rx.try_recv() {
           if message.name.as_ref().map(|x| x.as_str()) == Some("watchdog") {
             let _ = dispatch.dispatch(
               "services",
               "watchdog_ping",
               rpayload!({ "service": service_name.clone() }),
             );
+            continue;
           }
           if message.name.as_ref().map(|x| x.as_str()) == Some("log") {
+            let service_name = rslvns!(snorm service_name).to_ustr();
             let (level, message_text, fields) = self.stdio_log_entry(&service_name, &message);
             log.log(level, "service-transport", message_text, fields);
             continue;
@@ -2062,7 +1999,8 @@ impl Runtime for ServiceRuntime {
             "ingest",
             rpayload!({
               "endpoint": service_name,
-              "message": message
+              "message": message,
+              "index": index,
             }),
           );
         }

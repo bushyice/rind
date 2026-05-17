@@ -1,4 +1,7 @@
-use std::fmt::{Display, Formatter};
+use std::{
+  fmt::{Display, Formatter},
+  net::AddrParseError,
+};
 
 use nix::errno::Errno;
 
@@ -6,7 +9,7 @@ use crate::user::PamError;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CoreError {
-  ParseToml(String),
+  ParseError(String),
   MissingField { path: String },
   TypeMismatch { path: String, expected: String },
   MissingSchema { name: String },
@@ -31,7 +34,7 @@ impl Display for CoreError {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     match self {
       CoreError::PamError(x) => x.fmt(f),
-      CoreError::ParseToml(x) => write!(f, "parse error: {x}"),
+      CoreError::ParseError(x) => write!(f, "parse error: {x}"),
       CoreError::System(x) => write!(f, "system error: {x}"),
       CoreError::DoubleKey => write!(f, "Double key"),
       CoreError::MissingField { path } => write!(f, "missing field `{path}`"),
@@ -66,12 +69,6 @@ impl CoreError {
   }
 }
 
-impl From<anyhow::Error> for CoreError {
-  fn from(value: anyhow::Error) -> Self {
-    Self::Custom(value.to_string())
-  }
-}
-
 impl From<std::io::Error> for CoreError {
   fn from(value: std::io::Error) -> Self {
     Self::Custom(value.to_string())
@@ -87,6 +84,24 @@ impl From<PamError> for CoreError {
 impl From<Errno> for CoreError {
   fn from(value: Errno) -> Self {
     CoreError::System(value)
+  }
+}
+
+impl From<toml::de::Error> for CoreError {
+  fn from(value: toml::de::Error) -> Self {
+    CoreError::ParseError(value.to_string())
+  }
+}
+
+impl From<serde_json::Error> for CoreError {
+  fn from(value: serde_json::Error) -> Self {
+    CoreError::ParseError(value.to_string())
+  }
+}
+
+impl From<AddrParseError> for CoreError {
+  fn from(value: AddrParseError) -> Self {
+    CoreError::Custom(value.to_string())
   }
 }
 

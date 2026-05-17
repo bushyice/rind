@@ -12,6 +12,7 @@ use rind_core::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::flow::{FlowMatchOperation, FlowPayload, Signal, State};
+use crate::prelude::Service;
 use rind_core::notifier::Notifier;
 
 #[derive(Serialize, Deserialize, Copy, Clone)]
@@ -234,16 +235,17 @@ impl TransportProtocol for UdsTransport {
 
 pub fn start_stdout_listener(
   service_name: Ustr,
-  child: &mut std::process::Child,
-  tx: std::sync::mpsc::Sender<(Ustr, TransportMessage)>,
+  stdout: Option<Box<dyn std::io::Read + Send>>,
+  tx: std::sync::mpsc::Sender<(Ustr, TransportMessage, usize)>,
   notifier: Option<Notifier>,
+  index: usize,
 ) {
-  if let Some(stdout) = child.stdout.take() {
+  if let Some(stdout) = stdout {
     std::thread::spawn(move || {
       let reader = BufReader::new(stdout);
       for line in reader.lines().flatten() {
         if let Ok(msg) = serde_json::from_str::<TransportMessage>(&line) {
-          let _ = tx.send((service_name.clone(), msg));
+          let _ = tx.send((service_name.clone(), msg, index));
           if let Some(n) = &notifier {
             let _ = n.notify();
           }
@@ -257,6 +259,7 @@ pub fn start_stdout_listener(
               payload: Some(FlowPayload::String(line)),
               branch: None,
             },
+            index,
           ));
           if let Some(n) = &notifier {
             let _ = n.notify();
@@ -270,6 +273,84 @@ pub fn start_stdout_listener(
 pub struct TransportRuntime {
   uds: UdsTransport,
   stdio_endpoints: std::collections::HashSet<Ustr>,
+}
+
+impl TransportRuntime {
+  fn ingest(
+    &self,
+    _endpoint: Ustr,
+    msg: TransportMessage,
+    uid: u32,
+    dispatch: &RuntimeDispatcher,
+    pm: &PermissionStore,
+    ctx: &mut RuntimeContext<'_>,
+  ) -> CoreResult<()> {
+    match msg.r#type {
+      TransportMessageType::State => {
+        if let Some(name) = &msg.name {
+          if uid != 0 {
+            // one-shot user-specific state defs
+            if let Some((username, _)) = name.as_str().split_once("/")
+              && let Some(user) = pm.users.lookup_by_uid(uid)
+              && username != user.username.as_str()
+            {
+              return Ok(());
+            }
+
+            // one-shot perms (is this good?)
+            if let Some(state) = ctx.registry.metadata.find::<State>("*", name.as_str())
+              && let Some(perms) = &state.permissions
+              && !perms
+                .iter()
+                .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(uid, x)))
+            {
+              return Ok(());
+            }
+          }
+
+          let name = name.clone();
+
+          if msg.action == TransportMessageAction::Remove {
+            let mut payload = rpayload!({ "name": name });
+            if let Some(p) = &msg.payload {
+              payload = payload.insert("filter", p.to_json());
+            }
+            let _ = dispatch.dispatch("flow", "remove_state", payload);
+          } else if msg.action == TransportMessageAction::Set {
+            let mut payload = rpayload!({ "name": name });
+            if let Some(p) = &msg.payload {
+              payload = payload.insert("payload", p.to_json());
+            }
+            let _ = dispatch.dispatch("flow", "set_state", payload);
+          }
+        }
+      }
+      TransportMessageType::Signal => {
+        if let Some(name) = &msg.name {
+          // same with state perms, one-shot
+          if let Some(state) = ctx.registry.metadata.find::<Signal>("*", name.as_str())
+            && let Some(perms) = &state.permissions
+            && !perms
+              .iter()
+              .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(uid, x)))
+          {
+            return Ok(());
+          }
+
+          let name = name.clone();
+
+          let mut payload = rpayload!({ "name": name });
+          if let Some(p) = &msg.payload {
+            payload = payload.insert("payload", p.to_json());
+          }
+          let _ = dispatch.dispatch("flow", "emit_signal", payload);
+        }
+      }
+      _ => {}
+    }
+
+    Ok(())
+  }
 }
 
 impl Default for TransportRuntime {
@@ -357,72 +438,33 @@ impl Runtime for TransportRuntime {
           self.uds.send_message(endpoint.as_str(), &msg);
         }
       }
+      "ingest" => {
+        let endpoint = payload.get::<Ustr>("endpoint")?;
+        let index = payload.get::<usize>("index")?;
+        let message = payload.get::<TransportMessage>("message")?;
+
+        let child = ctx
+          .registry
+          .as_one::<Service>("*", endpoint.clone())?
+          .instances
+          .get(index)
+          .ok_or(CoreError::Unknown)?;
+
+        let uid = if let Some(user) = &child.user {
+          pm.users
+            .lookup_by_name(&user)
+            .ok_or(CoreError::Unknown)?
+            .uid
+        } else {
+          0
+        };
+
+        self.ingest(endpoint, message, uid, dispatch, &pm, ctx)?;
+      }
       "drain_incoming" => {
         if let Ok(rx) = self.uds.incoming_rx.lock() {
-          while let Ok((_endpoint, msg, uid)) = rx.try_recv() {
-            match msg.r#type {
-              TransportMessageType::State => {
-                if let Some(name) = &msg.name {
-                  if uid != 0 {
-                    // one-shot user-specific state defs
-                    if let Some((username, _)) = name.as_str().split_once("/")
-                      && let Some(user) = pm.users.lookup_by_uid(uid)
-                      && username != user.username.as_str()
-                    {
-                      continue;
-                    }
-
-                    // one-shot perms (is this good?)
-                    if let Some(state) = ctx.registry.metadata.find::<State>("*", name.as_str())
-                      && let Some(perms) = &state.permissions
-                      && !perms
-                        .iter()
-                        .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(uid, x)))
-                    {
-                      continue;
-                    }
-                  }
-
-                  let name = name.clone();
-
-                  if msg.action == TransportMessageAction::Remove {
-                    let mut payload = rpayload!({ "name": name });
-                    if let Some(p) = &msg.payload {
-                      payload = payload.insert("filter", p.to_json());
-                    }
-                    let _ = dispatch.dispatch("flow", "remove_state", payload);
-                  } else if msg.action == TransportMessageAction::Set {
-                    let mut payload = rpayload!({ "name": name });
-                    if let Some(p) = &msg.payload {
-                      payload = payload.insert("payload", p.to_json());
-                    }
-                    let _ = dispatch.dispatch("flow", "set_state", payload);
-                  }
-                }
-              }
-              TransportMessageType::Signal => {
-                if let Some(name) = &msg.name {
-                  // same with state perms, one-shot
-                  if let Some(state) = ctx.registry.metadata.find::<Signal>("*", name.as_str())
-                    && let Some(perms) = &state.permissions
-                    && !perms
-                      .iter()
-                      .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(uid, x)))
-                  {
-                    continue;
-                  }
-
-                  let name = name.clone();
-
-                  let mut payload = rpayload!({ "name": name });
-                  if let Some(p) = &msg.payload {
-                    payload = payload.insert("payload", p.to_json());
-                  }
-                  let _ = dispatch.dispatch("flow", "emit_signal", payload);
-                }
-              }
-              _ => {}
-            }
+          while let Ok((endpoint, msg, uid)) = rx.try_recv() {
+            self.ingest(endpoint, msg, uid, dispatch, &pm, ctx)?;
           }
         }
       }

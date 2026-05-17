@@ -21,4 +21,4 @@ run:
   cargo run --manifest-path builder/Cargo.toml -- xbpr
 
 test:
-  cargo nextest r
+  cargo nextest r -j 1

@@ -3,10 +3,11 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
 use libc::{geteuid, getgid, getpid, getuid};
+use rind_core::error::CoreResult;
 
 use crate::Message;
 
-pub fn send_message(mut msg: Message) -> anyhow::Result<Message> {
+pub fn send_message(mut msg: Message) -> CoreResult<Message> {
   let mut stream = UnixStream::connect(
     std::env::var("RIND_SOC_PATH")
       .map(PathBuf::from)

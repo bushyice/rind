@@ -41,7 +41,6 @@ pub mod prelude {
   pub use rind_macros::*;
 }
 
-pub use anyhow;
 pub use bincode_next;
 pub use bitflags;
 pub use libc;

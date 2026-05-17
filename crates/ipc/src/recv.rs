@@ -7,7 +7,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, RwLock};
 use std::thread;
 
-type ClientHandler = fn(Message) -> Result<Option<Message>, anyhow::Error>;
+type ClientHandler = fn(Message) -> Result<Option<Message>, CoreError>;
 
 pub fn recv_message(mut stream: UnixStream, handle_client: ClientHandler) {
   println!("client connected");

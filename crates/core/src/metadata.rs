@@ -4,7 +4,10 @@ use std::{
   sync::Arc,
 };
 
-use crate::types::Ustr;
+use crate::{
+  error::{CoreError, CoreResult},
+  types::Ustr,
+};
 use toml::Value;
 
 pub trait NamedItem {
@@ -15,7 +18,7 @@ pub trait Model {
   type M: serde::de::DeserializeOwned + NamedItem;
 }
 
-type ParserFn = Box<dyn Fn(Value) -> anyhow::Result<Box<dyn Any>> + Send + Sync>;
+type ParserFn = Box<dyn Fn(Value) -> CoreResult<Box<dyn Any>> + Send + Sync>;
 
 pub struct Metadata {
   pub name: Ustr,
@@ -57,15 +60,15 @@ impl Metadata {
     self
   }
 
-  pub fn from_toml(&mut self, toml: &str, group: impl Into<Ustr>) -> anyhow::Result<()> {
+  pub fn from_toml(&mut self, toml: &str, group: impl Into<Ustr>) -> CoreResult<()> {
     let value: Value = toml::from_str(toml)?;
     self.collect_value(value, group)
   }
 
-  pub fn collect_value(&mut self, value: Value, group: impl Into<Ustr>) -> anyhow::Result<()> {
+  pub fn collect_value(&mut self, value: Value, group: impl Into<Ustr>) -> CoreResult<()> {
     let table = value
       .as_table()
-      .ok_or_else(|| anyhow::anyhow!("root must be table"))?;
+      .ok_or_else(|| CoreError::ParseError("root must be table".into()))?;
 
     let group = group.into();
     for (key, val) in table {
@@ -83,16 +86,20 @@ impl Metadata {
     name: impl Into<Ustr>,
     value: Value,
     group: impl Into<Ustr>,
-  ) -> anyhow::Result<()> {
+  ) -> CoreResult<()> {
     let name = name.into();
     let type_id = *self
       .name_to_type
       .get(&name)
-      .ok_or_else(|| anyhow::anyhow!("unknown metadata key `{name}`"))?;
+      .ok_or_else(|| CoreError::MissingField {
+        path: name.to_string(),
+      })?;
     let parser = self
       .parsers
       .get(&type_id)
-      .ok_or_else(|| anyhow::anyhow!("missing parser for `{name}`"))?;
+      .ok_or_else(|| CoreError::MissingField {
+        path: name.to_string(),
+      })?;
 
     let parsed = parser(value)?;
     self

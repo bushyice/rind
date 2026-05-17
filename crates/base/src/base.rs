@@ -1,4 +1,5 @@
 pub mod dunits;
+pub mod executor;
 pub mod flow;
 pub mod ipc;
 pub mod loader;

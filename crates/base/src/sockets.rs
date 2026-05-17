@@ -80,7 +80,7 @@ impl Default for SocketRuntime {
 }
 
 impl SocketRuntime {
-  fn get_socket_path(&self, listen: &str, create: bool) -> anyhow::Result<PathBuf> {
+  fn get_socket_path(&self, listen: &str, create: bool) -> CoreResult<PathBuf> {
     let path = PathBuf::from("/var/sock").join(listen);
     if let (Some(p), true) = (path.parent(), create) {
       std::fs::create_dir_all(p)?;
@@ -91,7 +91,7 @@ impl SocketRuntime {
     Ok(path)
   }
 
-  fn create_socket(&self, meta: &SocketMetadata) -> anyhow::Result<std::os::fd::OwnedFd> {
+  fn create_socket(&self, meta: &SocketMetadata) -> CoreResult<std::os::fd::OwnedFd> {
     let fd = match meta.r#type {
       SocketType::Tcp => {
         let addr: std::net::SocketAddr = meta.listen.parse()?;

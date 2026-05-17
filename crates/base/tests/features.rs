@@ -655,7 +655,7 @@ fn race_like_dispatch_churn_keeps_runtime_consistent() {
         service
           .instances
           .iter()
-          .all(|inst| { !matches!(inst.state, ServiceState::Active) || inst.child.is_some() })
+          .all(|inst| { !matches!(inst.state, ServiceState::Active) || inst.handle.is_some() })
       );
     })
     .expect("post-churn assertions should succeed");

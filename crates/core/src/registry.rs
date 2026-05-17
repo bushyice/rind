@@ -62,7 +62,7 @@ impl MetadataRegistry {
     metadata: &mut Metadata,
     group: impl Into<Ustr>,
     source: &str,
-  ) -> anyhow::Result<()> {
+  ) -> CoreResult<()> {
     metadata.from_toml(source, group)?;
     self.indexes.clear();
     Ok(())
@@ -162,7 +162,7 @@ impl MetadataRegistry {
     Some(m.groups().collect())
   }
 
-  pub fn ensure_index_for_type<T>(&mut self, metadata: impl Into<Ustr>) -> anyhow::Result<()>
+  pub fn ensure_index_for_type<T>(&mut self, metadata: impl Into<Ustr>) -> CoreResult<()>
   where
     T: Model + 'static,
   {
@@ -365,7 +365,7 @@ impl<'a> InstanceRegistry<'a> {
     &self,
     metadata: impl Into<Ustr>,
     name: impl Into<Ustr>,
-  ) -> anyhow::Result<Vec<&T>>
+  ) -> CoreResult<Vec<&T>>
   where
     T: Model + 'static,
   {
@@ -387,7 +387,7 @@ impl<'a> InstanceRegistry<'a> {
     &mut self,
     metadata: impl Into<Ustr>,
     name: impl Into<Ustr>,
-  ) -> anyhow::Result<Vec<Box<T>>>
+  ) -> CoreResult<Vec<Box<T>>>
   where
     T: Model + 'static,
   {
@@ -409,7 +409,7 @@ impl<'a> InstanceRegistry<'a> {
     &mut self,
     metadata: impl Into<Ustr>,
     name: impl Into<Ustr>,
-  ) -> anyhow::Result<Box<T>>
+  ) -> CoreResult<Box<T>>
   where
     T: Model + 'static,
   {
@@ -422,7 +422,7 @@ impl<'a> InstanceRegistry<'a> {
     &mut self,
     metadata: impl Into<Ustr>,
     name: impl Into<Ustr>,
-  ) -> anyhow::Result<Vec<&mut T>>
+  ) -> CoreResult<Vec<&mut T>>
   where
     T: Model + 'static,
   {
@@ -440,7 +440,7 @@ impl<'a> InstanceRegistry<'a> {
     )
   }
 
-  pub fn as_one<T>(&self, metadata: impl Into<Ustr>, name: impl Into<Ustr>) -> anyhow::Result<&T>
+  pub fn as_one<T>(&self, metadata: impl Into<Ustr>, name: impl Into<Ustr>) -> CoreResult<&T>
   where
     T: Model + 'static,
   {
@@ -465,7 +465,7 @@ impl<'a> InstanceRegistry<'a> {
     &mut self,
     metadata: impl Into<Ustr>,
     name: impl Into<Ustr>,
-  ) -> anyhow::Result<&mut T>
+  ) -> CoreResult<&mut T>
   where
     T: Model + 'static,
   {
