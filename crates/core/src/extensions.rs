@@ -222,7 +222,8 @@ mod tests {
     assert_eq!(results, vec![4usize]);
 
     let mut target = Vec::<String>::new();
-    mgr.act::<Vec<String>>("anything", &mut target)
+    mgr
+      .act::<Vec<String>>("anything", &mut target)
       .expect("act should mutate target");
     assert_eq!(target, vec!["acted".to_string()]);
 
@@ -238,7 +239,9 @@ mod tests {
       .with_fn(|_, _, _| Ok(Box::new(11u32)))
       .dispatch(None, None, None)
       .expect("dispatch should run function response");
-    let value = out.downcast_ref::<u32>().expect("result type should be u32");
+    let value = out
+      .downcast_ref::<u32>()
+      .expect("result type should be u32");
     assert_eq!(*value, 11);
   }
 }

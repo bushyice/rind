@@ -19,8 +19,10 @@ use rind_base::transport::TransportRuntime;
 use rind_base::units::UnitsOrchestrator;
 use rind_base::user::UserRuntime;
 use rind_core::{notifier::Notifier, prelude::*};
-use rind_plugins::{collect_plugins, plugins_path};
+use rind_plugins::{PluginCapability, collect_plugins, plugins_path};
 use std::os::fd::AsFd;
+
+mod initramfs;
 
 struct BootOrchestrator;
 
@@ -308,6 +310,14 @@ fn process_lifecycle_action(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+  if initramfs::should_run_initramfs() {
+    let continue_boot = initramfs::initramfs_init()?;
+    if !continue_boot {
+      initramfs::exec_real_init_from_env()?;
+      return Ok(());
+    }
+  }
+
   load_env();
 
   let units_dir = if let Ok(path) = std::env::var("RIND_UNITS_DIR") {
@@ -332,13 +342,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
   let log = boot.start_logger();
 
-  for plugin in collect_plugins(plugins_path(), &log)? {
-    boot.orchestrators.extend(plugin.provide_orchestrators());
-    plugin.register_extensions(&mut extensions);
-    if let Some(ext) = plugin.ext {
-      unsafe {
-        ext(&extensions);
-      };
+  for plugin in collect_plugins(plugins_path(None), &log, None)? {
+    if plugin.has_cap(PluginCapability::ORCHESTRATORS) {
+      boot.orchestrators.extend(plugin.provide_orchestrators());
+    }
+    if plugin.has_cap(PluginCapability::EXTENSIONS) {
+      plugin.register_extensions(&mut extensions);
+    }
+    if plugin.has_cap(PluginCapability::EXTENSIBLE) {
+      if let Some(ext) = plugin.ext {
+        unsafe {
+          ext(&extensions);
+        };
+      }
     }
   }
   EXTENSIONS.with(|e| match e.set(extensions) {

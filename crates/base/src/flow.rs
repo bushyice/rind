@@ -6,13 +6,13 @@ use std::sync::Arc;
 use rind_core::prelude::*;
 pub use rind_ipc::{FlowJson, FlowMatchOperation, FlowPayload, FlowPayloadType};
 
+use crate::scopes::ScopeStore;
 use crate::transport::TransportMethod;
 use crate::triggers::{
   branch_target_key, check_condition, default_payload_for_type, json_branch_key, map_json_payload,
   merge_json, payload_compatible, payload_signature, payload_to_filter,
 };
 use crate::variables::VariableHeap;
-use crate::scopes::ScopeStore;
 
 pub const FLOW_RUNTIME_ID: &str = "flow";
 
@@ -286,9 +286,9 @@ impl StateMachine {
 
   pub fn drop_scope(&mut self, scope: &str) -> Result<(), CoreError> {
     let suffix = format!("@{scope}");
-    self
-      .states
-      .retain(|k, _| scope == "static" && !k.as_str().contains('@') || !k.as_str().ends_with(&suffix));
+    self.states.retain(|k, _| {
+      scope == "static" && !k.as_str().contains('@') || !k.as_str().ends_with(&suffix)
+    });
 
     if scope != "static" {
       let scope_dir = self.persistence_root.join(scope);
@@ -308,13 +308,10 @@ impl StateMachine {
         continue;
       }
       let scope = Self::scope_from_state_name(name.as_str());
-      per_scope
-        .entry(scope)
-        .or_default()
-        .insert(
-          name.to_string(),
-          branches.iter().map(StateEntry::from).collect::<Vec<_>>(),
-        );
+      per_scope.entry(scope).or_default().insert(
+        name.to_string(),
+        branches.iter().map(StateEntry::from).collect::<Vec<_>>(),
+      );
     }
     // Always materialize static persistence so the scoped layout exists
     // even before the first persisted flow state is written.
@@ -1237,7 +1234,9 @@ pub fn state_root_path() -> PathBuf {
 }
 
 pub fn state_scope_path(scope: &str) -> PathBuf {
-  if scope == "static" && let Ok(path) = std::env::var("RIND_STATE_PATH") {
+  if scope == "static"
+    && let Ok(path) = std::env::var("RIND_STATE_PATH")
+  {
     return PathBuf::from(path);
   }
   state_root_path().join(scope).join("state.bin")

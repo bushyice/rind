@@ -26,7 +26,7 @@ fn collect_plugins_skips_invalid_shared_objects_without_panicking() {
     ..LogConfig::default()
   });
 
-  let plugins: Vec<_> = collect_plugins(&dir, &log)
+  let plugins: Vec<_> = collect_plugins(&dir, &log, None)
     .expect("plugin collection should still succeed")
     .collect();
   assert!(plugins.is_empty());
@@ -34,10 +34,10 @@ fn collect_plugins_skips_invalid_shared_objects_without_panicking() {
 
 #[test]
 fn plugins_path_uses_env_override() {
-  unsafe { std::env::set_var("RIND_VARIABLES_PATH", "/tmp/rind-plugin-path-override") };
+  unsafe { std::env::set_var("RIND_PLUGINS_PATH", "/tmp/rind-plugin-path-override") };
   assert_eq!(
-    plugins_path(),
+    plugins_path(None),
     PathBuf::from("/tmp/rind-plugin-path-override")
   );
-  unsafe { std::env::remove_var("RIND_VARIABLES_PATH") };
+  unsafe { std::env::remove_var("RIND_PLUGINS_PATH") };
 }

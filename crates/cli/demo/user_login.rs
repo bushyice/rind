@@ -3,8 +3,8 @@ use std::io::{BufRead, BufReader, Write};
 use std::thread;
 use std::time::Duration;
 
-use rind_ipc::{Message, payloads::LoginPayload, send::send_message};
 use flexbuffers;
+use rind_ipc::{Message, payloads::LoginPayload, send::send_message};
 
 fn tty_path() -> String {
   let path = std::env::var("RIND_LOGIN_TTY")

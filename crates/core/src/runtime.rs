@@ -376,6 +376,20 @@ impl RuntimeHandle {
 
     Ok(())
   }
+
+  pub fn mock(log: LogHandle) -> Self {
+    RuntimeHandle {
+      inner: Rc::new(RefCell::new(RuntimeEngine {
+        log,
+        runtimes: HashMap::new(),
+        contexts: HashMap::new(),
+        queue: VecDeque::new(),
+        instances: InstanceMap::default(),
+        notifier: None,
+        stopped: false,
+      })),
+    }
+  }
 }
 
 pub fn start_runtime(

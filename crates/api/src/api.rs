@@ -1,3 +1,5 @@
+// TODO: switch to flexbuffers
+
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::io::{BufRead, BufReader, Read, Write};

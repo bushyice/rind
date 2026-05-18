@@ -55,7 +55,9 @@ fn print_as_table(list: &IpcListComponent, printer: &IpcListPrinter) {
   );
 
   for component in &list.components {
-    if let Ok(obj) = flexbuffers::from_slice::<serde_json::Map<String, serde_json::Value>>(component) {
+    if let Ok(obj) =
+      flexbuffers::from_slice::<serde_json::Map<String, serde_json::Value>>(component)
+    {
       let mut row = Vec::new();
       for (i, key) in printer.keys.iter().enumerate() {
         let val = obj
@@ -82,7 +84,9 @@ fn print_as_table(list: &IpcListComponent, printer: &IpcListPrinter) {
 
 fn print_as_list(list: &IpcListComponent, printer: &IpcListPrinter) {
   for component in &list.components {
-    if let Ok(obj) = flexbuffers::from_slice::<serde_json::Map<String, serde_json::Value>>(component) {
+    if let Ok(obj) =
+      flexbuffers::from_slice::<serde_json::Map<String, serde_json::Value>>(component)
+    {
       for (i, key) in printer.keys.iter().enumerate() {
         let title = printer.titles.get(i).cloned().unwrap_or(key.clone());
         let val = obj
@@ -252,14 +256,20 @@ use std::collections::BTreeMap;
 
 pub fn print_state(st: &StateSerialized) {
   if !st.instances.is_empty() {
-    let pk = st.keys.get(0).map(|k| k.to_string()).unwrap_or_else(|| "id".to_string());
+    let pk = st
+      .keys
+      .get(0)
+      .map(|k| k.to_string())
+      .unwrap_or_else(|| "id".to_string());
     println!("{}", st.name.to_string().bold().white());
 
     let mut groups: BTreeMap<String, Vec<serde_json::Map<String, serde_json::Value>>> =
       BTreeMap::new();
 
     for inst_raw in &st.instances {
-      if let Ok(obj) = flexbuffers::from_slice::<serde_json::Map<String, serde_json::Value>>(inst_raw) {
+      if let Ok(obj) =
+        flexbuffers::from_slice::<serde_json::Map<String, serde_json::Value>>(inst_raw)
+      {
         let key = obj
           .get(&pk)
           .map(|v| v.to_string())
@@ -267,15 +277,23 @@ pub fn print_state(st: &StateSerialized) {
 
         groups.entry(key).or_default().push(obj);
       } else {
-        println!("  {} [binary data: {} bytes]", "●".cyan().bold(), inst_raw.len());
+        println!(
+          "  {} [binary data: {} bytes]",
+          "●".cyan().bold(),
+          inst_raw.len()
+        );
       }
     }
 
     if groups.is_empty() && !st.instances.is_empty() {
-        for inst_raw in &st.instances {
-            println!("  {} [binary payload: {} bytes]", "●".cyan().bold(), inst_raw.len());
-        }
-        return;
+      for inst_raw in &st.instances {
+        println!(
+          "  {} [binary payload: {} bytes]",
+          "●".cyan().bold(),
+          inst_raw.len()
+        );
+      }
+      return;
     }
 
     for (group_key, items) in groups {

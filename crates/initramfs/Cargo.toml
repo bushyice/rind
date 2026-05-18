@@ -1,0 +1,14 @@
+[package]
+name = "initramfs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/initramfs.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+rind-plugins = { path = "../plugins" }
+nix.workspace = true
+libc.workspace = true

@@ -5,7 +5,10 @@ fn tmp_path(tag: &str) -> std::path::PathBuf {
     .duration_since(std::time::UNIX_EPOCH)
     .expect("clock is before epoch")
     .as_nanos();
-  std::env::temp_dir().join(format!("rind-var-contract-{tag}-{}-{now}.toml", std::process::id()))
+  std::env::temp_dir().join(format!(
+    "rind-var-contract-{tag}-{}-{now}.toml",
+    std::process::id()
+  ))
 }
 
 #[test]
@@ -20,18 +23,20 @@ fn variable_heap_contract_persistence_and_precedence() {
   );
 
   unsafe { std::env::set_var("RIND_CONTRACT_MODE", "env") };
-  assert_eq!(heap.get("mode"), Some(toml::Value::String("env".to_string())));
+  assert_eq!(
+    heap.get("mode"),
+    Some(toml::Value::String("env".to_string()))
+  );
 
   heap.set("mode", toml::Value::String("explicit".to_string()));
   heap.save().expect("save should succeed");
 
   let mut loaded = VariableHeap::new(&path);
-  loaded
-    .register(
-      "mode",
-      Some(toml::Value::String("default".to_string())),
-      Some("RIND_CONTRACT_MODE".into()),
-    );
+  loaded.register(
+    "mode",
+    Some(toml::Value::String("default".to_string())),
+    Some("RIND_CONTRACT_MODE".into()),
+  );
   loaded.load().expect("load should succeed");
 
   assert_eq!(

@@ -38,6 +38,31 @@ impl BootEngine {
     start_runtime(log, self.orchestrators.runtimes(), notifier)
   }
 
+  pub fn pre_boot(
+    &mut self,
+    metadata: &mut MetadataRegistry,
+    instances: &mut InstanceMap,
+    resources: &mut Resources,
+    log: LogHandle,
+  ) -> Result<(), CoreError> {
+    let runtime = RuntimeHandle::mock(log);
+    for phase in [BootPhase::Start, BootPhase::End] {
+      let mut ctx = OrchestratorContext {
+        context_id: 0,
+        metadata,
+        instances,
+        runtime: &runtime,
+        resources,
+      };
+
+      self
+        .orchestrators
+        .run_cycle_phase(BootCycle::PreBoot, phase, &mut ctx)?;
+    }
+
+    Ok(())
+  }
+
   pub fn run(
     &mut self,
     metadata: &mut MetadataRegistry,

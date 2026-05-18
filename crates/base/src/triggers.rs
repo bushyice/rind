@@ -1,9 +1,6 @@
-use rind_ipc::{FlowMatchOperation, FlowPayload, FlowPayloadType};
-use crate::flow::{
-  FlowInstance, FlowItem, FlowType, StateMachine,
-  Trigger,
-};
+use crate::flow::{FlowInstance, FlowItem, FlowType, StateMachine, Trigger};
 use rind_core::prelude::*;
+use rind_ipc::{FlowMatchOperation, FlowPayload, FlowPayloadType};
 
 fn same_flow_name(a: &Ustr, b: &Ustr) -> bool {
   if a == b {

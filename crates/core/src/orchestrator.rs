@@ -8,6 +8,7 @@ use crate::runtime::{Runtime, RuntimeCommand, RuntimeHandle, RuntimePayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BootCycle {
+  PreBoot,
   Collect,
   Runtime,
   PostRuntime,

@@ -13,12 +13,14 @@ pub use rind_base as base;
 
 bitflags::bitflags! {
   #[repr(C)]
+  #[derive(Clone, Copy)]
   pub struct PluginCapability: u64 {
     const ORCHESTRATORS = 1 << 0;
     const RUNTIMES = 1 << 1;
     const IPC = 1 << 2;
     const EXTENSIONS = 1 << 3;
     const EXTENSIBLE = 1 << 4;
+    const INITRD = 1 << 5;
   }
 }
 
@@ -38,8 +40,8 @@ pub trait Plugin {
   fn register_extensions(&self, _extm: &mut ExtensionManager) {}
 }
 
-pub fn plugins_path() -> PathBuf {
-  if let Ok(path) = std::env::var("RIND_VARIABLES_PATH") {
+pub fn plugins_path(t: Option<&str>) -> PathBuf {
+  if let Ok(path) = std::env::var(t.unwrap_or("RIND_PLUGINS_PATH")) {
     PathBuf::from(path)
   } else {
     PathBuf::from("/usr/lib/rind/plugins/")
@@ -60,9 +62,16 @@ impl Deref for PluginCache {
   }
 }
 
+impl PluginCache {
+  pub fn has_cap(&self, cap: PluginCapability) -> bool {
+    self.meta.caps.contains(cap)
+  }
+}
+
 pub fn collect_plugins<P: AsRef<Path>>(
   path: P,
   log: &LogHandle,
+  cap: Option<PluginCapability>,
 ) -> Result<impl Iterator<Item = PluginCache>, CoreError> {
   // ignore error
   let _ = std::fs::create_dir_all(&path);
@@ -71,7 +80,7 @@ pub fn collect_plugins<P: AsRef<Path>>(
     .filter_map(|entry| entry.ok())
     .map(|entry| entry.path())
     .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("so"))
-    .filter_map(|path| unsafe {
+    .filter_map(move |path| unsafe {
       let lib = match Library::new(&path) {
         Ok(l) => l,
         Err(e) => {
@@ -113,10 +122,18 @@ pub fn collect_plugins<P: AsRef<Path>>(
       let lib = Box::leak(Box::new(lib));
 
       let plugin = Box::from_raw(get_plugin());
+      let meta = plugin.get_metadata();
+
+      if let Some(cap) = cap
+        && !meta.caps.contains(cap)
+      {
+        drop(plugin);
+        return None;
+      }
 
       let pc = PluginCache {
         lib,
-        meta: plugin.get_metadata(),
+        meta,
         plugin,
         ext,
       };
