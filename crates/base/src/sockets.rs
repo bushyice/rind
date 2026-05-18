@@ -684,6 +684,10 @@ pub fn handle_ipc_start_socket(
     false
   };
 
+  if sock.is_none() {
+    return Err(CoreError::not_found("socket", &payload.name));
+  }
+
   if !can_manage {
     return Err(CoreError::PermissionDenied);
   }

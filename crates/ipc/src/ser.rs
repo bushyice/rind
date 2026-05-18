@@ -114,6 +114,19 @@ impl SerializeSerialized for UnitItemsSerialized {
   }
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct PermissionSerialized {
+  pub name: Ustr,
+  pub id: u16,
+  pub group: Option<Ustr>,
+}
+
+impl SerializeSerialized for PermissionSerialized {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
+  }
+}
+
 pub trait SerializeSerialized {
   fn serialize(&self) -> Vec<u8>;
 }
@@ -161,11 +174,18 @@ impl IpcListComponent {
   }
 }
 
+pub fn flexbuf_string<V: AsRef<Vec<u8>>>(vec: V) -> String {
+  flexbuffers::Reader::get_root(vec.as_ref().as_slice())
+    .unwrap()
+    .as_str()
+    .to_string()
+}
+
 #[cfg(test)]
 mod tests {
 
   use super::{
-    ServiceSerialized, SerializeSerialized, UnitItemsSerialized, UnitSerialized, serialize_many,
+    SerializeSerialized, ServiceSerialized, UnitItemsSerialized, UnitSerialized, serialize_many,
   };
 
   #[test]
@@ -188,10 +208,7 @@ mod tests {
   fn invalid_input_falls_back() {
     let decoded = UnitSerialized::from_bytes(b"bad-json");
     assert_eq!(decoded.name, "".to_string().into());
-    assert_eq!(
-      UnitSerialized::many_from_bytes(b"bad-json").len(),
-      0
-    );
+    assert_eq!(UnitSerialized::many_from_bytes(b"bad-json").len(), 0);
   }
 
   #[test]

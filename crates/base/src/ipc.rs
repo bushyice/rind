@@ -1,7 +1,8 @@
 use rind_ipc::payloads::{ListPayload, SSPayload};
 use rind_ipc::recv::IpcSourcemap;
 use rind_ipc::ser::{
-  IpcListComponent, SerializeSerialized, SignalSerialized, SocketSerialized, StateSerialized,
+  IpcListComponent, IpcListPrinter, SerializeSerialized, SignalSerialized, SocketSerialized,
+  StateSerialized,
 };
 use rind_ipc::{Message, MessageType};
 use std::collections::HashMap;
@@ -16,7 +17,10 @@ use std::thread;
 use crate::flow::{Signal, State, StateMachine};
 use crate::mount::{Mount, is_mounted};
 use crate::permissions::PERM_LOGIN;
-use crate::scopes::ScopeStore;
+use crate::prelude::{
+  handle_ipc_grant_permission, handle_ipc_revoke_permission, handle_ipc_show_permission,
+};
+use crate::scopes::{ScopeInfo, ScopeStore};
 use crate::services::{Service, handle_ipc_start, handle_ipc_stop};
 use crate::sockets::{Socket, handle_ipc_start_socket, handle_ipc_stop_socket};
 use crate::user::{handle_ipc_login, handle_ipc_logout, handle_ipc_run0};
@@ -608,27 +612,35 @@ pub fn handle_ipc_destroy_scope(
   Ok(Message::ok("scope destroyed"))
 }
 
+impl SerializeSerialized for ScopeInfo {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(serde_json::json!({
+      "name": self.name,
+      "attributes": self.attributes,
+      "lifetime_state": self.lifetime_state,
+    }))
+    .unwrap_or_default()
+  }
+}
+
 pub fn handle_ipc_list_scopes(
   _msg: Message,
   _ctx: &mut RuntimeContext<'_>,
   _dispatch: &RuntimeDispatcher,
   _log: &LogHandle,
 ) -> Result<Message, CoreError> {
-  let list = ScopeStore::list_global()
-    .into_iter()
-    .map(|s| {
-      serde_json::json!({
-        "name": s.name,
-        "attributes": s.attributes,
-        "lifetime_state": s.lifetime_state,
-      })
-    })
-    .collect::<Vec<_>>();
+  let mut list = IpcListComponent::default().with_printer(IpcListPrinter {
+    r#type: "list".to_string(),
+    titles: vec!["Name".to_string(), "Attributes".to_string()],
+    keys: vec!["name".to_string(), "attributes".to_string()],
+    colors: vec!["blue".to_string(), "yellow".to_string()],
+  });
 
-  Ok(
-    Message::from_type(MessageType::Ok)
-      .with(flexbuffers::to_vec(&list).unwrap_or_default()),
-  )
+  for s in ScopeStore::list_global() {
+    list.add(s);
+  }
+
+  Ok(Message::from_type(MessageType::Ok).with(flexbuffers::to_vec(&list).unwrap_or_default()))
 }
 
 fn queue_lifecycle_action(
@@ -729,7 +741,21 @@ impl Runtime for IpcRuntime {
           handle_ipc_destroy_scope,
           PermissionExpr::All,
         );
-        ipcsrc.register("list_scopes", handle_ipc_list_scopes, PermissionExpr::All);
+        ipcsrc.register(
+          "show_permissions",
+          handle_ipc_show_permission,
+          PermissionExpr::All,
+        );
+        ipcsrc.register(
+          "grant_permission",
+          handle_ipc_grant_permission,
+          PermissionExpr::RootOnly,
+        );
+        ipcsrc.register(
+          "revoke_permission",
+          handle_ipc_revoke_permission,
+          PermissionExpr::RootOnly,
+        );
         ipcsrc.register("reload_units", handle_ipc_reload_units, PermissionExpr::All);
         ipcsrc.register("reboot", handle_ipc_reboot, PermissionExpr::All);
         ipcsrc.register("soft_reboot", handle_ipc_soft_reboot, PermissionExpr::All);

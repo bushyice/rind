@@ -325,9 +325,12 @@ impl<'a> InstanceRegistry<'a> {
 
     let last = entry
       .last_mut()
-      .expect("instance entry must contain one item");
+      .ok_or(CoreError::MissingInstances(name.to_string()))?;
 
-    Ok(last.downcast_mut().expect("instance type mismatch"))
+    Ok(last.downcast_mut().ok_or(CoreError::TypeMismatch {
+      path: "instance".into(),
+      expected: "unkown".into(),
+    })?)
   }
 
   pub fn instantiate_one<T>(
@@ -352,11 +355,14 @@ impl<'a> InstanceRegistry<'a> {
         self
           .instances
           .get_mut(&full_name)
-          .expect("instance entry exist")
+          .ok_or(CoreError::MissingInstances(name.to_string()))?
           .first_mut()
-          .expect("instance entry must contain one item")
+          .ok_or(CoreError::MissingInstances(name.to_string()))?
           .downcast_mut::<T>()
-          .expect("instance type mismatch"),
+          .ok_or(CoreError::TypeMismatch {
+            path: "instance".into(),
+            expected: "unkown".into(),
+          })?,
       )
     }
   }
@@ -378,7 +384,7 @@ impl<'a> InstanceRegistry<'a> {
         .get(&full_name)
         .ok_or(CoreError::MissingInstances(full_name.to_string()))?
         .iter()
-        .map(|x| x.downcast_ref::<T>().expect("instance type mismatch"))
+        .filter_map(|x| x.downcast_ref::<T>())
         .collect(),
     )
   }
@@ -400,7 +406,7 @@ impl<'a> InstanceRegistry<'a> {
         .remove(&full_name)
         .ok_or(CoreError::MissingInstances(full_name.to_string()))?
         .into_iter()
-        .map(|x| x.downcast::<T>().expect("instance type mismatch"))
+        .filter_map(|x| x.downcast::<T>().ok())
         .collect(),
     )
   }
@@ -415,7 +421,7 @@ impl<'a> InstanceRegistry<'a> {
   {
     self
       .uninstantiate::<T>(metadata, name)
-      .map(|mut x| x.pop().expect("instance entry unexpectedly empty"))
+      .map(|mut x| x.pop().ok_or(CoreError::Unknown))?
   }
 
   pub fn instances_mut<T>(
@@ -435,7 +441,7 @@ impl<'a> InstanceRegistry<'a> {
         .get_mut(&full_name)
         .ok_or(CoreError::MissingInstances(full_name.to_string()))?
         .iter_mut()
-        .map(|x| x.downcast_mut::<T>().expect("instance type mismatch"))
+        .filter_map(|x| x.downcast_mut::<T>())
         .collect(),
     )
   }
@@ -455,9 +461,12 @@ impl<'a> InstanceRegistry<'a> {
     Ok(
       instances
         .last()
-        .expect("instance entry unexpectedly empty")
+        .ok_or(CoreError::MissingInstances(full_name.to_string()))?
         .downcast_ref::<T>()
-        .expect("instance type mismatch"),
+        .ok_or(CoreError::TypeMismatch {
+          path: "instance".into(),
+          expected: "unkown".into(),
+        })?,
     )
   }
 
@@ -480,9 +489,12 @@ impl<'a> InstanceRegistry<'a> {
     Ok(
       instances
         .last_mut()
-        .expect("instance entry unexpectedly empty")
+        .ok_or(CoreError::MissingInstances(full_name.to_string()))?
         .downcast_mut::<T>()
-        .expect("instance type mismatch"),
+        .ok_or(CoreError::TypeMismatch {
+          path: "instance".into(),
+          expected: "unkown".into(),
+        })?,
     )
   }
 

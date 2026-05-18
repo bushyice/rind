@@ -73,17 +73,17 @@ fn socket_path(endpoint: &str) -> std::path::PathBuf {
 }
 
 pub struct UdsTransport {
-  clients: ClientMap,
-  started: std::collections::HashSet<Ustr>,
-  incoming_tx: std::sync::mpsc::Sender<(Ustr, TransportMessage, u32)>,
-  incoming_rx: Arc<Mutex<std::sync::mpsc::Receiver<(Ustr, TransportMessage, u32)>>>,
+  pub clients: ClientMap,
+  pub started: std::collections::HashSet<Ustr>,
+  pub incoming_tx: std::sync::mpsc::Sender<(Ustr, TransportMessage, u32)>,
+  pub incoming_rx: Arc<Mutex<std::sync::mpsc::Receiver<(Ustr, TransportMessage, u32)>>>,
 }
 
 pub struct TachyonTransport {
-  clients: Arc<Mutex<HashMap<Ustr, Vec<Arc<Mutex<Bus>>>>>>,
-  started: std::collections::HashSet<Ustr>,
-  incoming_tx: std::sync::mpsc::Sender<(Ustr, TransportMessage, u32)>,
-  incoming_rx: Arc<Mutex<std::sync::mpsc::Receiver<(Ustr, TransportMessage, u32)>>>,
+  pub clients: Arc<Mutex<HashMap<Ustr, Vec<Arc<Mutex<Bus>>>>>>,
+  pub started: std::collections::HashSet<Ustr>,
+  pub incoming_tx: std::sync::mpsc::Sender<(Ustr, TransportMessage, u32)>,
+  pub incoming_rx: Arc<Mutex<std::sync::mpsc::Receiver<(Ustr, TransportMessage, u32)>>>,
 }
 
 impl Default for TachyonTransport {
@@ -99,7 +99,8 @@ impl Default for TachyonTransport {
 }
 
 fn tachyon_path(endpoint: &str) -> String {
-  format!("/run/rind-tp/{}.tachyon", endpoint)
+  let base = std::env::var("RIND_TP_DIR").unwrap_or_else(|_| "/run/rind-tp".to_string());
+  format!("{}/{}.tachyon", base, endpoint)
 }
 
 impl Default for UdsTransport {
@@ -339,9 +340,9 @@ pub fn start_stdout_listener(
 }
 
 pub struct TransportRuntime {
-  uds: UdsTransport,
-  tachyon: TachyonTransport,
-  stdio_endpoints: std::collections::HashSet<Ustr>,
+  pub uds: UdsTransport,
+  pub tachyon: TachyonTransport,
+  pub stdio_endpoints: std::collections::HashSet<Ustr>,
 }
 
 impl TransportRuntime {

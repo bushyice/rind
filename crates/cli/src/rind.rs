@@ -15,12 +15,13 @@ use rind_core::logging::{LogEntry, LogLevel};
 use rind_ipc::{
   Message, MessageType,
   payloads::{
-    ListPayload, LogoutPayload, Run0AuthPayload, SSPayload, ScopeCreatePayload,
+    ListPayload, LogoutPayload, PermissionPayload, Run0AuthPayload, SSPayload, ScopeCreatePayload,
     ScopeDestroyPayload,
   },
   send::send_message,
   ser::{
     ServiceSerialized, SocketSerialized, StateSerialized, UnitItemsSerialized, UnitSerialized,
+    flexbuf_string,
   },
 };
 
@@ -144,6 +145,11 @@ enum Commands {
     scope: Option<String>,
   },
 
+  Permission {
+    #[command(subcommand)]
+    action: PermissionCommands,
+  },
+
   Invoke {
     #[arg(name = "NAME")]
     name: String,
@@ -162,6 +168,36 @@ enum Commands {
   SoftReboot,
   Reboot,
   Shutdown,
+}
+
+#[derive(clap::Subcommand)]
+enum PermissionCommands {
+  Grant {
+    #[arg(name = "SUBJECT")]
+    subject: String,
+
+    #[arg(name = "PERMISSION")]
+    permission: String,
+
+    #[arg(short = 'g', long)]
+    group: bool,
+  },
+  Revoke {
+    #[arg(name = "SUBJECT")]
+    subject: String,
+
+    #[arg(name = "PERMISSION")]
+    permission: String,
+
+    #[arg(short = 'g', long)]
+    group: bool,
+  },
+  Show {
+    #[arg(long)]
+    user: Option<String>,
+    #[arg(long)]
+    group: Option<String>,
+  },
 }
 
 #[derive(clap::Subcommand)]
@@ -385,7 +421,7 @@ pub fn handle_message(message: Message) {
         message
           .payload
           .as_ref()
-          .map(|p| String::from_utf8_lossy(p).to_string())
+          .map(|p| flexbuf_string(p))
           .unwrap_or_else(|| "ok".to_string())
       );
     }
@@ -396,7 +432,7 @@ pub fn handle_message(message: Message) {
         message
           .payload
           .as_ref()
-          .map(|p| String::from_utf8_lossy(p).to_string())
+          .map(|p| flexbuf_string(p))
           .unwrap_or_else(|| "unknown error".to_string())
       )
     }
@@ -422,7 +458,9 @@ fn parse_scope_attrs(attrs: &[String]) -> Result<HashMap<String, String>, String
     };
     let key = k.trim();
     if key.is_empty() {
-      return Err(format!("invalid --attr value '{attr}', key cannot be empty"));
+      return Err(format!(
+        "invalid --attr value '{attr}', key cannot be empty"
+      ));
     }
     out.insert(key.to_string(), v.trim().to_string());
   }
@@ -574,6 +612,11 @@ fn main() {
         r#type = Some("netiface".to_string());
       }
 
+      if matches!(result.r#type, MessageType::Error) {
+        handle_message(result);
+        return;
+      }
+
       if unit {
         print::print_unit(
           &name,
@@ -587,6 +630,24 @@ fn main() {
             .parse_payload::<ServiceSerialized>()
             .expect("Failed to parse"),
         );
+
+        let entries = read_entries_once(
+          &PathBuf::from("/var/log/rind"),
+          &LogQuery {
+            level: None,
+            target: None,
+            message: None,
+            since: None,
+            fields: vec![("service".to_string(), name.clone())],
+          },
+          10,
+        );
+        for entry in &entries {
+          if let Err(err) = write_log_entry(&mut OutputSink::stdout(), entry) {
+            report_error("logs print failed", err);
+            return;
+          }
+        }
       } else if state {
         print::print_state(
           &result
@@ -607,7 +668,10 @@ fn main() {
         if let Ok(list) = result.parse_payload::<rind_ipc::ser::IpcListComponent>() {
           print::print_ipc_list(&list);
         } else {
-          println!("{}", String::from_utf8_lossy(&result.payload.unwrap_or_default()));
+          println!(
+            "{}",
+            String::from_utf8_lossy(&result.payload.unwrap_or_default())
+          );
         }
       } else {
         print::print_units(
@@ -668,7 +732,78 @@ fn main() {
         handle_send!("destroy_scope", &ScopeDestroyPayload { scope: name });
       }
       ScopeCommands::List => {
-        handle_send!("list_scopes", &());
+        let result = send_msg!("list_scopes", Vec::new()).expect("Failed to send message");
+
+        if let Ok(list) = result.parse_payload::<rind_ipc::ser::IpcListComponent>() {
+          print::print_ipc_list(&list);
+        } else {
+          println!(
+            "{}",
+            String::from_utf8_lossy(&result.payload.unwrap_or_default())
+          );
+        }
+      }
+    },
+    Commands::Permission { action } => match action {
+      PermissionCommands::Grant {
+        subject,
+        permission,
+        group,
+      } => {
+        handle_send!(
+          "grant_permission",
+          &PermissionPayload {
+            group,
+            permission,
+            subject
+          }
+        );
+      }
+      PermissionCommands::Revoke {
+        subject,
+        permission,
+        group,
+      } => {
+        handle_send!(
+          "revoke_permission",
+          &PermissionPayload {
+            group,
+            permission,
+            subject
+          }
+        );
+      }
+      PermissionCommands::Show { user, group } => {
+        let result = send_msg!(
+          "show_permissions",
+          if let Some(user) = user {
+            flexbuffers::to_vec(PermissionPayload {
+              subject: user,
+              group: false,
+              permission: String::new(),
+            })
+            .unwrap()
+          } else if let Some(group) = group {
+            flexbuffers::to_vec(PermissionPayload {
+              subject: group,
+              group: true,
+              permission: String::new(),
+            })
+            .unwrap()
+          } else {
+            Vec::new()
+          }
+        )
+        .expect("Failed to send message");
+
+        if let Ok(list) = result.parse_payload::<rind_ipc::ser::IpcListComponent>() {
+          print::print_ipc_list(&list);
+        } else {
+          println!(
+            "{}",
+            String::from_utf8_lossy(&result.payload.unwrap_or_default())
+          );
+        }
       }
     },
     Commands::ReloadUnits => {

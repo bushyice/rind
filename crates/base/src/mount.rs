@@ -206,7 +206,7 @@ impl Runtime for MountRuntime {
           .registry
           .metadata
           .find::<Mount>("*", &name)
-          .ok_or(CoreError::MissingSchema { name })?;
+          .ok_or(CoreError::MissingSchema(name))?;
         if !is_mounted(metadata.target.as_str())? {
           self.mount_target(metadata, log, dispatch, &mut ctx.registry)?;
         }
@@ -217,7 +217,7 @@ impl Runtime for MountRuntime {
           .registry
           .metadata
           .find::<Mount>("*", &name)
-          .ok_or(CoreError::MissingSchema { name })?;
+          .ok_or(CoreError::MissingSchema(name))?;
         self.umount_target(metadata);
       }
       "mount_all" => {

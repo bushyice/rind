@@ -6,12 +6,16 @@ use rind_base::{
   services::{Service, ServiceRuntime},
   sockets::{Socket, SocketRegistry, SocketRuntime},
   timers::{Timer, TimerRuntime},
+  transport::{TransportProtocol, TransportRuntime},
   variables::VariableHeap,
 };
 use rind_core::prelude::{
   InstanceRegistry, LogConfig, Metadata, MetadataRegistry, Resources, RuntimeCommand,
   RuntimeHandle, RuntimePayload, ScopeBuilder, StatePersistence, Ustr, start_logger, start_runtime,
 };
+use rind_ipc::{FlowPayload, TransportMessage, TransportMessageAction, TransportMessageType};
+use std::time::Duration;
+use tachyon_ipc::Bus;
 
 fn temp_path(tag: &str) -> PathBuf {
   let now = std::time::SystemTime::now()
@@ -661,4 +665,121 @@ fn race_like_dispatch_churn_keeps_runtime_consistent() {
     .expect("post-churn assertions should succeed");
 
   let _ = runtime.send(RuntimeCommand::Stop);
+}
+
+#[test]
+fn test_tachyon_transport_roundtrip() {
+  let tmp_dir = std::env::temp_dir().join("rind-tachyon-test");
+  let _ = std::fs::create_dir_all(&tmp_dir);
+  unsafe {
+    std::env::set_var("RIND_TP_DIR", tmp_dir.to_str().unwrap());
+  }
+
+  let mut runtime = TransportRuntime::default();
+  let endpoint = "test_endpoint";
+
+  // Setup listener
+  runtime.tachyon.setup(endpoint, None, None, None);
+
+  // Wait for listener thread to start Bus::listen
+  std::thread::sleep(Duration::from_millis(100));
+
+  let path = format!("{}/{}.tachyon", tmp_dir.to_str().unwrap(), endpoint);
+
+  let mut bus = None;
+  for _ in 0..20 {
+    match Bus::connect(&path) {
+      Ok(b) => {
+        bus = Some(b);
+        break;
+      }
+      Err(_) => std::thread::sleep(Duration::from_millis(50)),
+    }
+  }
+  let bus = bus.expect("failed to connect to tachyon bus after retries");
+
+  let msg = TransportMessage {
+    r#type: TransportMessageType::Signal,
+    name: Some(Ustr::from("test:signal")),
+    payload: Some(FlowPayload::String("hello tachyon".to_string())),
+    action: TransportMessageAction::Set,
+    branch: None,
+  };
+
+  let frame = flexbuffers::to_vec(&msg).expect("failed to serialize message");
+  bus
+    .send(&frame, 0)
+    .expect("failed to send message via tachyon bus");
+
+  // Wait for transport to receive and process
+  std::thread::sleep(Duration::from_millis(200));
+
+  let rx = runtime.tachyon.incoming_rx.lock().unwrap();
+  let received = rx
+    .try_recv()
+    .expect("no message received on tachyon transport");
+
+  assert_eq!(received.0.as_str(), endpoint);
+  assert_eq!(received.1.name.unwrap().as_str(), "test:signal");
+  if let Some(FlowPayload::String(s)) = received.1.payload {
+    assert_eq!(s, "hello tachyon");
+  } else {
+    panic!("unexpected payload type");
+  }
+
+  let _ = std::fs::remove_dir_all(tmp_dir);
+}
+
+#[test]
+fn test_tachyon_multiple_messages() {
+  let tmp_dir = std::env::temp_dir().join("rind-tachyon-multi-test");
+  let _ = std::fs::create_dir_all(&tmp_dir);
+  unsafe {
+    std::env::set_var("RIND_TP_DIR", tmp_dir.to_str().unwrap());
+  }
+
+  let mut runtime = TransportRuntime::default();
+  let endpoint = "multi_endpoint";
+
+  runtime.tachyon.setup(endpoint, None, None, None);
+  std::thread::sleep(Duration::from_millis(100));
+
+  let path = format!("{}/{}.tachyon", tmp_dir.to_str().unwrap(), endpoint);
+
+  let mut bus = None;
+  for _ in 0..20 {
+    match Bus::connect(&path) {
+      Ok(b) => {
+        bus = Some(b);
+        break;
+      }
+      Err(_) => std::thread::sleep(Duration::from_millis(50)),
+    }
+  }
+  let bus = bus.expect("failed to connect to tachyon bus after retries");
+
+  for i in 0..10 {
+    let msg = TransportMessage {
+      r#type: TransportMessageType::Signal,
+      name: Some(Ustr::from(format!("test:signal:{}", i))),
+      payload: Some(FlowPayload::String(format!("msg {}", i))),
+      action: TransportMessageAction::Set,
+      branch: None,
+    };
+    let frame = flexbuffers::to_vec(&msg).unwrap();
+    bus.send(&frame, 0).unwrap();
+  }
+
+  std::thread::sleep(Duration::from_millis(500));
+
+  let rx = runtime.tachyon.incoming_rx.lock().unwrap();
+  for i in 0..10 {
+    let received = rx.try_recv().expect(&format!("message {} not received", i));
+    assert_eq!(
+      received.1.name.unwrap().as_str(),
+      format!("test:signal:{}", i)
+    );
+  }
+
+  let _ = std::fs::remove_dir_all(tmp_dir);
 }
