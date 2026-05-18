@@ -16,15 +16,15 @@ pub struct UnitSerialized {
 }
 
 impl UnitSerialized {
-  pub fn from_string(str: String) -> Self {
-    serde_json::from_str(&str).unwrap_or(Self {
+  pub fn from_bytes(data: &[u8]) -> Self {
+    flexbuffers::from_slice(data).unwrap_or(Self {
       name: String::new().into(),
       ..Default::default()
     })
   }
 
-  pub fn many_from_string(str: String) -> Vec<Self> {
-    serde_json::from_str(&str).unwrap_or_default()
+  pub fn many_from_bytes(data: &[u8]) -> Vec<Self> {
+    flexbuffers::from_slice(data).unwrap_or_default()
   }
 
   pub fn as_some(self) -> Option<Self> {
@@ -32,14 +32,14 @@ impl UnitSerialized {
   }
 }
 
-impl StringifySerialized for UnitSerialized {
-  fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl SerializeSerialized for UnitSerialized {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
-pub fn serialize_many<T: Serialize>(items: &Vec<T>) -> String {
-  serde_json::to_string(items).unwrap_or_default()
+pub fn serialize_many<T: Serialize>(items: &Vec<T>) -> Vec<u8> {
+  flexbuffers::to_vec(items).unwrap_or_default()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -53,8 +53,8 @@ pub struct ServiceSerialized {
 }
 
 impl ServiceSerialized {
-  pub fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+  pub fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
@@ -67,22 +67,22 @@ pub struct SocketSerialized {
   pub active: bool,
 }
 
-impl StringifySerialized for SocketSerialized {
-  fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl SerializeSerialized for SocketSerialized {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct StateSerialized {
   pub name: Ustr,
-  pub instances: Vec<serde_json::Value>,
+  pub instances: Vec<Vec<u8>>,
   pub keys: Vec<Ustr>,
 }
 
-impl StringifySerialized for StateSerialized {
-  fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl SerializeSerialized for StateSerialized {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
@@ -108,25 +108,25 @@ pub struct UnitItemsSerialized {
   pub signals: Vec<SignalSerialized>,
 }
 
-impl StringifySerialized for UnitItemsSerialized {
-  fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl SerializeSerialized for UnitItemsSerialized {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
-pub trait StringifySerialized {
-  fn stringify(&self) -> String;
+pub trait SerializeSerialized {
+  fn serialize(&self) -> Vec<u8>;
 }
 
-impl StringifySerialized for String {
-  fn stringify(&self) -> String {
-    self.clone()
+impl SerializeSerialized for String {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
-impl StringifySerialized for &str {
-  fn stringify(&self) -> String {
-    self.to_string()
+impl SerializeSerialized for &str {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
@@ -140,19 +140,19 @@ pub struct IpcListPrinter {
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct IpcListComponent {
-  pub components: Vec<String>,
+  pub components: Vec<Vec<u8>>,
   pub printer: Option<IpcListPrinter>,
 }
 
-impl StringifySerialized for IpcListComponent {
-  fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl SerializeSerialized for IpcListComponent {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
 impl IpcListComponent {
-  pub fn add(&mut self, item: impl StringifySerialized) {
-    self.components.push(item.stringify());
+  pub fn add(&mut self, item: impl SerializeSerialized) {
+    self.components.push(item.serialize());
   }
 
   pub fn with_printer(mut self, printer: IpcListPrinter) -> Self {
@@ -165,7 +165,7 @@ impl IpcListComponent {
 mod tests {
 
   use super::{
-    ServiceSerialized, StringifySerialized, UnitItemsSerialized, UnitSerialized, serialize_many,
+    ServiceSerialized, SerializeSerialized, UnitItemsSerialized, UnitSerialized, serialize_many,
   };
 
   #[test]
@@ -178,18 +178,18 @@ mod tests {
       mounted: 1,
       ..Default::default()
     };
-    let encoded = item.stringify();
-    let decoded = UnitSerialized::from_string(encoded);
+    let encoded = item.serialize();
+    let decoded = UnitSerialized::from_bytes(&encoded);
     assert_eq!(decoded.name, "u".to_string().into());
     assert_eq!(decoded.services, 2);
   }
 
   #[test]
   fn invalid_input_falls_back() {
-    let decoded = UnitSerialized::from_string("bad-json".to_string());
+    let decoded = UnitSerialized::from_bytes(b"bad-json");
     assert_eq!(decoded.name, "".to_string().into());
     assert_eq!(
-      UnitSerialized::many_from_string("bad-json".to_string()).len(),
+      UnitSerialized::many_from_bytes(b"bad-json").len(),
       0
     );
   }
@@ -212,6 +212,6 @@ mod tests {
       services,
       ..Default::default()
     };
-    assert!(!unit_items.stringify().is_empty());
+    assert!(!unit_items.serialize().is_empty());
   }
 }

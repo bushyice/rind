@@ -124,7 +124,7 @@ impl Executor for NaturalExecutor {
       .map(|s| s.fds.clone())
       .unwrap_or_default();
 
-    println!("{pre_exec_fds:?} {}", ctx.registry_key);
+    // println!("{pre_exec_fds:?} {}", ctx.registry_key);
 
     let ns_flags = ctx
       .service

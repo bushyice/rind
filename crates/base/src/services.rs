@@ -25,8 +25,9 @@ use crate::permissions::PERM_SYSTEM_SERVICES;
 use crate::prelude::trigger_events;
 use crate::scopes::ScopeStore;
 use crate::sockets::get_all_sockets;
-use crate::transport::{TransportMessage, TransportMethod, start_stdout_listener};
+use crate::transport::{TransportMethod, start_stdout_listener};
 use crate::variables::VariableHeap;
+use rind_ipc::TransportMessage;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RunOption {
@@ -670,12 +671,12 @@ impl ServiceRuntime {
           return Ok(Some(user));
         }
 
-    if let Some(source) = &service.metadata.user_source {
-        let user = self.resolve_user_from_source(source, branch_ctx, sm)?;
-        if let Some(user) = user {
-          return Ok(Some(user));
+        if let Some(source) = &service.metadata.user_source {
+          let user = self.resolve_user_from_source(source, branch_ctx, sm)?;
+          if let Some(user) = user {
+            return Ok(Some(user));
+          }
         }
-    }
 
         if let Some(user) = branch_ctx.and_then(|ctx| ctx.key.as_ref()) {
           return Ok(Some(user.clone()));
@@ -1735,12 +1736,13 @@ fn start_stdin_writer(
 
   std::thread::spawn(move || {
     while let Ok(msg) = rx.recv() {
-      let Ok(frame) = serde_json::to_string(&msg) else {
+      let Ok(payload) = flexbuffers::to_vec(&msg) else {
         continue;
       };
+      let len = (payload.len() as u32).to_be_bytes();
 
-      if std::io::Write::write_all(&mut stdin, frame.as_bytes()).is_err()
-        || std::io::Write::write_all(&mut stdin, b"\n").is_err()
+      if std::io::Write::write_all(&mut stdin, &len).is_err()
+        || std::io::Write::write_all(&mut stdin, &payload).is_err()
         || std::io::Write::flush(&mut stdin).is_err()
       {
         let mut fields = HashMap::new();

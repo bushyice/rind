@@ -24,6 +24,7 @@ use rind_ipc::{
   },
 };
 
+use flexbuffers;
 mod macros;
 mod print;
 
@@ -344,7 +345,7 @@ pub fn handle_run0_message(args: Vec<String>, message: Message) {
       };
       handle_run0_message(
         args,
-        match send_message(Message::from("run0").with(serde_json::to_string(&payload).unwrap())) {
+        match send_message(Message::from("run0").with(flexbuffers::to_vec(&payload).unwrap())) {
           Ok(m) => m,
           Err(e) => {
             report_error("run0 request failed", e);
@@ -381,7 +382,11 @@ pub fn handle_message(message: Message) {
       println!(
         "{} {}",
         "Ok".on_green().black(),
-        message.payload.unwrap_or_else(|| "ok".to_string())
+        message
+          .payload
+          .as_ref()
+          .map(|p| String::from_utf8_lossy(p).to_string())
+          .unwrap_or_else(|| "ok".to_string())
       );
     }
     MessageType::Error => {
@@ -390,6 +395,8 @@ pub fn handle_message(message: Message) {
         "Error".on_red().black(),
         message
           .payload
+          .as_ref()
+          .map(|p| String::from_utf8_lossy(p).to_string())
           .unwrap_or_else(|| "unknown error".to_string())
       )
     }
@@ -534,7 +541,7 @@ fn main() {
       let name = apply_scope_name(&name.unwrap_or_default(), scope.as_deref());
       let result = send_msg!(
         "list",
-        serde_json::to_string(&ListPayload {
+        flexbuffers::to_vec(&ListPayload {
           name: name.clone().into(),
           unit_type: if unit {
             "unit"
@@ -600,7 +607,7 @@ fn main() {
         if let Ok(list) = result.parse_payload::<rind_ipc::ser::IpcListComponent>() {
           print::print_ipc_list(&list);
         } else {
-          println!("{}", result.payload.unwrap_or_default());
+          println!("{}", String::from_utf8_lossy(&result.payload.unwrap_or_default()));
         }
       } else {
         print::print_units(
@@ -615,25 +622,21 @@ fn main() {
       payload,
       scope,
     } => {
-      let payload = if let Some(scope) = scope.filter(|s| !s.is_empty() && s != "static") {
-        match serde_json::from_str::<serde_json::Value>(&payload) {
-          Ok(mut v) => {
-            if let Some(obj) = v.as_object_mut()
-              && let Some(name) = obj.get("name").and_then(|x| x.as_str())
-            {
-              obj.insert(
-                "name".to_string(),
-                serde_json::Value::String(apply_scope_name(name, Some(&scope))),
-              );
-            }
-            serde_json::to_string(&v).unwrap_or(payload)
-          }
-          Err(_) => payload,
+      let mut v: serde_json::Value =
+        serde_json::from_str(&payload).unwrap_or(serde_json::Value::String(payload));
+
+      if let Some(scope) = scope.filter(|s| !s.is_empty() && s != "static") {
+        if let Some(obj) = v.as_object_mut()
+          && let Some(n) = obj.get("name").and_then(|x| x.as_str())
+        {
+          obj.insert(
+            "name".to_string(),
+            serde_json::Value::String(apply_scope_name(n, Some(&scope))),
+          );
         }
-      } else {
-        payload
-      };
-      handle_send_raw!(name.as_str(), payload);
+      }
+
+      handle_send_raw!(name.as_str(), flexbuffers::to_vec(&v).unwrap());
     }
     Commands::Scope { action } => match action {
       ScopeCommands::Create {
@@ -665,20 +668,20 @@ fn main() {
         handle_send!("destroy_scope", &ScopeDestroyPayload { scope: name });
       }
       ScopeCommands::List => {
-        handle_send_raw!("list_scopes", "{}".to_string());
+        handle_send!("list_scopes", &());
       }
     },
     Commands::ReloadUnits => {
-      handle_send_raw!("reload_units", "{}".to_string());
+      handle_send!("reload_units", &());
     }
     Commands::SoftReboot => {
-      handle_send_raw!("soft_reboot", "{}".to_string());
+      handle_send!("soft_reboot", &());
     }
     Commands::Reboot => {
-      handle_send_raw!("reboot", "{}".to_string());
+      handle_send!("reboot", &());
     }
     Commands::Shutdown => {
-      handle_send_raw!("shutdown", "{}".to_string());
+      handle_send!("shutdown", &());
     }
     Commands::Start {
       name,

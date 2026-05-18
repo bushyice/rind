@@ -17,6 +17,9 @@ kanban-plugin: board
 	
 	**e.g**:
 	- NixShellEntry: Resolves `flake.nix`, provides with the nix provider to download and return from `/nix/store` before it finally just passing it to default spawner.
+- [ ] **Remote Executors**: Executors that connect to a remote to spawn and manage services.
+- [ ] **initrd**
+- [ ] **telemetry**
 
 
 ## Doing

@@ -1,11 +1,10 @@
 use rind_ipc::payloads::{ListPayload, SSPayload};
 use rind_ipc::recv::IpcSourcemap;
 use rind_ipc::ser::{
-  IpcListComponent, SignalSerialized, SocketSerialized, StateSerialized, StringifySerialized,
+  IpcListComponent, SerializeSerialized, SignalSerialized, SocketSerialized, StateSerialized,
 };
 use rind_ipc::{Message, MessageType};
 use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 
@@ -183,7 +182,9 @@ fn build_ipc_list_response(
                   .get(&Ustr::from(format!("{}:{}", payload.name, st.name)))
               })
               .map_or(Default::default(), |x| {
-                x.iter().map(|x| x.payload.to_json()).collect()
+                x.iter()
+                  .map(|x| flexbuffers::to_vec(&x.payload.to_json()).unwrap_or_default())
+                  .collect()
               }),
             keys: st.branch.clone().unwrap_or_default(),
           })
@@ -195,7 +196,7 @@ fn build_ipc_list_response(
           })
           .collect(),
       }
-      .stringify(),
+      .serialize(),
     )
   } else if payload.unit_type == "service" {
     let Some(service_meta) = ctx
@@ -232,7 +233,7 @@ fn build_ipc_list_response(
           .map(|x| x.exec.clone())
           .collect(),
       }
-      .stringify(),
+      .serialize(),
     )
   } else if payload.unit_type == "socket" {
     let Some(sock_meta) = ctx
@@ -259,7 +260,7 @@ fn build_ipc_list_response(
         triggers: sock_meta.trigger.as_ref().map_or(0, |x| x.len()),
         r#type: format!("{:?}", sock_meta.r#type).to_ustr(),
       }
-      .stringify(),
+      .serialize(),
     )
   } else if payload.unit_type == "state" && !payload.name.is_empty() {
     let name_ustr = Ustr::from(payload.name.as_str());
@@ -280,7 +281,9 @@ fn build_ipc_list_response(
       StateSerialized {
         name: payload.name,
         instances: instances.map_or(Default::default(), |x| {
-          x.iter().map(|x| x.payload.to_json()).collect()
+          x.iter()
+            .map(|x| flexbuffers::to_vec(&x.payload.to_json()).unwrap_or_default())
+            .collect()
         }),
         keys: if let Some(branches) = branches {
           branches.clone()
@@ -288,13 +291,13 @@ fn build_ipc_list_response(
           Default::default()
         },
       }
-      .stringify(),
+      .serialize(),
     )
   } else if payload.unit_type == "state" {
     let states = &sm.states;
 
     Message::from_type(MessageType::Ok).with(
-      serde_json::to_string(
+      flexbuffers::to_vec(
         &states
           .iter()
           .filter_map(|(name, inst)| {
@@ -302,7 +305,10 @@ fn build_ipc_list_response(
             let branches = def.branch.as_ref()?;
             Some(StateSerialized {
               name: name.clone(),
-              instances: inst.iter().map(|x| x.payload.to_json()).collect(),
+              instances: inst
+                .iter()
+                .map(|x| flexbuffers::to_vec(&x.payload.to_json()).unwrap_or_default())
+                .collect(),
               keys: branches.clone(),
             })
           })
@@ -432,7 +438,7 @@ fn build_ipc_list_response(
       .dispatch(None, None, Some(&mut ctx.registry))?
       .downcast::<IpcListComponent>()
       .map_err(|_| CoreError::Unknown)?;
-    Message::from_type(MessageType::Ok).with(msg.stringify())
+    Message::from_type(MessageType::Ok).with(msg.serialize())
   })
 }
 
@@ -448,7 +454,7 @@ pub fn handle_ipc_list(
   Ok(
     build_ipc_list_response(payload, ctx)
       .or_else(|x| {
-        Ok::<Message, Message>(Message::from_type(MessageType::Error).with(x.to_string()))
+        Ok::<Message, Message>(Message::from_type(MessageType::Error).with_string(x.to_string()))
       })
       .unwrap(),
   )
@@ -619,7 +625,10 @@ pub fn handle_ipc_list_scopes(
     })
     .collect::<Vec<_>>();
 
-  Ok(Message::from_type(MessageType::Ok).with(serde_json::to_string(&list).unwrap_or_default()))
+  Ok(
+    Message::from_type(MessageType::Ok)
+      .with(flexbuffers::to_vec(&list).unwrap_or_default()),
+  )
 }
 
 fn queue_lifecycle_action(
@@ -782,23 +791,7 @@ fn handle_client_connection(
 ) {
   let cred = get_peer_cred_stream(&stream).expect("failed to get cred");
   loop {
-    let mut len_buf = [0u8; 4];
-    if stream.read_exact(&mut len_buf).is_err() {
-      break;
-    }
-    let len = u32::from_be_bytes(len_buf) as usize;
-
-    let mut buf = vec![0u8; len];
-    if stream.read_exact(&mut buf).is_err() {
-      break;
-    }
-
-    let raw = match String::from_utf8(buf) {
-      Ok(s) => s,
-      Err(_) => continue,
-    };
-
-    let msg: Message = match serde_json::from_str::<Message>(&raw) {
+    let msg = match Message::read_signed(&mut stream) {
       Ok(m) => {
         if cred.uid == 0 && m.from_uid.is_some() {
           m
@@ -806,7 +799,7 @@ fn handle_client_connection(
           m.from_gid(cred.gid).from_uid(cred.uid).from_pid(cred.pid)
         }
       }
-      Err(_) => continue,
+      Err(_) => break,
     };
 
     let (reply_tx, reply_rx) = mpsc::channel::<Message>();
@@ -822,13 +815,7 @@ fn handle_client_connection(
       Err(_) => break,
     };
 
-    let resp_str = response.as_string().into_bytes();
-    let resp_len = (resp_str.len() as u32).to_be_bytes();
-
-    if stream.write_all(&resp_len).is_err() {
-      break;
-    }
-    if stream.write_all(&resp_str).is_err() {
+    if response.write_signed(&mut stream).is_err() {
       break;
     }
   }
@@ -850,7 +837,7 @@ fn handle_ipc_message(
 
   let Some(source) = ipcsrc_shared.message(&msg.action) else {
     return Message::from_type(MessageType::Error)
-      .with(format!("Message handler not found: {:?}", msg.action));
+      .with_string(format!("Message handler not found: {:?}", msg.action));
   };
 
   drop(ipcsrc_shared);
@@ -858,7 +845,7 @@ fn handle_ipc_message(
   if !matches!(&source.perms, PermissionExpr::All)
     && !pm.user_check(msg.from_uid.unwrap_or(0), &source.perms)
   {
-    return Message::from_type(MessageType::Error).with(format!("Permission Denied"));
+    return Message::from_type(MessageType::Error).with_string(format!("Permission Denied"));
   }
 
   let mut fields = HashMap::new();
@@ -867,6 +854,8 @@ fn handle_ipc_message(
 
   match (source.handler)(msg, ctx, dispatch, log) {
     Ok(resp) => resp,
-    Err(e) => Message::from_type(MessageType::Error).with(format!("IPC handler failed: {e}")),
+    Err(e) => {
+      Message::from_type(MessageType::Error).with_string(format!("IPC handler failed: {e}"))
+    }
   }
 }

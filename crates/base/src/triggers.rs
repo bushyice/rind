@@ -1,5 +1,6 @@
+use rind_ipc::{FlowMatchOperation, FlowPayload, FlowPayloadType};
 use crate::flow::{
-  FlowInstance, FlowItem, FlowMatchOperation, FlowPayload, FlowPayloadType, FlowType, StateMachine,
+  FlowInstance, FlowItem, FlowType, StateMachine,
   Trigger,
 };
 use rind_core::prelude::*;

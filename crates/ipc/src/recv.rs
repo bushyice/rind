@@ -27,18 +27,10 @@ pub fn recv_message(mut stream: UnixStream, handle_client: ClientHandler) {
       break;
     }
 
-    let raw = match String::from_utf8(buf) {
-      Ok(s) => s,
-      Err(e) => {
-        eprintln!("utf8 error: {e}");
-        continue;
-      }
-    };
-
-    let msg: Message = match serde_json::from_str(&raw) {
+    let msg: Message = match flexbuffers::from_slice(&buf) {
       Ok(m) => m,
       Err(e) => {
-        eprintln!("json parse error: {e}");
+        eprintln!("flexbuffers parse error: {e}");
         continue;
       }
     };
@@ -49,7 +41,7 @@ pub fn recv_message(mut stream: UnixStream, handle_client: ClientHandler) {
       Err(err) => Message::err(format!("handler error: {err}")),
     };
 
-    let resp = response.as_string().into_bytes();
+    let resp = response.as_bytes();
     let len = (resp.len() as u32).to_be_bytes();
 
     if let Err(e) = stream.write_all(&len) {

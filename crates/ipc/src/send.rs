@@ -1,9 +1,8 @@
-use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 
 use libc::{geteuid, getgid, getpid, getuid};
-use rind_core::error::CoreResult;
+use rind_core::error::{CoreError, CoreResult};
 
 use crate::Message;
 
@@ -24,18 +23,9 @@ pub fn send_message(mut msg: Message) -> CoreResult<Message> {
       .from_pid(unsafe { getpid() });
   };
 
-  let payload = serde_json::to_vec(&msg)?;
-  let len = (payload.len() as u32).to_be_bytes();
+  msg
+    .write_signed(&mut stream)
+    .map_err(|e| CoreError::Custom(e.to_string()))?;
 
-  stream.write_all(&len)?;
-  stream.write_all(&payload)?;
-
-  let mut len_buf = [0u8; 4];
-  stream.read_exact(&mut len_buf)?;
-  let len = u32::from_be_bytes(len_buf) as usize;
-
-  let mut buf = vec![0u8; len];
-  stream.read_exact(&mut buf)?;
-
-  Ok(serde_json::from_slice(&buf)?)
+  Ok(Message::read_signed(&mut stream).map_err(|e| CoreError::Custom(e.to_string()))?)
 }

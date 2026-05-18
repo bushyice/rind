@@ -104,7 +104,7 @@ restart = false
 
   let response = send_message(
     Message::from_action("start")
-      .with(serde_json::to_string(&payload).expect("payload should serialize")),
+      .with(flexbuffers::to_vec(payload).expect("couldn't serialize payload")),
   )
   .expect("ipc start message should succeed");
 

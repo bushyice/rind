@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use rind_core::prelude::*;
+pub use rind_ipc::{FlowJson, FlowMatchOperation, FlowPayload, FlowPayloadType};
 
 use crate::transport::TransportMethod;
 use crate::triggers::{
@@ -48,17 +49,6 @@ impl FlowItem {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(untagged)]
-pub enum FlowMatchOperation {
-  Eq(Ustr),
-  Options {
-    binary: Option<bool>,
-    contains: Option<Ustr>,
-    r#as: Option<serde_json::Value>,
-  },
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Trigger {
   pub script: Option<Ustr>,
   pub exec: Option<Ustr>,
@@ -80,95 +70,7 @@ pub enum FlowType {
   State,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct FlowJson(pub String);
-
-impl From<String> for FlowJson {
-  fn from(value: String) -> Self {
-    Self(value)
-  }
-}
-
-impl FlowJson {
-  pub fn into_json(&self) -> serde_json::Value {
-    serde_json::from_str(&self.0).unwrap_or(serde_json::Value::Null)
-  }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum FlowPayload {
-  Json(FlowJson),
-  String(String),
-  Bytes(Vec<u8>),
-  None(bool),
-}
-
-impl FlowPayload {
-  pub fn to_string_payload(&self) -> String {
-    match self {
-      FlowPayload::Json(v) => v.0.clone(),
-      FlowPayload::String(v) => v.clone(),
-      FlowPayload::Bytes(v) => String::from_utf8(v.clone()).unwrap_or_default(),
-      FlowPayload::None(_) => String::new(),
-    }
-  }
-
-  pub fn to_json(&self) -> serde_json::Value {
-    match self {
-      FlowPayload::Json(v) => v.into_json(),
-      FlowPayload::String(v) => serde_json::Value::String(v.clone()),
-      FlowPayload::Bytes(v) => serde_json::json!(v),
-      FlowPayload::None(_) => serde_json::Value::Null,
-    }
-  }
-
-  pub fn set_json(&mut self, key: String, value: serde_json::Value) {
-    match self {
-      FlowPayload::Json(v) => {
-        let mut json = v.into_json();
-        merge_json(&mut json, &serde_json::json!({ key: value }));
-        v.0 = json.to_string();
-      }
-      _ => {}
-    }
-  }
-
-  pub fn from_json(v: Option<serde_json::Value>) -> Self {
-    match v {
-      Some(serde_json::Value::Object(v)) => {
-        FlowPayload::Json(FlowJson(serde_json::Value::Object(v).to_string()))
-      }
-      Some(serde_json::Value::Array(v)) => {
-        FlowPayload::Json(FlowJson(serde_json::Value::Array(v).to_string()))
-      }
-      Some(serde_json::Value::String(v)) => FlowPayload::String(v),
-      Some(serde_json::Value::Null) | None => FlowPayload::None(false),
-      Some(v) => FlowPayload::String(v.to_string()),
-    }
-  }
-
-  pub fn get_json_field(&self, field: &str) -> Option<serde_json::Value> {
-    match self {
-      FlowPayload::Json(s) => s.into_json().get(field).cloned(),
-      _ => None,
-    }
-  }
-
-  pub fn get_json_field_as<T: serde::de::DeserializeOwned>(&self, field: &str) -> Option<T> {
-    match self {
-      FlowPayload::Json(s) => serde_json::from_value(s.into_json().get(field).cloned()?).ok(),
-      _ => None,
-    }
-  }
-
-  pub fn contains(&self, needle: &str) -> bool {
-    match self {
-      FlowPayload::String(s) => s.contains(needle),
-      FlowPayload::Json(s) => s.0.contains(needle),
-      _ => false,
-    }
-  }
-}
+// Redundant definitions removed
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FlowInstance {
@@ -201,15 +103,7 @@ impl From<&FlowInstance> for StateEntry {
   }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum FlowPayloadType {
-  #[default]
-  Json,
-  String,
-  Bytes,
-  None,
-}
+// Redundant FlowPayloadType removed
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]

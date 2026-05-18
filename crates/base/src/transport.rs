@@ -3,44 +3,20 @@
 // - probs more things i didn't think about
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex};
 
-use rind_core::prelude::*;
-use serde::{Deserialize, Serialize};
-
-use crate::flow::{FlowMatchOperation, FlowPayload, Signal, State};
+use crate::flow::{Signal, State};
 use crate::prelude::Service;
 use rind_core::notifier::Notifier;
-
-#[derive(Serialize, Deserialize, Copy, Clone)]
-#[serde(rename_all = "snake_case")]
-pub enum TransportMessageType {
-  Signal,
-  State,
-  Enquiry,
-  Response,
-}
-
-#[derive(Serialize, Deserialize, Default, PartialEq, Copy, Clone)]
-#[serde(rename_all = "snake_case")]
-pub enum TransportMessageAction {
-  #[default]
-  Set,
-  Remove,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct TransportMessage {
-  pub r#type: TransportMessageType,
-  pub payload: Option<FlowPayload>,
-  pub branch: Option<FlowMatchOperation>,
-  pub name: Option<Ustr>,
-  #[serde(default)]
-  pub action: TransportMessageAction,
-}
+use rind_core::prelude::*;
+pub use rind_ipc::{
+  FlowMatchOperation, FlowPayload, TransportMessage, TransportMessageAction, TransportMessageType,
+};
+use serde::{Deserialize, Serialize};
+use serde_json;
+use tachyon_ipc::Bus;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct TransportProtocolId(pub Ustr);
@@ -101,6 +77,29 @@ pub struct UdsTransport {
   started: std::collections::HashSet<Ustr>,
   incoming_tx: std::sync::mpsc::Sender<(Ustr, TransportMessage, u32)>,
   incoming_rx: Arc<Mutex<std::sync::mpsc::Receiver<(Ustr, TransportMessage, u32)>>>,
+}
+
+pub struct TachyonTransport {
+  clients: Arc<Mutex<HashMap<Ustr, Vec<Arc<Mutex<Bus>>>>>>,
+  started: std::collections::HashSet<Ustr>,
+  incoming_tx: std::sync::mpsc::Sender<(Ustr, TransportMessage, u32)>,
+  incoming_rx: Arc<Mutex<std::sync::mpsc::Receiver<(Ustr, TransportMessage, u32)>>>,
+}
+
+impl Default for TachyonTransport {
+  fn default() -> Self {
+    let (tx, rx) = std::sync::mpsc::channel();
+    Self {
+      clients: Arc::new(Mutex::new(HashMap::new())),
+      started: std::collections::HashSet::new(),
+      incoming_tx: tx,
+      incoming_rx: Arc::new(Mutex::new(rx)),
+    }
+  }
+}
+
+fn tachyon_path(endpoint: &str) -> String {
+  format!("/run/rind-tp/{}.tachyon", endpoint)
 }
 
 impl Default for UdsTransport {
@@ -177,25 +176,16 @@ impl UdsTransport {
         let ep_for_msg = ep.clone();
         let notifier = notifier.clone();
         std::thread::spawn(move || {
-          let mut reader = BufReader::new(stream);
-          let mut line = String::new();
+          let mut reader = stream;
           loop {
-            line.clear();
-            let Ok(read) = reader.read_line(&mut line) else {
-              break;
-            };
-            if read == 0 {
-              break;
-            }
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-              continue;
-            }
-            if let Ok(msg) = serde_json::from_str::<TransportMessage>(trimmed) {
-              let _ = tx.send((ep_for_msg.clone(), msg, uid));
-              if let Some(n) = &notifier {
-                let _ = n.notify();
+            match TransportMessage::read_signed(&mut reader) {
+              Ok(msg) => {
+                let _ = tx.send((ep_for_msg.clone(), msg, uid));
+                if let Some(n) = &notifier {
+                  let _ = n.notify();
+                }
               }
+              Err(_) => break,
             }
           }
         });
@@ -221,13 +211,94 @@ impl TransportProtocol for UdsTransport {
   }
 
   fn send_message(&self, endpoint: &str, msg: &TransportMessage) {
-    let frame = match serde_json::to_string(msg) {
-      Ok(s) => format!("{s}\n"),
-      Err(_) => return,
-    };
     if let Ok(mut locked) = self.clients.lock() {
-      if let Some(streams) = locked.get_mut(endpoint) {
-        streams.retain_mut(|stream| stream.write_all(frame.as_bytes()).is_ok());
+      if let Some(clients) = locked.get_mut(endpoint) {
+        clients.retain_mut(|client| msg.write_signed(client).is_ok());
+      }
+    }
+  }
+}
+
+impl TachyonTransport {
+  fn start_listener(
+    &self,
+    endpoint: Ustr,
+    _permissions: Option<Vec<Ustr>>,
+    _pm: Option<PermissionStore>,
+    notifier: Option<Notifier>,
+  ) {
+    let path = tachyon_path(&endpoint);
+    let clients = self.clients.clone();
+    let tx = self.incoming_tx.clone();
+    let ep = endpoint.clone();
+
+    std::thread::spawn(move || {
+      loop {
+        let bus = match Bus::listen(&path, 1 << 20) {
+          Ok(b) => Arc::new(Mutex::new(b)),
+          Err(e) => {
+            eprintln!("[transport] tachyon listen failed: {e:?}");
+            // Optional: sleep and retry
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            continue;
+          }
+        };
+
+        {
+          let mut locked = clients.lock().unwrap();
+          locked.entry(ep.clone()).or_default().push(bus.clone());
+        }
+
+        let tx = tx.clone();
+        let ep_inner = ep.clone();
+        let notifier = notifier.clone();
+        let bus_inner = bus.clone();
+        std::thread::spawn(move || {
+          loop {
+            // TODO: lock fix
+            let bus = bus_inner.lock().unwrap();
+            let guard = match bus.acquire_rx(10_000) {
+              Ok(g) => g,
+              Err(_) => break,
+            };
+            if let Ok(msg) = flexbuffers::from_slice::<TransportMessage>(guard.data()) {
+              let _ = tx.send((ep_inner.clone(), msg, 0));
+              if let Some(n) = &notifier {
+                let _ = n.notify();
+              }
+            }
+            let _ = guard.commit();
+          }
+        });
+      }
+    });
+  }
+}
+
+impl TransportProtocol for TachyonTransport {
+  fn setup(
+    &mut self,
+    endpoint: &str,
+    permissions: Option<Vec<Ustr>>,
+    pm: Option<PermissionStore>,
+    notifier: Option<Notifier>,
+  ) {
+    let endpoint = Ustr::from(endpoint);
+    if self.started.contains(&endpoint) {
+      return;
+    }
+    self.start_listener(endpoint.clone(), permissions, pm, notifier);
+    self.started.insert(endpoint);
+  }
+
+  fn send_message(&self, endpoint: &str, msg: &TransportMessage) {
+    let frame = flexbuffers::to_vec(msg).unwrap_or_default();
+    if let Ok(mut locked) = self.clients.lock() {
+      if let Some(buses) = locked.get_mut(endpoint) {
+        buses.retain(|bus| {
+          let locked_bus = bus.lock().unwrap();
+          locked_bus.send(&frame, 0).is_ok()
+        });
       }
     }
   }
@@ -240,29 +311,26 @@ pub fn start_stdout_listener(
   notifier: Option<Notifier>,
   index: usize,
 ) {
-  if let Some(stdout) = stdout {
+  if let Some(mut stdout) = stdout {
     std::thread::spawn(move || {
-      let reader = BufReader::new(stdout);
-      for line in reader.lines().flatten() {
-        if let Ok(msg) = serde_json::from_str::<TransportMessage>(&line) {
-          let _ = tx.send((service_name.clone(), msg, index));
-          if let Some(n) = &notifier {
-            let _ = n.notify();
+      loop {
+        match TransportMessage::read_signed(&mut stdout) {
+          Ok(msg) => {
+            let _ = tx.send((service_name.clone(), msg, index));
+            if let Some(n) = &notifier {
+              let _ = n.notify();
+            }
           }
-        } else {
-          let _ = tx.send((
-            service_name.clone(),
-            TransportMessage {
-              action: TransportMessageAction::Set,
-              name: Some("log".to_ustr()),
-              r#type: TransportMessageType::Response,
-              payload: Some(FlowPayload::String(line)),
-              branch: None,
-            },
-            index,
-          ));
-          if let Some(n) = &notifier {
-            let _ = n.notify();
+          Err(e) => {
+            let _ = tx.send((
+              service_name.clone(),
+              TransportMessage::log(format!("failed to recieve message: {e}")),
+              index,
+            ));
+            if let Some(n) = &notifier {
+              let _ = n.notify();
+            }
+            break;
           }
         }
       }
@@ -272,6 +340,7 @@ pub fn start_stdout_listener(
 
 pub struct TransportRuntime {
   uds: UdsTransport,
+  tachyon: TachyonTransport,
   stdio_endpoints: std::collections::HashSet<Ustr>,
 }
 
@@ -357,6 +426,7 @@ impl Default for TransportRuntime {
   fn default() -> Self {
     Self {
       uds: UdsTransport::default(),
+      tachyon: TachyonTransport::default(),
       stdio_endpoints: std::collections::HashSet::new(),
     }
   }
@@ -387,6 +457,17 @@ impl Runtime for TransportRuntime {
         let permissions = payload.get::<Vec<Ustr>>("permissions").ok();
 
         self.uds.setup(
+          endpoint.as_str(),
+          permissions,
+          Some(pm),
+          ctx.notifier.clone(),
+        );
+      }
+      "setup_tachyon" => {
+        let endpoint = payload.get::<Ustr>("endpoint")?;
+        let permissions = payload.get::<Vec<Ustr>>("permissions").ok();
+
+        self.tachyon.setup(
           endpoint.as_str(),
           permissions,
           Some(pm),
@@ -436,6 +517,7 @@ impl Runtime for TransportRuntime {
           );
         } else {
           self.uds.send_message(endpoint.as_str(), &msg);
+          self.tachyon.send_message(endpoint.as_str(), &msg);
         }
       }
       "ingest" => {
@@ -463,6 +545,11 @@ impl Runtime for TransportRuntime {
       }
       "drain_incoming" => {
         if let Ok(rx) = self.uds.incoming_rx.lock() {
+          while let Ok((endpoint, msg, uid)) = rx.try_recv() {
+            self.ingest(endpoint, msg, uid, dispatch, &pm, ctx)?;
+          }
+        }
+        if let Ok(rx) = self.tachyon.incoming_rx.lock() {
           while let Ok((endpoint, msg, uid)) = rx.try_recv() {
             self.ingest(endpoint, msg, uid, dispatch, &pm, ctx)?;
           }

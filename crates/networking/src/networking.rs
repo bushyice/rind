@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use rind_ipc::Message;
 use rind_ipc::payloads::{NetworkPayload, SSPayload};
 use rind_ipc::recv::IpcSourcemap;
-use rind_ipc::ser::{IpcListComponent, IpcListPrinter, StringifySerialized};
+use rind_ipc::ser::{IpcListComponent, IpcListPrinter, SerializeSerialized};
 use rind_plugins::prelude::serde_json::json;
 use rind_plugins::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -50,15 +50,15 @@ pub struct NetworkStatusSerialized {
   pub state: Ustr,
 }
 
-impl StringifySerialized for NetworkStatusSerialized {
-  fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl SerializeSerialized for NetworkStatusSerialized {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
-impl StringifySerialized for PortStateSerialized {
-  fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl SerializeSerialized for PortStateSerialized {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 

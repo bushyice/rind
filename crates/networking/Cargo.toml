@@ -12,3 +12,4 @@ crate-type = ["cdylib"]
 rind-plugins = { path = "../plugins" }
 rind-ipc = { path = "../ipc" }
 serde.workspace = true
+flexbuffers.workspace = true

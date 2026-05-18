@@ -87,11 +87,11 @@ impl Into<Message> for InvokeCommand {
         "unknown".into()
       },
       payload: if !self.payload.is_null() {
-        unsafe { CStr::from_ptr(self.payload) }
+        let s = unsafe { CStr::from_ptr(self.payload) }
           .to_str()
           .unwrap()
-          .to_string()
-          .into()
+          .to_string();
+        flexbuffers::to_vec(&s).ok()
       } else {
         None
       },

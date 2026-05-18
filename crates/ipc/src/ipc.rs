@@ -4,7 +4,14 @@ pub mod recv;
 pub mod send;
 pub mod ser;
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Default, Clone)]
+use rind_core::prelude::Ustr;
+pub const IPC_MAGIC: [u8; 4] = *b"RIND";
+pub const MAX_IPC_MESSAGE_SIZE: usize = 64 * 1024 * 1024; // 64MB
+
+use serde::{Deserialize, Serialize};
+use serde_json;
+
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub enum MessageType {
   Valid,
   Ok,
@@ -15,11 +22,200 @@ pub enum MessageType {
   Enquire,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct FlowJson(pub String);
+
+impl From<String> for FlowJson {
+  fn from(value: String) -> Self {
+    Self(value)
+  }
+}
+
+impl FlowJson {
+  pub fn into_json(&self) -> serde_json::Value {
+    serde_json::from_str(&self.0).unwrap_or(serde_json::Value::Null)
+  }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum FlowPayload {
+  Json(FlowJson),
+  String(String),
+  Bytes(Vec<u8>),
+  None(bool),
+}
+
+impl FlowPayload {
+  pub fn to_string_payload(&self) -> String {
+    match self {
+      FlowPayload::Json(v) => v.0.clone(),
+      FlowPayload::String(v) => v.clone(),
+      FlowPayload::Bytes(v) => String::from_utf8_lossy(v).to_string(),
+      FlowPayload::None(_) => String::new(),
+    }
+  }
+
+  pub fn from_json(v: Option<serde_json::Value>) -> Self {
+    match v {
+      Some(serde_json::Value::String(s)) => FlowPayload::String(s),
+      Some(serde_json::Value::Object(v)) => {
+        FlowPayload::Json(FlowJson(serde_json::Value::Object(v).to_string()))
+      }
+      Some(serde_json::Value::Array(v)) => {
+        FlowPayload::Json(FlowJson(serde_json::Value::Array(v).to_string()))
+      }
+      Some(serde_json::Value::Null) | None => FlowPayload::None(false),
+      Some(v) => FlowPayload::String(v.to_string()),
+    }
+  }
+
+  pub fn to_json(&self) -> serde_json::Value {
+    match self {
+      FlowPayload::Json(v) => v.into_json(),
+      FlowPayload::String(v) => serde_json::Value::String(v.clone()),
+      FlowPayload::Bytes(v) => serde_json::Value::String(String::from_utf8_lossy(v).to_string()),
+      FlowPayload::None(_) => serde_json::Value::Null,
+    }
+  }
+
+  pub fn get_json_field(&self, field: &str) -> Option<serde_json::Value> {
+    match self {
+      FlowPayload::Json(s) => s.into_json().get(field).cloned(),
+      _ => None,
+    }
+  }
+
+  pub fn get_json_field_as<T: serde::de::DeserializeOwned>(&self, field: &str) -> Option<T> {
+    match self {
+      FlowPayload::Json(s) => serde_json::from_value(s.into_json().get(field).cloned()?).ok(),
+      _ => None,
+    }
+  }
+
+  pub fn contains(&self, needle: &str) -> bool {
+    match self {
+      FlowPayload::String(s) => s.contains(needle),
+      FlowPayload::Json(s) => s.0.contains(needle),
+      _ => false,
+    }
+  }
+
+  pub fn set_json(&mut self, key: String, value: serde_json::Value) {
+    match self {
+      FlowPayload::Json(v) => {
+        let mut json = v.into_json();
+        if let Some(obj) = json.as_object_mut() {
+          obj.insert(key, value);
+          v.0 = json.to_string();
+        }
+      }
+      _ => {}
+    }
+  }
+}
+
+#[derive(Serialize, Deserialize, Copy, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportMessageType {
+  Signal,
+  State,
+  Enquiry,
+  Response,
+}
+
+#[derive(Serialize, Deserialize, Default, PartialEq, Copy, Clone)]
+#[serde(rename_all = "snake_case")]
+pub enum TransportMessageAction {
+  #[default]
+  Set,
+  Remove,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum FlowMatchOperation {
+  Eq(Ustr),
+  Options {
+    binary: Option<bool>,
+    contains: Option<Ustr>,
+    r#as: Option<serde_json::Value>,
+  },
+}
+
+#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowPayloadType {
+  #[default]
+  Json,
+  String,
+  Bytes,
+  None,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct TransportMessage {
+  pub r#type: TransportMessageType,
+  pub payload: Option<FlowPayload>,
+  pub branch: Option<FlowMatchOperation>,
+  pub name: Option<Ustr>,
+  #[serde(default)]
+  pub action: TransportMessageAction,
+}
+
+impl TransportMessage {
+  pub fn as_bytes(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
+  }
+
+  pub fn write_signed<W: std::io::Write>(&self, mut writer: W) -> std::io::Result<()> {
+    let buf = self.as_bytes();
+    writer.write_all(&crate::IPC_MAGIC)?;
+    writer.write_all(&(buf.len() as u32).to_be_bytes())?;
+    writer.write_all(&buf)?;
+    Ok(())
+  }
+
+  pub fn read_signed<R: std::io::Read>(mut reader: R) -> std::io::Result<Self> {
+    let mut magic = [0u8; 4];
+    reader.read_exact(&mut magic)?;
+    if magic != crate::IPC_MAGIC {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "Invalid IPC Magic",
+      ));
+    }
+    let mut len_buf = [0u8; 4];
+    reader.read_exact(&mut len_buf)?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+    if len > crate::MAX_IPC_MESSAGE_SIZE {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "IPC Message too large",
+      ));
+    }
+    let mut buf = vec![0u8; len];
+    reader.read_exact(&mut buf)?;
+    flexbuffers::from_slice(&buf)
+      .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
+  }
+
+  pub fn log<S: AsRef<str>>(message: S) -> Self {
+    TransportMessage {
+      action: TransportMessageAction::Set,
+      branch: None,
+      name: Some("log".into()),
+      payload: Some(FlowPayload::String(message.as_ref().to_string())),
+      r#type: TransportMessageType::Response,
+    }
+  }
+}
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Default, Clone)]
 pub struct Message {
   pub r#type: MessageType,
   pub action: String,
-  pub payload: Option<String>,
+  #[serde(with = "serde_bytes")]
+  pub payload: Option<Vec<u8>>,
   pub from_uid: Option<u32>,
   pub from_gid: Option<u32>,
   pub from_pid: Option<i32>,
@@ -38,9 +234,18 @@ impl Message {
     Self::default().r#as(action)
   }
 
-  pub fn with(mut self, payload: String) -> Self {
+  pub fn with_string(mut self, payload: String) -> Self {
+    self.payload = flexbuffers::to_vec(&payload).ok();
+    self
+  }
+
+  pub fn with(mut self, payload: Vec<u8>) -> Self {
     self.payload = Some(payload);
     self
+  }
+
+  pub fn with_slice<P: AsRef<[u8]>>(self, payload: P) -> Self {
+    self.with(payload.as_ref().to_vec())
   }
 
   pub fn r#as<T: AsRef<str>>(mut self, action: T) -> Self {
@@ -49,20 +254,57 @@ impl Message {
   }
 
   pub fn ok(payload: impl Into<String>) -> Self {
-    Self::from_type(MessageType::Ok).with(payload.into())
+    Self::from_type(MessageType::Ok).with_string(payload.into())
   }
 
   pub fn err(payload: impl Into<String>) -> Self {
-    Self::from_type(MessageType::Error).with(payload.into())
+    Self::from_type(MessageType::Error).with_string(payload.into())
   }
 
   pub fn with_vec<T: serde::Serialize>(mut self, payload: Vec<T>) -> Self {
-    self.payload = serde_json::to_string(&payload).ok();
+    self.payload = flexbuffers::to_vec(&payload).ok();
     self
   }
 
-  pub fn as_string(self) -> String {
-    serde_json::to_string(&self).unwrap_or_default()
+  pub fn with_obj<T: serde::Serialize>(mut self, payload: T) -> Self {
+    self.payload = flexbuffers::to_vec(&payload).ok();
+    self
+  }
+
+  pub fn as_bytes(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
+  }
+
+  pub fn write_signed<W: std::io::Write>(&self, mut writer: W) -> std::io::Result<()> {
+    let buf = self.as_bytes();
+    writer.write_all(&crate::IPC_MAGIC)?;
+    writer.write_all(&(buf.len() as u32).to_be_bytes())?;
+    writer.write_all(&buf)?;
+    Ok(())
+  }
+
+  pub fn read_signed<R: std::io::Read>(mut reader: R) -> std::io::Result<Self> {
+    let mut magic = [0u8; 4];
+    reader.read_exact(&mut magic)?;
+    if magic != crate::IPC_MAGIC {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "Invalid IPC Magic",
+      ));
+    }
+    let mut len_buf = [0u8; 4];
+    reader.read_exact(&mut len_buf)?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+    if len > crate::MAX_IPC_MESSAGE_SIZE {
+      return Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "IPC Message too large",
+      ));
+    }
+    let mut buf = vec![0u8; len];
+    reader.read_exact(&mut buf)?;
+    flexbuffers::from_slice(&buf)
+      .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))
   }
 
   pub fn parse_vec_payload<T: serde::de::DeserializeOwned>(&self) -> Option<Vec<T>> {
@@ -74,7 +316,7 @@ impl Message {
       return Err("Payload Not found".into());
     };
 
-    if let Ok(p) = match serde_json::from_str::<T>(payload) {
+    if let Ok(p) = match flexbuffers::from_slice::<T>(payload) {
       Err(e) => return Err(e.to_string()),
       Ok(e) => Ok::<T, String>(e),
     } {
@@ -112,12 +354,6 @@ impl From<&str> for Message {
   }
 }
 
-impl Into<serde_json::Value> for Message {
-  fn into(self) -> serde_json::Value {
-    serde_json::to_value(self).unwrap()
-  }
-}
-
 #[cfg(test)]
 mod tests {
   use super::{Message, MessageType};
@@ -125,13 +361,13 @@ mod tests {
   #[test]
   fn message_roundtrip_serialization_contract() {
     let msg = Message::from_action("service.start")
-      .with("{\"name\":\"units:demo\"}".to_string())
+      .with_slice(b"{\"name\":\"units:demo\"}")
       .from_uid(1000)
       .from_gid(1000)
       .from_pid(4242);
 
-    let raw = msg.clone().as_string();
-    let decoded: Message = serde_json::from_str(&raw).expect("message should deserialize");
+    let raw = msg.clone().as_bytes();
+    let decoded: Message = flexbuffers::from_slice(&raw).expect("message should deserialize");
     assert_eq!(decoded.action, msg.action);
     assert_eq!(decoded.payload, msg.payload);
     assert_eq!(decoded.from_uid, Some(1000));
@@ -144,7 +380,7 @@ mod tests {
     let missing = Message::from_type(MessageType::Valid);
     assert!(missing.parse_payload::<u32>().is_err());
 
-    let invalid = Message::from_action("x").with("not-json".to_string());
+    let invalid = Message::from_action("x").with_slice("not-json".to_string());
     assert!(invalid.parse_payload::<u32>().is_err());
   }
 
