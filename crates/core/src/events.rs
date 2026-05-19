@@ -39,8 +39,8 @@ pub struct LoginEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FlowEventType {
-  State,
-  Signal,
+  Facet,
+  Impulse,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -168,7 +168,7 @@ mod tests {
       name: rslvns!("test", "state").into(),
       payload: serde_json::json!({"id": 1}),
       action: FlowAction::Apply,
-      flow_type: FlowEventType::State,
+      flow_type: FlowEventType::Facet,
     });
 
     let event: FlowEvent = sub.try_recv().expect("should receive event");
@@ -201,7 +201,7 @@ mod tests {
       name: "x".into(),
       payload: serde_json::Value::Null,
       action: FlowAction::Revert,
-      flow_type: FlowEventType::Signal,
+      flow_type: FlowEventType::Impulse,
     });
 
     assert!(flow_sub.try_recv().is_some());

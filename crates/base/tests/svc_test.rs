@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use rind_base::{
-  flow::{FlowRuntime, StateMachine},
+  flow::{FacetGraph, FlowRuntime},
   prelude::ServiceState,
   reaper::ReaperRuntime,
   services::{Service, ServiceRuntime},
@@ -58,8 +58,8 @@ fn setup_test_runtime() -> (RuntimeHandle, MetadataRegistry, Resources, usize) {
       let mut registry = InstanceRegistry::new(&metadata, instances);
       let state_path = temp_path("state");
       let vars_path = temp_path("vars");
-      registry.singleton_or_insert_with(StateMachine::KEY, || {
-        StateMachine::from_persistence(StatePersistence::new(state_path))
+      registry.singleton_or_insert_with(FacetGraph::KEY, || {
+        FacetGraph::from_persistence(StatePersistence::new(state_path))
       });
       registry.singleton_or_insert_with(VariableHeap::KEY, || VariableHeap::new(vars_path));
       registry.singleton_or_insert_with(SocketRegistry::KEY, SocketRegistry::default);
@@ -408,10 +408,10 @@ fn test_user_service_resolution() {
 
   let mut units = Metadata::new("test")
     .of::<Service>("service")
-    .of::<rind_base::flow::State>("state");
+    .of::<rind_base::flow::FlowFacet>("facet");
 
   let source = r#"
-[[state]]
+[[facet]]
 name = "user_session"
 payload = "json"
 branch = ["session_id"]
@@ -419,7 +419,7 @@ branch = ["session_id"]
 [[service]]
 name = "user_worker"
 space = "user"
-user-source.state = "test:user_session"
+user-source.facet = "test:user_session"
 user-source.username-field = "user"
 run.exec = "/bin/sh"
 run.args = ["-c", "exit 0"]
@@ -430,7 +430,7 @@ restart = false
   metadata.insert_metadata(units);
   metadata.ensure_index_for_type::<Service>("test").unwrap();
   metadata
-    .ensure_index_for_type::<rind_base::flow::State>("test")
+    .ensure_index_for_type::<rind_base::flow::FlowFacet>("test")
     .unwrap();
 
   runtime
@@ -444,7 +444,7 @@ restart = false
   runtime
     .dispatch(
       "flow",
-      "set_state",
+      "set_facet",
       rind_base::flow::FlowRuntimePayload::new("test:user_session")
         .payload(serde_json::json!({"session_id": "s1", "user": "nonexistent_user_xyz"}))
         .into(),

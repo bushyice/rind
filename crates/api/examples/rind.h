@@ -39,6 +39,7 @@ typedef enum MessageType {
   MessageType_State = 1,
   MessageType_Enquiry = 2,
   MessageType_Response = 3,
+  MessageType_Unknown = 4,
 } MessageType;
 
 typedef enum MessageAction {
@@ -104,6 +105,8 @@ struct MessageContainer remove_state(const char *name, struct PayloadContainer *
 struct MessageContainer emit_signal(const char *name, struct PayloadContainer *payload);
 
 void send_message(const struct TransportProtocol *tp, struct MessageContainer message);
+
+struct MessageContainer enquiry_tp(const struct TransportProtocol *tp, struct MessageContainer message);
 
 struct InvokeCommand create_invoke(enum InvokeType type, const char *action, const char *payload);
 

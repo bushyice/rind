@@ -69,9 +69,9 @@ impl Runtime for MyRuntime {
   ) -> Result<Option<RuntimePayload>, CoreError> {
     let sm = &ctx
       .registry
-      .singleton::<StateMachine>(StateMachine::KEY)
+      .singleton::<FacetGraph>(FacetGraph::KEY)
       .ok_or_else(|| CoreError::InvalidState("state machine store not found".into()))?
-      .states;
+      .facets;
 
     // println!(
     //   "{:?}",
@@ -98,7 +98,7 @@ impl Runtime for MyRuntime {
 
     let _ = dispatch.dispatch(
       "flow",
-      "set_state",
+      "set_facet",
       FlowRuntimePayload::new("myplugin:state")
         .payload(serde_json::json!({
           "id": 0
@@ -117,7 +117,7 @@ fn resolve_metadata(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> 
       metadata
         .from_toml(
           r#"
-        [[state]]
+        [[facet]]
         name = "state"
         payload = "json"
       "#,

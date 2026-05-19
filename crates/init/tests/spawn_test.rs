@@ -44,7 +44,6 @@ fn stop_child(child: &mut Child) {
 
 #[test]
 fn init_uses_env_paths_and_persists_state_with_ipc_start() {
-  let _ = fs::remove_file("/tmp/rind.sock");
   let units_dir = temp_dir("units");
   let state_path = temp_dir("state").join("state.bin");
   let state_root = temp_dir("state-root");
@@ -56,6 +55,8 @@ fn init_uses_env_paths_and_persists_state_with_ipc_start() {
     .expect("state parent should exist");
   fs::create_dir_all(&state_root).expect("state root should exist");
   fs::create_dir_all(vars_path.parent().expect("vars parent")).expect("vars parent should exist");
+  let sock_path = log_dir.join("rind.sock");
+  let _ = fs::remove_file(&sock_path);
 
   let unit_file = units_dir.join("test.toml");
   fs::write(
@@ -77,6 +78,7 @@ restart = false
     .env("RIND_STATE_PATH", &state_path)
     .env("RIND_STATE_ROOT", &state_root)
     .env("RIND_VARIABLES_PATH", &vars_path)
+    .env("RIND_SOC_PATH", &sock_path)
     .env("RIND_LOG_DIR", &log_dir)
     .env("RIND_PUMP_INTERVAL", "1")
     .stdout(Stdio::null())
@@ -84,15 +86,14 @@ restart = false
     .spawn()
     .expect("init should spawn");
 
-  let socket_path = Path::new("/tmp/rind.sock");
-  if !wait_for_socket(socket_path, Duration::from_secs(5)) {
+  if !wait_for_socket(&sock_path, Duration::from_secs(5)) {
     if let Ok(Some(status)) = child.try_wait() {
       eprintln!("skipping init blackbox test: init exited early with status {status}");
     } else {
       eprintln!("skipping init blackbox test: ipc socket unavailable in this environment");
     }
     stop_child(&mut child);
-    return;
+    panic!("test failed");
   }
 
   let payload = SSPayload {
@@ -102,9 +103,13 @@ restart = false
     unit_type: "service".to_string(),
   };
 
+  unsafe {
+    std::env::set_var("RIND_SOC_PATH", &sock_path);
+  }
+
   let response = send_message(
     Message::from_action("start")
-      .with(serde_json::to_string(&payload).expect("payload should serialize")),
+      .with(flexbuffers::to_vec(payload).expect("couldn't serialize payload")),
   )
   .expect("ipc start message should succeed");
 
@@ -142,5 +147,7 @@ restart = false
     "expected at least one .rlog segment in log dir"
   );
 
-  let _ = fs::remove_file("/tmp/rind.sock");
+  unsafe {
+    std::env::remove_var("RIND_SOC_PATH");
+  }
 }

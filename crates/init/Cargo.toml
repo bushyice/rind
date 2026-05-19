@@ -21,3 +21,4 @@ rind-plugins = { path = "../plugins" }
 [dev-dependencies]
 rind-ipc = { path = "../ipc" }
 serde_json.workspace = true
+flexbuffers.workspace = true

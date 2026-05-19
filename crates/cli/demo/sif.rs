@@ -1,6 +1,7 @@
-// Sif = Service isolation features
-
+use rind_core::prelude::*;
+use rind_ipc::{FlowPayload, TransportMessage, TransportMessageAction, TransportMessageType};
 use std::fs;
+use std::io::{Write, stdout};
 use std::thread;
 use std::time::Duration;
 
@@ -17,12 +18,12 @@ fn main() {
     .trim()
     .to_string();
 
-  println!("demo:start pid={pid}");
-  println!("demo:cgroup {cgroup}");
-  println!("demo:ns mount={}", ns_link("mnt"));
-  println!("demo:ns uts={}", ns_link("uts"));
-  println!("demo:ns ipc={}", ns_link("ipc"));
-  println!("demo:ns net={}", ns_link("net"));
+  TransportMessage::wlog(format!("demo:start pid={pid}"));
+  TransportMessage::wlog(format!("demo:cgroup {cgroup}"));
+  TransportMessage::wlog(format!("demo:ns mount={}", ns_link("mnt")));
+  TransportMessage::wlog(format!("demo:ns uts={}", ns_link("uts")));
+  TransportMessage::wlog(format!("demo:ns ipc={}", ns_link("ipc")));
+  TransportMessage::wlog(format!("demo:ns net={}", ns_link("net")));
 
   let disable_heartbeat = std::env::var("RIND_DEMO_NO_WATCHDOG")
     .ok()
@@ -30,16 +31,27 @@ fn main() {
     .unwrap_or(false);
 
   if disable_heartbeat {
-    println!("demo:watchdog disabled (expect watchdog action)");
+    TransportMessage::log(format!("demo:watchdog disabled (expect watchdog action)"));
     loop {
       thread::sleep(Duration::from_secs(60));
     }
   }
 
   loop {
-    println!(
-      r#"{{"type":"signal","name":"watchdog","payload":{{"String":"alive"}},"action":"set"}}"#
-    );
+    let msg = TransportMessage {
+      r#type: TransportMessageType::Impulse,
+      name: Some("watchdog".to_ustr()),
+      payload: Some(FlowPayload::String("alive".to_string())),
+      action: TransportMessageAction::Set,
+      branch: None,
+    };
+
+    let mut out = stdout();
+    if let Err(e) = msg.write_signed(&mut out) {
+      eprintln!("failed to send message: {e}");
+    }
+    let _ = out.flush();
+
     thread::sleep(Duration::from_secs(1));
   }
 }

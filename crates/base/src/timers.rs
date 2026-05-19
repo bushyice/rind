@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 pub use crate::core::events::ServiceEventKind;
-pub use crate::prelude::StateMachine;
+pub use crate::prelude::FacetGraph;
 use crate::prelude::VariableHeap;
 use nix::sys::time::TimeSpec;
 use nix::sys::timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags};
@@ -179,8 +179,8 @@ impl Runtime for TimerRuntime {
 
         ctx
           .registry
-          .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-            (StateMachine::KEY.into(), VariableHeap::KEY.into()),
+          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+            (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, _)| {
               if let Ok(timer) = registry.uninstantiate_one::<Timer>("*", name) {
                 if let Some(triggers) = &timer.metadata.finish {

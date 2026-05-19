@@ -125,8 +125,8 @@ impl TTYRuntime {
     Ok(())
   }
 
-  fn has_login_required(&self, sm: &StateMachine, tty: &str) -> bool {
-    sm.states.get("tty:login_required").map_or(false, |x| {
+  fn has_login_required(&self, sm: &FacetGraph, tty: &str) -> bool {
+    sm.facets.get("tty:login_required").map_or(false, |x| {
       x.iter().any(|x| {
         x.payload
           .get_json_field_as::<String>("tty")
@@ -137,7 +137,7 @@ impl TTYRuntime {
 
   fn reconcile_login(
     &self,
-    sm: &StateMachine,
+    sm: &FacetGraph,
     dispatch: &RuntimeDispatcher,
     tty_name: &str,
     last: &str,
@@ -145,16 +145,16 @@ impl TTYRuntime {
     if tty_name != last && self.has_login_required(sm, &last) {
       dispatch.dispatch(
         "flow",
-        "remove_state",
+        "remove_facet",
         FlowRuntimePayload::new("tty:login_required")
           .payload(json!({ "tty": last.to_string() }))
           .into(),
       )?;
     }
 
-    if sm.states.get("tty:taken").map_or(true, |x| {
+    if sm.facets.get("tty:taken").map_or(true, |x| {
       !x.iter().any(|x| x.payload.to_string_payload() == tty_name)
-    }) && sm.states.get("rind:user_session").map_or(true, |x| {
+    }) && sm.facets.get("rind:user_session").map_or(true, |x| {
       !x.iter().any(|x| {
         x.payload
           .get_json_field_as::<String>("tty")
@@ -164,7 +164,7 @@ impl TTYRuntime {
     {
       dispatch.dispatch(
         "flow",
-        "set_state",
+        "set_facet",
         FlowRuntimePayload::new("tty:login_required")
           .payload(json!({ "tty": tty_name.to_string() }))
           .into(),
@@ -182,7 +182,7 @@ impl TTYRuntime {
   ) -> CoreResult<()> {
     dispatch.dispatch(
       "flow",
-      if take { "set_state" } else { "remove_state" },
+      if take { "set_facet" } else { "remove_facet" },
       FlowRuntimePayload::new("tty:taken")
         .payload(serde_json::Value::String(tty_name.to_string()))
         .into(),
@@ -241,7 +241,7 @@ impl Runtime for TTYRuntime {
               self.reconcile_login(
                 ctx
                   .registry
-                  .singleton::<StateMachine>(StateMachine::KEY)
+                  .singleton::<FacetGraph>(FacetGraph::KEY)
                   .ok_or(CoreError::RuntimeStopped)?,
                 dispatch,
                 &self.active,
@@ -260,8 +260,8 @@ impl Runtime for TTYRuntime {
 
         if let Some(target_name) = ctx
           .registry
-          .singleton::<StateMachine>(StateMachine::KEY)
-          .and_then(|sm| sm.states.get("tty:active"))
+          .singleton::<FacetGraph>(FacetGraph::KEY)
+          .and_then(|sm| sm.facets.get("tty:active"))
           .and_then(|instances| instances.first())
           .map(|x| x.payload.to_string_payload())
         {
@@ -299,7 +299,7 @@ impl Runtime for TTYRuntime {
 
         let sm = ctx
           .registry
-          .singleton::<StateMachine>(StateMachine::KEY)
+          .singleton::<FacetGraph>(FacetGraph::KEY)
           .ok_or(CoreError::RuntimeStopped)?;
 
         match EXTENSIONS.with(|extensions| {
@@ -308,7 +308,7 @@ impl Runtime for TTYRuntime {
             .expect("extension manager not initialized")
             .resolve(
               "boot",
-              TTYPayload::Taken(sm.states.get("tty:taken").map_or(Default::default(), |x| {
+              TTYPayload::Taken(sm.facets.get("tty:taken").map_or(Default::default(), |x| {
                 x.iter()
                   .map(|x| x.payload.to_string_payload().to_ustr())
                   .collect()
@@ -325,7 +325,7 @@ impl Runtime for TTYRuntime {
       "reconcile" => {
         let sm = ctx
           .registry
-          .singleton::<StateMachine>(StateMachine::KEY)
+          .singleton::<FacetGraph>(FacetGraph::KEY)
           .ok_or(CoreError::RuntimeStopped)?;
         self.reconcile_login(sm, dispatch, &self.active, &self.active)?;
       }
@@ -344,15 +344,15 @@ impl Runtime for TTYRuntime {
 
           let sm = ctx
             .registry
-            .singleton::<StateMachine>(StateMachine::KEY)
+            .singleton::<FacetGraph>(FacetGraph::KEY)
             .ok_or(CoreError::RuntimeStopped)?;
 
-          if sm.states.get("tty:active").map_or(true, |x| {
+          if sm.facets.get("tty:active").map_or(true, |x| {
             !x.iter().any(|x| x.payload.to_string_payload() == tty_name)
           }) {
             dispatch.dispatch(
               "flow",
-              "remove_state",
+              "remove_facet",
               FlowRuntimePayload::new("tty:active")
                 .payload(serde_json::Value::String(last.clone()))
                 .into(),
@@ -360,7 +360,7 @@ impl Runtime for TTYRuntime {
 
             dispatch.dispatch(
               "flow",
-              "set_state",
+              "set_facet",
               FlowRuntimePayload::new("tty:active")
                 .payload(serde_json::Value::String(tty_name.to_string()))
                 .into(),
@@ -373,7 +373,7 @@ impl Runtime for TTYRuntime {
 
           dispatch.dispatch(
             "flow",
-            "emit_signal",
+            "impulse",
             FlowRuntimePayload::new("tty:switch")
               .payload(serde_json::Value::String(tty_name.to_string()))
               .into(),
@@ -401,13 +401,13 @@ fn handle_ipc_tty(
 
   let sm = ctx
     .registry
-    .singleton::<StateMachine>(StateMachine::KEY)
+    .singleton::<FacetGraph>(FacetGraph::KEY)
     .ok_or(CoreError::RuntimeStopped)?;
 
   match payload {
     TTYPayload::Check => {
       return Ok(Message::ok(
-        sm.states
+        sm.facets
           .get("tty:active")
           .and_then(|x| x.first().map(|x| x.payload.to_string_payload()))
           .unwrap_or("tty1".to_string()),
@@ -437,7 +437,7 @@ fn inject_builtin(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {
           name = "ttys"
           default = ["/dev/tty1", "/dev/tty2"]
 
-          [[state]]
+          [[facet]]
           name = "login_required"
           payload = "json"
           branch = ["tty"]
@@ -446,15 +446,15 @@ fn inject_builtin(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {
             branch = "tty"
           }]
 
-          [[signal]]
+          [[impulse]]
           name = "switch"
           payload = "string"
 
-          [[state]]
+          [[facet]]
           name = "taken"
           payload = "string"
 
-          [[state]]
+          [[facet]]
           name = "active"
           payload = "string"
       "#,

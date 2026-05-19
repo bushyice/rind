@@ -3,44 +3,19 @@
 // - probs more things i didn't think about
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex};
 
-use rind_core::prelude::*;
-use serde::{Deserialize, Serialize};
-
-use crate::flow::{FlowMatchOperation, FlowPayload, Signal, State};
+use crate::flow::{FacetGraph, FlowFacet, FlowImpulse};
 use crate::prelude::Service;
 use rind_core::notifier::Notifier;
-
-#[derive(Serialize, Deserialize, Copy, Clone)]
-#[serde(rename_all = "snake_case")]
-pub enum TransportMessageType {
-  Signal,
-  State,
-  Enquiry,
-  Response,
-}
-
-#[derive(Serialize, Deserialize, Default, PartialEq, Copy, Clone)]
-#[serde(rename_all = "snake_case")]
-pub enum TransportMessageAction {
-  #[default]
-  Set,
-  Remove,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub struct TransportMessage {
-  pub r#type: TransportMessageType,
-  pub payload: Option<FlowPayload>,
-  pub branch: Option<FlowMatchOperation>,
-  pub name: Option<Ustr>,
-  #[serde(default)]
-  pub action: TransportMessageAction,
-}
+use rind_core::prelude::*;
+pub use rind_ipc::{
+  FlowMatchOperation, FlowPayload, TransportMessage, TransportMessageAction, TransportMessageType,
+};
+use serde::{Deserialize, Serialize};
+use serde_json;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct TransportProtocolId(pub Ustr);
@@ -90,6 +65,18 @@ pub trait TransportProtocol: Send + Sync {
   fn send_message(&self, endpoint: &str, msg: &TransportMessage);
 }
 
+pub enum TransportResponder {
+  Uds(UnixStream),
+}
+
+impl TransportResponder {
+  pub fn send(&self, msg: &TransportMessage) -> std::io::Result<()> {
+    match self {
+      TransportResponder::Uds(stream) => msg.write_signed(stream),
+    }
+  }
+}
+
 type ClientMap = Arc<Mutex<HashMap<Ustr, Vec<UnixStream>>>>;
 
 fn socket_path(endpoint: &str) -> std::path::PathBuf {
@@ -97,10 +84,13 @@ fn socket_path(endpoint: &str) -> std::path::PathBuf {
 }
 
 pub struct UdsTransport {
-  clients: ClientMap,
-  started: std::collections::HashSet<Ustr>,
-  incoming_tx: std::sync::mpsc::Sender<(Ustr, TransportMessage, u32)>,
-  incoming_rx: Arc<Mutex<std::sync::mpsc::Receiver<(Ustr, TransportMessage, u32)>>>,
+  pub clients: ClientMap,
+  pub started: std::collections::HashSet<Ustr>,
+  pub incoming_tx:
+    std::sync::mpsc::Sender<(Ustr, TransportMessage, u32, Option<TransportResponder>)>,
+  pub incoming_rx: Arc<
+    Mutex<std::sync::mpsc::Receiver<(Ustr, TransportMessage, u32, Option<TransportResponder>)>>,
+  >,
 }
 
 impl Default for UdsTransport {
@@ -177,25 +167,21 @@ impl UdsTransport {
         let ep_for_msg = ep.clone();
         let notifier = notifier.clone();
         std::thread::spawn(move || {
-          let mut reader = BufReader::new(stream);
-          let mut line = String::new();
+          let mut reader = stream;
           loop {
-            line.clear();
-            let Ok(read) = reader.read_line(&mut line) else {
-              break;
-            };
-            if read == 0 {
-              break;
-            }
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-              continue;
-            }
-            if let Ok(msg) = serde_json::from_str::<TransportMessage>(trimmed) {
-              let _ = tx.send((ep_for_msg.clone(), msg, uid));
-              if let Some(n) = &notifier {
-                let _ = n.notify();
+            match TransportMessage::read_signed(&mut reader) {
+              Ok(msg) => {
+                let responder = if matches!(msg.r#type, TransportMessageType::Enquiry) {
+                  reader.try_clone().ok().map(TransportResponder::Uds)
+                } else {
+                  None
+                };
+                let _ = tx.send((ep_for_msg.clone(), msg, uid, responder));
+                if let Some(n) = &notifier {
+                  let _ = n.notify();
+                }
               }
+              Err(_) => break,
             }
           }
         });
@@ -221,13 +207,9 @@ impl TransportProtocol for UdsTransport {
   }
 
   fn send_message(&self, endpoint: &str, msg: &TransportMessage) {
-    let frame = match serde_json::to_string(msg) {
-      Ok(s) => format!("{s}\n"),
-      Err(_) => return,
-    };
     if let Ok(mut locked) = self.clients.lock() {
-      if let Some(streams) = locked.get_mut(endpoint) {
-        streams.retain_mut(|stream| stream.write_all(frame.as_bytes()).is_ok());
+      if let Some(clients) = locked.get_mut(endpoint) {
+        clients.retain_mut(|client| msg.write_signed(client).is_ok());
       }
     }
   }
@@ -240,29 +222,26 @@ pub fn start_stdout_listener(
   notifier: Option<Notifier>,
   index: usize,
 ) {
-  if let Some(stdout) = stdout {
+  if let Some(mut stdout) = stdout {
     std::thread::spawn(move || {
-      let reader = BufReader::new(stdout);
-      for line in reader.lines().flatten() {
-        if let Ok(msg) = serde_json::from_str::<TransportMessage>(&line) {
-          let _ = tx.send((service_name.clone(), msg, index));
-          if let Some(n) = &notifier {
-            let _ = n.notify();
+      loop {
+        match TransportMessage::read_signed(&mut stdout) {
+          Ok(msg) => {
+            let _ = tx.send((service_name.clone(), msg, index));
+            if let Some(n) = &notifier {
+              let _ = n.notify();
+            }
           }
-        } else {
-          let _ = tx.send((
-            service_name.clone(),
-            TransportMessage {
-              action: TransportMessageAction::Set,
-              name: Some("log".to_ustr()),
-              r#type: TransportMessageType::Response,
-              payload: Some(FlowPayload::String(line)),
-              branch: None,
-            },
-            index,
-          ));
-          if let Some(n) = &notifier {
-            let _ = n.notify();
+          Err(e) => {
+            let _ = tx.send((
+              service_name.clone(),
+              TransportMessage::log(format!("failed to recieve message: {e}")),
+              index,
+            ));
+            if let Some(n) = &notifier {
+              let _ = n.notify();
+            }
+            break;
           }
         }
       }
@@ -271,11 +250,51 @@ pub fn start_stdout_listener(
 }
 
 pub struct TransportRuntime {
-  uds: UdsTransport,
-  stdio_endpoints: std::collections::HashSet<Ustr>,
+  pub uds: UdsTransport,
+  pub stdio_endpoints: std::collections::HashSet<Ustr>,
 }
 
 impl TransportRuntime {
+  fn handle_enquiry(
+    &self,
+    msg: &TransportMessage,
+    _uid: u32,
+    _pm: &PermissionStore,
+    ctx: &mut RuntimeContext<'_>,
+  ) -> CoreResult<TransportMessage> {
+    let mut response = TransportMessage {
+      r#type: TransportMessageType::Response,
+      payload: None,
+      name: msg.name.clone(),
+      action: msg.action,
+      branch: None,
+    };
+
+    if let Some(name) = &msg.name {
+      match name.as_str() {
+        "has_state" => {
+          if let Some(payload) = &msg.payload {
+            let state_name = payload.to_string_payload();
+            let sm = ctx
+              .registry
+              .singleton::<FacetGraph>(FacetGraph::KEY)
+              .ok_or_else(|| CoreError::InvalidState("state machine store not found".into()))?;
+            let exists = sm.facets.contains_key(&Ustr::from(state_name.as_str()));
+            response.payload = Some(FlowPayload::from_json(Some(serde_json::json!(exists))));
+          }
+        }
+        _ => {
+          response.payload = Some(FlowPayload::from_json(Some(serde_json::json!({
+              "error": "unknown enquiry",
+              "enquiry": name.as_str()
+          }))));
+        }
+      }
+    }
+
+    Ok(response)
+  }
+
   fn ingest(
     &self,
     _endpoint: Ustr,
@@ -284,9 +303,16 @@ impl TransportRuntime {
     dispatch: &RuntimeDispatcher,
     pm: &PermissionStore,
     ctx: &mut RuntimeContext<'_>,
+    responder: Option<TransportResponder>,
   ) -> CoreResult<()> {
     match msg.r#type {
-      TransportMessageType::State => {
+      TransportMessageType::Enquiry => {
+        if let Some(responder) = responder {
+          let response = self.handle_enquiry(&msg, uid, pm, ctx)?;
+          let _ = responder.send(&response);
+        }
+      }
+      TransportMessageType::Facet => {
         if let Some(name) = &msg.name {
           if uid != 0 {
             // one-shot user-specific state defs
@@ -298,7 +324,7 @@ impl TransportRuntime {
             }
 
             // one-shot perms (is this good?)
-            if let Some(state) = ctx.registry.metadata.find::<State>("*", name.as_str())
+            if let Some(state) = ctx.registry.metadata.find::<FlowFacet>("*", name.as_str())
               && let Some(perms) = &state.permissions
               && !perms
                 .iter()
@@ -315,20 +341,23 @@ impl TransportRuntime {
             if let Some(p) = &msg.payload {
               payload = payload.insert("filter", p.to_json());
             }
-            let _ = dispatch.dispatch("flow", "remove_state", payload);
+            let _ = dispatch.dispatch("flow", "remove_facet", payload);
           } else if msg.action == TransportMessageAction::Set {
             let mut payload = rpayload!({ "name": name });
             if let Some(p) = &msg.payload {
               payload = payload.insert("payload", p.to_json());
             }
-            let _ = dispatch.dispatch("flow", "set_state", payload);
+            let _ = dispatch.dispatch("flow", "set_facet", payload);
           }
         }
       }
-      TransportMessageType::Signal => {
+      TransportMessageType::Impulse => {
         if let Some(name) = &msg.name {
           // same with state perms, one-shot
-          if let Some(state) = ctx.registry.metadata.find::<Signal>("*", name.as_str())
+          if let Some(state) = ctx
+            .registry
+            .metadata
+            .find::<FlowImpulse>("*", name.as_str())
             && let Some(perms) = &state.permissions
             && !perms
               .iter()
@@ -343,7 +372,7 @@ impl TransportRuntime {
           if let Some(p) = &msg.payload {
             payload = payload.insert("payload", p.to_json());
           }
-          let _ = dispatch.dispatch("flow", "emit_signal", payload);
+          let _ = dispatch.dispatch("flow", "impulse", payload);
         }
       }
       _ => {}
@@ -407,13 +436,13 @@ impl Runtime for TransportRuntime {
         let branch = payload.get::<FlowMatchOperation>("branch").ok();
         let flow_payload = payload.get::<serde_json::Value>("payload").ok();
         let action_str: String = payload.get::<String>("action").ok().unwrap_or("set".into());
-        let type_str: String = payload.get::<String>("type").ok().unwrap_or("state".into());
+        let type_str: String = payload.get::<String>("type").ok().unwrap_or("facet".into());
 
         let msg = TransportMessage {
           r#type: if type_str == "signal" {
-            TransportMessageType::Signal
+            TransportMessageType::Impulse
           } else {
-            TransportMessageType::State
+            TransportMessageType::Facet
           },
           payload: flow_payload.map(|v| FlowPayload::from_json(Some(v))),
           name,
@@ -459,12 +488,12 @@ impl Runtime for TransportRuntime {
           0
         };
 
-        self.ingest(endpoint, message, uid, dispatch, &pm, ctx)?;
+        self.ingest(endpoint, message, uid, dispatch, &pm, ctx, None)?;
       }
       "drain_incoming" => {
         if let Ok(rx) = self.uds.incoming_rx.lock() {
-          while let Ok((endpoint, msg, uid)) = rx.try_recv() {
-            self.ingest(endpoint, msg, uid, dispatch, &pm, ctx)?;
+          while let Ok((endpoint, msg, uid, responder)) = rx.try_recv() {
+            self.ingest(endpoint, msg, uid, dispatch, &pm, ctx, responder)?;
           }
         }
       }

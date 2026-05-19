@@ -10,21 +10,21 @@ pub struct UnitSerialized {
   pub mounted: usize,
   pub sockets: usize,
   pub active_sockets: usize,
-  pub states: usize,
-  pub active_states: usize,
-  pub signals: usize,
+  pub facets: usize,
+  pub active_facets: usize,
+  pub impulses: usize,
 }
 
 impl UnitSerialized {
-  pub fn from_string(str: String) -> Self {
-    serde_json::from_str(&str).unwrap_or(Self {
+  pub fn from_bytes(data: &[u8]) -> Self {
+    flexbuffers::from_slice(data).unwrap_or(Self {
       name: String::new().into(),
       ..Default::default()
     })
   }
 
-  pub fn many_from_string(str: String) -> Vec<Self> {
-    serde_json::from_str(&str).unwrap_or_default()
+  pub fn many_from_bytes(data: &[u8]) -> Vec<Self> {
+    flexbuffers::from_slice(data).unwrap_or_default()
   }
 
   pub fn as_some(self) -> Option<Self> {
@@ -32,14 +32,14 @@ impl UnitSerialized {
   }
 }
 
-impl StringifySerialized for UnitSerialized {
-  fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl SerializeSerialized for UnitSerialized {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
-pub fn serialize_many<T: Serialize>(items: &Vec<T>) -> String {
-  serde_json::to_string(items).unwrap_or_default()
+pub fn serialize_many<T: Serialize>(items: &Vec<T>) -> Vec<u8> {
+  flexbuffers::to_vec(items).unwrap_or_default()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -53,8 +53,8 @@ pub struct ServiceSerialized {
 }
 
 impl ServiceSerialized {
-  pub fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+  pub fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
@@ -67,27 +67,27 @@ pub struct SocketSerialized {
   pub active: bool,
 }
 
-impl StringifySerialized for SocketSerialized {
-  fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl SerializeSerialized for SocketSerialized {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct StateSerialized {
+pub struct FacetSerialized {
   pub name: Ustr,
-  pub instances: Vec<serde_json::Value>,
+  pub instances: Vec<Vec<u8>>,
   pub keys: Vec<Ustr>,
 }
 
-impl StringifySerialized for StateSerialized {
-  fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl SerializeSerialized for FacetSerialized {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct SignalSerialized {
+pub struct ImpulseSerialized {
   pub name: Ustr,
 }
 
@@ -104,29 +104,42 @@ pub struct UnitItemsSerialized {
   pub mounts: Vec<MountSerialized>,
   pub services: Vec<ServiceSerialized>,
   pub sockets: Vec<SocketSerialized>,
-  pub states: Vec<StateSerialized>,
-  pub signals: Vec<SignalSerialized>,
+  pub facets: Vec<FacetSerialized>,
+  pub impulses: Vec<ImpulseSerialized>,
 }
 
-impl StringifySerialized for UnitItemsSerialized {
-  fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl SerializeSerialized for UnitItemsSerialized {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
-pub trait StringifySerialized {
-  fn stringify(&self) -> String;
+#[derive(Serialize, Deserialize)]
+pub struct PermissionSerialized {
+  pub name: Ustr,
+  pub id: u16,
+  pub group: Option<Ustr>,
 }
 
-impl StringifySerialized for String {
-  fn stringify(&self) -> String {
-    self.clone()
+impl SerializeSerialized for PermissionSerialized {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
-impl StringifySerialized for &str {
-  fn stringify(&self) -> String {
-    self.to_string()
+pub trait SerializeSerialized {
+  fn serialize(&self) -> Vec<u8>;
+}
+
+impl SerializeSerialized for String {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
+  }
+}
+
+impl SerializeSerialized for &str {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
@@ -140,19 +153,19 @@ pub struct IpcListPrinter {
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct IpcListComponent {
-  pub components: Vec<String>,
+  pub components: Vec<Vec<u8>>,
   pub printer: Option<IpcListPrinter>,
 }
 
-impl StringifySerialized for IpcListComponent {
-  fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl SerializeSerialized for IpcListComponent {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
 impl IpcListComponent {
-  pub fn add(&mut self, item: impl StringifySerialized) {
-    self.components.push(item.stringify());
+  pub fn add(&mut self, item: impl SerializeSerialized) {
+    self.components.push(item.serialize());
   }
 
   pub fn with_printer(mut self, printer: IpcListPrinter) -> Self {
@@ -161,11 +174,18 @@ impl IpcListComponent {
   }
 }
 
+pub fn flexbuf_string<V: AsRef<Vec<u8>>>(vec: V) -> String {
+  flexbuffers::Reader::get_root(vec.as_ref().as_slice())
+    .unwrap()
+    .as_str()
+    .to_string()
+}
+
 #[cfg(test)]
 mod tests {
 
   use super::{
-    ServiceSerialized, StringifySerialized, UnitItemsSerialized, UnitSerialized, serialize_many,
+    SerializeSerialized, ServiceSerialized, UnitItemsSerialized, UnitSerialized, serialize_many,
   };
 
   #[test]
@@ -178,20 +198,17 @@ mod tests {
       mounted: 1,
       ..Default::default()
     };
-    let encoded = item.stringify();
-    let decoded = UnitSerialized::from_string(encoded);
+    let encoded = item.serialize();
+    let decoded = UnitSerialized::from_bytes(&encoded);
     assert_eq!(decoded.name, "u".to_string().into());
     assert_eq!(decoded.services, 2);
   }
 
   #[test]
   fn invalid_input_falls_back() {
-    let decoded = UnitSerialized::from_string("bad-json".to_string());
+    let decoded = UnitSerialized::from_bytes(b"bad-json");
     assert_eq!(decoded.name, "".to_string().into());
-    assert_eq!(
-      UnitSerialized::many_from_string("bad-json".to_string()).len(),
-      0
-    );
+    assert_eq!(UnitSerialized::many_from_bytes(b"bad-json").len(), 0);
   }
 
   #[test]
@@ -212,6 +229,6 @@ mod tests {
       services,
       ..Default::default()
     };
-    assert!(!unit_items.stringify().is_empty());
+    assert!(!unit_items.serialize().is_empty());
   }
 }

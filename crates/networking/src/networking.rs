@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use rind_ipc::Message;
 use rind_ipc::payloads::{NetworkPayload, SSPayload};
 use rind_ipc::recv::IpcSourcemap;
-use rind_ipc::ser::{IpcListComponent, IpcListPrinter, StringifySerialized};
+use rind_ipc::ser::{IpcListComponent, IpcListPrinter, SerializeSerialized};
 use rind_plugins::prelude::serde_json::json;
 use rind_plugins::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -50,15 +50,15 @@ pub struct NetworkStatusSerialized {
   pub state: Ustr,
 }
 
-impl StringifySerialized for NetworkStatusSerialized {
-  fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl SerializeSerialized for NetworkStatusSerialized {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
-impl StringifySerialized for PortStateSerialized {
-  fn stringify(&self) -> String {
-    serde_json::to_string(self).unwrap_or_default()
+impl SerializeSerialized for PortStateSerialized {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }
 
@@ -152,7 +152,7 @@ fn inject_ipc_list(
       });
 
       let sm = registry
-        .singleton::<StateMachine>(StateMachine::KEY)
+        .singleton::<FacetGraph>(FacetGraph::KEY)
         .ok_or(CoreError::RuntimeStopped)?;
 
       for (metadata, groups) in registry.metadata.all_groups() {
@@ -163,7 +163,7 @@ fn inject_ipc_list(
           {
             for cfg in cfgs {
               let config = {
-                if let Some(instances) = sm.states.get(&Ustr::from(NETWORKING_CONFIGURED_STATE)) {
+                if let Some(instances) = sm.facets.get(&Ustr::from(NETWORKING_CONFIGURED_STATE)) {
                   instances.iter().find(|i| {
                     if let Some(obj) = i.payload.to_json().as_object() {
                       obj.get("name").and_then(|v| v.as_str()) == Some(cfg.name.as_str())
@@ -214,21 +214,21 @@ fn inject_networking(name: &str, mut metadata: Metadata) -> CoreResult<Metadata>
       metadata
         .from_toml(
           r#"
-          [[state]]
+          [[facet]]
           name = "interface"
           payload = "json"
           branch = ["name"]
 
-          [[state]]
+          [[facet]]
           name = "online"
           payload = "none"
 
-          [[state]]
+          [[facet]]
           name = "configured"
           payload = "json"
           branch = ["name"]
 
-          [[state]]
+          [[facet]]
           name = "dns_ready"
           payload = "none"
       "#,
@@ -458,7 +458,7 @@ impl NetworkingRuntime {
 
       dispatch.dispatch(
         "flow",
-        "set_state",
+        "set_facet",
         FlowRuntimePayload::new(NETWORKING_INTERFACE_STATE)
           .payload(serde_json::to_value(interface).unwrap_or_default())
           .into(),
@@ -472,7 +472,7 @@ impl NetworkingRuntime {
 
       dispatch.dispatch(
         "flow",
-        "remove_state",
+        "remove_facet",
         FlowRuntimePayload::new(NETWORKING_INTERFACE_STATE)
           .filter(serde_json::json!( { "as": { "name": name } }))
           .into(),
@@ -484,13 +484,13 @@ impl NetworkingRuntime {
       if next_online {
         dispatch.dispatch(
           "flow",
-          "set_state",
+          "set_facet",
           FlowRuntimePayload::new(NETWORKING_ONLINE_STATE).into(),
         )?;
       } else {
         dispatch.dispatch(
           "flow",
-          "remove_state",
+          "remove_facet",
           FlowRuntimePayload::new(NETWORKING_ONLINE_STATE).into(),
         )?;
       }
@@ -728,14 +728,14 @@ impl NetworkingRuntime {
       self.dns_written = true;
       dispatch.dispatch(
         "flow",
-        "set_state",
+        "set_facet",
         FlowRuntimePayload::new(NETWORKING_DNS_READY_STATE).into(),
       )?;
     }
 
     dispatch.dispatch(
       "flow",
-      "set_state",
+      "set_facet",
       FlowRuntimePayload::new(NETWORKING_CONFIGURED_STATE)
         .payload(json!({
           "name": iface,
@@ -786,14 +786,14 @@ impl NetworkingRuntime {
       self.dns_written = true;
       dispatch.dispatch(
         "flow",
-        "set_state",
+        "set_facet",
         FlowRuntimePayload::new(NETWORKING_DNS_READY_STATE).into(),
       )?;
     }
 
     dispatch.dispatch(
       "flow",
-      "set_state",
+      "set_facet",
       FlowRuntimePayload::new(NETWORKING_CONFIGURED_STATE)
         .payload(json!({
           "name": iface,
@@ -850,7 +850,7 @@ impl NetworkingRuntime {
       if !still_online {
         dispatch.dispatch(
           "flow",
-          "remove_state",
+          "remove_facet",
           FlowRuntimePayload::new(NETWORKING_CONFIGURED_STATE)
             .filter(json!({ "as": { "name": iface } }))
             .into(),

@@ -1,4 +1,4 @@
-use crate::flow::StateMachine;
+use crate::flow::FacetGraph;
 use crate::services::{
   RunOption, Service, ServiceBranchContext, ServiceNamespaces, SocketActivation,
 };
@@ -68,7 +68,7 @@ pub struct ExecutorContext<'a> {
   pub log: &'a LogHandle,
   pub branch_ctx: Option<&'a ServiceBranchContext>,
   pub sockets_map: &'a HashMap<Ustr, SocketActivation>,
-  pub sm: Option<&'a StateMachine>,
+  pub sm: Option<&'a FacetGraph>,
   pub variables: Option<&'a VariableHeap>,
   pub registry_key: Ustr,
   pub notifier: Option<Notifier>,
@@ -124,7 +124,7 @@ impl Executor for NaturalExecutor {
       .map(|s| s.fds.clone())
       .unwrap_or_default();
 
-    println!("{pre_exec_fds:?} {}", ctx.registry_key);
+    // println!("{pre_exec_fds:?} {}", ctx.registry_key);
 
     let ns_flags = ctx
       .service

@@ -17,6 +17,12 @@ kanban-plugin: board
 	
 	**e.g**:
 	- NixShellEntry: Resolves `flake.nix`, provides with the nix provider to download and return from `/nix/store` before it finally just passing it to default spawner.
+- [ ] **Remote Executors**: Executors that connect to a remote to spawn and manage services.
+- [ ] **initrd**
+- [ ] **telemetry**
+- [ ] **API**: More rind API utils.
+	- [ ] State management (`has_state`, `branches_for`)
+	- [ ] Lookups
 
 
 ## Doing
@@ -44,8 +50,8 @@ kanban-plugin: board
 	- [ ] Seccomp profile (pre-exec)
 - [ ] [CLEANUP] **Anyhow**: Remove all `anyhow` errors and results and move them to `CoreError` and `CoreResult`.
 - [ ] **Sophisticated timers**
-- [ ] **Memory Transport**
 - [ ] **Json Optimizations**
+- [ ] **Memory Transport**
 - [ ] **KDL Configs**: Replace `TOML` with `KDL`.
 - [ ] **Piping**: Piping and payloads into other states/signals.
 	- [x] Simple circumstantial piping
@@ -80,6 +86,7 @@ kanban-plugin: board
 	- [ ] There's an issue where logging out in any tty doesn't set the states (potential match operation issue)
 	
 	- [ ] There's an issue where login/logout have a race condition. and also sometimes user_login service starts and stops on-boot despite it seeing the login_required state alive and no remove_state requests.
+- [x] [ISSUE] **Tachyon**: Removed tachyon.
 
 
 ## Testing

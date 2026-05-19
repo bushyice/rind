@@ -1,13 +1,13 @@
 use owo_colors::OwoColorize;
 use rind_ipc::ser::{
-  IpcListComponent, IpcListPrinter, ServiceSerialized, SocketSerialized, StateSerialized,
+  FacetSerialized, IpcListComponent, IpcListPrinter, ServiceSerialized, SocketSerialized,
   UnitItemsSerialized, UnitSerialized,
 };
 
 pub fn print_ipc_list(list: &IpcListComponent) {
   let Some(printer) = &list.printer else {
     for item in &list.components {
-      println!("{}", item);
+      println!("{}", String::from_utf8_lossy(item));
     }
     return;
   };
@@ -17,7 +17,7 @@ pub fn print_ipc_list(list: &IpcListComponent) {
     "list" => print_as_list(list, printer),
     "string" | _ => {
       for item in &list.components {
-        println!("{}", item);
+        println!("{}", String::from_utf8_lossy(item));
       }
     }
   }
@@ -55,7 +55,9 @@ fn print_as_table(list: &IpcListComponent, printer: &IpcListPrinter) {
   );
 
   for component in &list.components {
-    if let Ok(obj) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(component) {
+    if let Ok(obj) =
+      flexbuffers::from_slice::<serde_json::Map<String, serde_json::Value>>(component)
+    {
       let mut row = Vec::new();
       for (i, key) in printer.keys.iter().enumerate() {
         let val = obj
@@ -82,7 +84,9 @@ fn print_as_table(list: &IpcListComponent, printer: &IpcListPrinter) {
 
 fn print_as_list(list: &IpcListComponent, printer: &IpcListPrinter) {
   for component in &list.components {
-    if let Ok(obj) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(component) {
+    if let Ok(obj) =
+      flexbuffers::from_slice::<serde_json::Map<String, serde_json::Value>>(component)
+    {
       for (i, key) in printer.keys.iter().enumerate() {
         let title = printer.titles.get(i).cloned().unwrap_or(key.clone());
         let val = obj
@@ -158,7 +162,7 @@ pub fn print_units(units: &[UnitSerialized]) {
       format!("{}/{}", u.active_services, u.services).bright_green(),
       format!("{}/{}", u.active_sockets, u.sockets).bright_blue(),
       format!("{}/{}", u.mounted, u.mounts).bright_yellow(),
-      format!("{}/{} | {}", u.active_states, u.states, u.signals).bright_purple(),
+      format!("{}/{} | {}", u.active_facets, u.facets, u.impulses).bright_purple(),
     );
   }
 }
@@ -203,9 +207,9 @@ pub fn print_unit(unit_name: &String, unit: &UnitItemsSerialized) {
     }
   }
 
-  if !unit.states.is_empty() {
-    println!("{}", " States ".on_bright_green().bold().white());
-    for s in &unit.states {
+  if !unit.facets.is_empty() {
+    println!("{}", " Facets ".on_bright_green().bold().white());
+    for s in &unit.facets {
       println!(
         "  {:<20} {:<5} {:<}",
         s.name.to_string().bold().white(),
@@ -215,9 +219,9 @@ pub fn print_unit(unit_name: &String, unit: &UnitItemsSerialized) {
     }
   }
 
-  if !unit.signals.is_empty() {
-    println!("{}", " Signals ".on_bright_green().bold().white());
-    for s in &unit.signals {
+  if !unit.impulses.is_empty() {
+    println!("{}", " Impulses ".on_bright_green().bold().white());
+    for s in &unit.impulses {
       println!("  {:<}", s.name.to_string().bold().white());
     }
   }
@@ -250,53 +254,67 @@ pub fn print_unit(unit_name: &String, unit: &UnitItemsSerialized) {
 
 use std::collections::BTreeMap;
 
-pub fn print_state(st: &StateSerialized) {
-  let Some(pk) = st.keys.get(0) else {
-    println!("{}", st.name.bold());
+pub fn print_state(st: &FacetSerialized) {
+  if !st.instances.is_empty() {
+    let pk = st
+      .keys
+      .get(0)
+      .map(|k| k.to_string())
+      .unwrap_or_else(|| "id".to_string());
+    println!("{}", st.name.to_string().bold().white());
 
-    for inst in &st.instances {
-      println!("{} {inst}", "●".cyan().bold());
+    let mut groups: BTreeMap<String, Vec<serde_json::Map<String, serde_json::Value>>> =
+      BTreeMap::new();
+
+    for inst_raw in &st.instances {
+      if let Ok(obj) =
+        flexbuffers::from_slice::<serde_json::Map<String, serde_json::Value>>(inst_raw)
+      {
+        let key = obj
+          .get(&pk)
+          .map(|v| v.to_string())
+          .unwrap_or_else(|| "<none>".to_string());
+
+        groups.entry(key).or_default().push(obj);
+      } else {
+        println!(
+          "  {} [binary data: {} bytes]",
+          "●".cyan().bold(),
+          inst_raw.len()
+        );
+      }
     }
 
-    return;
-  };
+    if groups.is_empty() && !st.instances.is_empty() {
+      for inst_raw in &st.instances {
+        println!(
+          "  {} [binary payload: {} bytes]",
+          "●".cyan().bold(),
+          inst_raw.len()
+        );
+      }
+      return;
+    }
 
-  println!("{}", st.name.to_string().bold().white());
+    for (group_key, items) in groups {
+      println!(
+        " {} {} {}",
+        "●".cyan().bold(),
+        pk.bold(),
+        group_key.bold().yellow()
+      );
 
-  let mut groups: BTreeMap<String, Vec<&serde_json::Map<String, serde_json::Value>>> =
-    BTreeMap::new();
+      for obj in items {
+        for (k, v) in obj {
+          if k == pk {
+            continue;
+          }
 
-  for inst in &st.instances {
-    let Some(obj) = inst.as_object() else {
-      continue;
-    };
-
-    let key = obj
-      .get(&pk.to_string())
-      .map(|v| v.to_string())
-      .unwrap_or_else(|| "<none>".to_string());
-
-    groups.entry(key).or_default().push(obj);
-  }
-
-  for (group_key, items) in groups {
-    println!(
-      " {} {} {}",
-      "●".cyan().bold(),
-      pk.bold(),
-      group_key.bold().yellow()
-    );
-
-    for obj in items {
-      for (k, v) in obj {
-        if k == pk.as_str() {
-          continue;
+          println!("   {}: {}", k.bold().white(), value_color(&v));
         }
 
-        println!("   {}: {}", k.bold().white(), value_color(v));
+        println!();
       }
-
-      println!();
     }
   }
 }

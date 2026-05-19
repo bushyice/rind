@@ -8,6 +8,7 @@ use crate::runtime::{Runtime, RuntimeCommand, RuntimeHandle, RuntimePayload};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BootCycle {
+  PreBoot,
   Collect,
   Runtime,
   PostRuntime,
@@ -154,7 +155,7 @@ impl OrchestratorStore {
         .iter()
         .map(|idx| self.list[*idx].id().to_string())
         .collect::<Vec<_>>();
-      return Err(CoreError::DependencyCycle { cycle: cycle_ids });
+      return Err(CoreError::DependencyCycle(cycle_ids));
     }
 
     if phase == BootPhase::End {

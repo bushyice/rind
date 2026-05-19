@@ -4,14 +4,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use rind_core::prelude::*;
+pub use rind_ipc::{FlowJson, FlowMatchOperation, FlowPayload, FlowPayloadType};
 
+use crate::scopes::ScopeStore;
 use crate::transport::TransportMethod;
 use crate::triggers::{
   branch_target_key, check_condition, default_payload_for_type, json_branch_key, map_json_payload,
   merge_json, payload_compatible, payload_signature, payload_to_filter,
 };
 use crate::variables::VariableHeap;
-use crate::scopes::ScopeStore;
 
 pub const FLOW_RUNTIME_ID: &str = "flow";
 
@@ -20,8 +21,10 @@ pub const FLOW_RUNTIME_ID: &str = "flow";
 pub enum FlowItem {
   Simple(Ustr),
   Detailed {
-    state: Option<Ustr>,
-    signal: Option<Ustr>,
+    #[serde(alias = "state")]
+    facet: Option<Ustr>,
+    #[serde(alias = "signal")]
+    impulse: Option<Ustr>,
     target: Option<FlowMatchOperation>,
     branch: Option<FlowMatchOperation>,
   },
@@ -32,15 +35,15 @@ impl FlowItem {
     match self {
       FlowItem::Simple(s) => s,
       FlowItem::Detailed {
-        state,
-        signal,
+        facet,
+        impulse,
         target: _,
         branch: _,
       } => {
-        if let Some(state) = state {
-          state
+        if let Some(facet) = facet {
+          facet
         } else {
-          signal.as_ref().unwrap()
+          impulse.as_ref().unwrap()
         }
       }
     }
@@ -48,23 +51,12 @@ impl FlowItem {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(untagged)]
-pub enum FlowMatchOperation {
-  Eq(Ustr),
-  Options {
-    binary: Option<bool>,
-    contains: Option<Ustr>,
-    r#as: Option<serde_json::Value>,
-  },
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Trigger {
   pub script: Option<Ustr>,
   pub exec: Option<Ustr>,
   pub args: Option<Vec<Ustr>>,
-  pub state: Option<Ustr>,
-  pub signal: Option<Ustr>,
+  pub facet: Option<Ustr>,
+  pub impulse: Option<Ustr>,
   pub service: Option<Ustr>,
   pub timer: Option<Ustr>,
   pub socket: Option<Ustr>,
@@ -76,99 +68,11 @@ pub struct Trigger {
 #[serde(rename_all = "snake_case")]
 pub enum FlowType {
   #[default]
-  Signal,
-  State,
+  Impulse,
+  Facet,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct FlowJson(pub String);
-
-impl From<String> for FlowJson {
-  fn from(value: String) -> Self {
-    Self(value)
-  }
-}
-
-impl FlowJson {
-  pub fn into_json(&self) -> serde_json::Value {
-    serde_json::from_str(&self.0).unwrap_or(serde_json::Value::Null)
-  }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum FlowPayload {
-  Json(FlowJson),
-  String(String),
-  Bytes(Vec<u8>),
-  None(bool),
-}
-
-impl FlowPayload {
-  pub fn to_string_payload(&self) -> String {
-    match self {
-      FlowPayload::Json(v) => v.0.clone(),
-      FlowPayload::String(v) => v.clone(),
-      FlowPayload::Bytes(v) => String::from_utf8(v.clone()).unwrap_or_default(),
-      FlowPayload::None(_) => String::new(),
-    }
-  }
-
-  pub fn to_json(&self) -> serde_json::Value {
-    match self {
-      FlowPayload::Json(v) => v.into_json(),
-      FlowPayload::String(v) => serde_json::Value::String(v.clone()),
-      FlowPayload::Bytes(v) => serde_json::json!(v),
-      FlowPayload::None(_) => serde_json::Value::Null,
-    }
-  }
-
-  pub fn set_json(&mut self, key: String, value: serde_json::Value) {
-    match self {
-      FlowPayload::Json(v) => {
-        let mut json = v.into_json();
-        merge_json(&mut json, &serde_json::json!({ key: value }));
-        v.0 = json.to_string();
-      }
-      _ => {}
-    }
-  }
-
-  pub fn from_json(v: Option<serde_json::Value>) -> Self {
-    match v {
-      Some(serde_json::Value::Object(v)) => {
-        FlowPayload::Json(FlowJson(serde_json::Value::Object(v).to_string()))
-      }
-      Some(serde_json::Value::Array(v)) => {
-        FlowPayload::Json(FlowJson(serde_json::Value::Array(v).to_string()))
-      }
-      Some(serde_json::Value::String(v)) => FlowPayload::String(v),
-      Some(serde_json::Value::Null) | None => FlowPayload::None(false),
-      Some(v) => FlowPayload::String(v.to_string()),
-    }
-  }
-
-  pub fn get_json_field(&self, field: &str) -> Option<serde_json::Value> {
-    match self {
-      FlowPayload::Json(s) => s.into_json().get(field).cloned(),
-      _ => None,
-    }
-  }
-
-  pub fn get_json_field_as<T: serde::de::DeserializeOwned>(&self, field: &str) -> Option<T> {
-    match self {
-      FlowPayload::Json(s) => serde_json::from_value(s.into_json().get(field).cloned()?).ok(),
-      _ => None,
-    }
-  }
-
-  pub fn contains(&self, needle: &str) -> bool {
-    match self {
-      FlowPayload::String(s) => s.contains(needle),
-      FlowPayload::Json(s) => s.0.contains(needle),
-      _ => false,
-    }
-  }
-}
+// Redundant definitions removed
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FlowInstance {
@@ -188,7 +92,7 @@ impl From<StateEntry> for FlowInstance {
     FlowInstance {
       name: Ustr::from(""),
       payload: FlowPayload::None(false),
-      r#type: FlowType::State,
+      r#type: FlowType::Facet,
     }
   }
 }
@@ -201,15 +105,7 @@ impl From<&FlowInstance> for StateEntry {
   }
 }
 
-#[derive(Debug, Default, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum FlowPayloadType {
-  #[default]
-  Json,
-  String,
-  Bytes,
-  None,
-}
+// Redundant FlowPayloadType removed
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
@@ -262,7 +158,7 @@ impl InverseBranchingConfig {
   ),
   derive_metadata(Debug, Clone)
 )]
-pub struct State {
+pub struct FlowFacet {
   pub name: Ustr,
   pub payload: FlowPayloadType,
   #[serde(rename = "stop-on")]
@@ -281,7 +177,7 @@ pub struct State {
   meta_fields(name, payload, after, branch, subscribers, broadcast, permissions),
   derive_metadata(Debug, Clone)
 )]
-pub struct Signal {
+pub struct FlowImpulse {
   pub name: Ustr,
   pub payload: FlowPayloadType,
   pub after: Option<Vec<FlowItem>>,
@@ -292,27 +188,27 @@ pub struct Signal {
 }
 
 #[derive(Clone)]
-pub struct StateMachine {
-  pub states: HashMap<Ustr, Vec<FlowInstance>>,
+pub struct FacetGraph {
+  pub facets: HashMap<Ustr, Vec<FlowInstance>>,
   persistence: StatePersistence,
   persistence_root: PathBuf,
   scoped_persistence: HashMap<Ustr, StatePersistence>,
 }
 
-impl StateMachine {
-  pub const KEY: &str = "runtime:state_machine";
+impl FacetGraph {
+  pub const KEY: &str = "runtime:facet_graph";
 
   pub fn from_persistence(persistence: StatePersistence) -> Self {
     Self {
       persistence: persistence,
       persistence_root: state_root_path(),
       scoped_persistence: HashMap::new(),
-      states: Default::default(),
+      facets: Default::default(),
     }
   }
 
   pub fn load_from_persistence(&mut self) -> Result<(), CoreError> {
-    self.states = self
+    self.facets = self
       .persistence
       .load()?
       .into_iter()
@@ -385,16 +281,16 @@ impl StateMachine {
         .map(FlowInstance::from)
         .filter(|x| !x.name.as_str().is_empty())
         .collect::<Vec<_>>();
-      self.states.insert(key, vals);
+      self.facets.insert(key, vals);
     }
     Ok(())
   }
 
   pub fn drop_scope(&mut self, scope: &str) -> Result<(), CoreError> {
     let suffix = format!("@{scope}");
-    self
-      .states
-      .retain(|k, _| scope == "static" && !k.as_str().contains('@') || !k.as_str().ends_with(&suffix));
+    self.facets.retain(|k, _| {
+      scope == "static" && !k.as_str().contains('@') || !k.as_str().ends_with(&suffix)
+    });
 
     if scope != "static" {
       let scope_dir = self.persistence_root.join(scope);
@@ -409,18 +305,15 @@ impl StateMachine {
 
   pub fn save_all_scopes(&mut self) -> Result<(), CoreError> {
     let mut per_scope: HashMap<Ustr, StateSnapshot> = HashMap::new();
-    for (name, branches) in &self.states {
+    for (name, branches) in &self.facets {
       if name.as_str().contains(":_") {
         continue;
       }
       let scope = Self::scope_from_state_name(name.as_str());
-      per_scope
-        .entry(scope)
-        .or_default()
-        .insert(
-          name.to_string(),
-          branches.iter().map(StateEntry::from).collect::<Vec<_>>(),
-        );
+      per_scope.entry(scope).or_default().insert(
+        name.to_string(),
+        branches.iter().map(StateEntry::from).collect::<Vec<_>>(),
+      );
     }
     // Always materialize static persistence so the scoped layout exists
     // even before the first persisted flow state is written.
@@ -436,7 +329,7 @@ impl StateMachine {
 
   pub fn snapshot_for_persistence(&self) -> StateSnapshot {
     self
-      .states
+      .facets
       .iter()
       .filter_map(|(name, states)| {
         // State impermanence
@@ -453,8 +346,8 @@ impl StateMachine {
 }
 
 pub struct FlowRuntime {
-  state_defs: HashMap<Ustr, Arc<StateMetadata>>,
-  signal_defs: HashMap<Ustr, Arc<SignalMetadata>>,
+  facet_defs: HashMap<Ustr, Arc<FlowFacetMetadata>>,
+  impulse_defs: HashMap<Ustr, Arc<FlowImpulseMetadata>>,
   inverse_transcendence_index: HashMap<Ustr, HashSet<Ustr>>,
   transcendence_index: HashMap<Ustr, HashSet<Ustr>>,
 }
@@ -462,8 +355,8 @@ pub struct FlowRuntime {
 impl Default for FlowRuntime {
   fn default() -> Self {
     Self {
-      state_defs: HashMap::new(),
-      signal_defs: HashMap::new(),
+      facet_defs: HashMap::new(),
+      impulse_defs: HashMap::new(),
       inverse_transcendence_index: HashMap::new(),
       transcendence_index: HashMap::new(),
     }
@@ -500,7 +393,7 @@ impl FlowRuntime {
     }
   }
 
-  fn publish_to_state_subscribers(
+  fn publish_to_facet_subscribers(
     &self,
     dispatch: &RuntimeDispatcher,
     endpoint: &str,
@@ -523,7 +416,7 @@ impl FlowRuntime {
         "send",
         RuntimePayload::default()
           .insert("endpoint", endpoint.to_ustr())
-          .insert("type", "state".to_string())
+          .insert("type", "facet".to_string())
           .insert("name", endpoint.to_ustr())
           .insert("action", action.to_string())
           .insert("payload", payload.to_json()),
@@ -531,8 +424,8 @@ impl FlowRuntime {
     }
   }
 
-  fn setup_all_state_subscribers(&self, dispatch: &RuntimeDispatcher) {
-    for (name, def) in &self.state_defs {
+  fn setup_all_facet_subscribers(&self, dispatch: &RuntimeDispatcher) {
+    for (name, def) in &self.facet_defs {
       if let Some(subscribers) = def.subscribers.as_deref() {
         for subscriber in subscribers {
           self.setup_subscriber_endpoint(dispatch, name.as_str(), subscriber);
@@ -541,14 +434,14 @@ impl FlowRuntime {
     }
   }
 
-  fn state_subscribers_for(&self, name: &Ustr) -> Option<Vec<TransportMethod>> {
+  fn facet_subscribers_for(&self, name: &Ustr) -> Option<Vec<TransportMethod>> {
     self
-      .state_defs
+      .facet_defs
       .get(name)
       .and_then(|d| d.subscribers.clone())
   }
 
-  fn save_state_machine(&self, sm: &mut StateMachine) -> Result<(), CoreError> {
+  fn save_facet_graph(&self, sm: &mut FacetGraph) -> Result<(), CoreError> {
     sm.save_all_scopes()?;
     Ok(())
   }
@@ -562,9 +455,9 @@ impl FlowRuntime {
     }
   }
 
-  fn set_state(
+  fn set_facet(
     &mut self,
-    sm: &mut StateMachine,
+    sm: &mut FacetGraph,
     name: impl Into<Ustr>,
     payload: Option<FlowPayload>,
     variables: Option<&VariableHeap>,
@@ -581,7 +474,7 @@ impl FlowRuntime {
     guard.insert(guard_key.clone());
 
     let def = self
-      .state_defs
+      .facet_defs
       .get(&name)
       .or_else(|| {
         let item_name = name
@@ -590,7 +483,7 @@ impl FlowRuntime {
           .map(|(_, n)| n)
           .unwrap_or(name.as_str());
         self
-          .state_defs
+          .facet_defs
           .iter()
           .find(|(_, d)| d.name.as_str() == item_name)
           .map(|(_, d)| d)
@@ -610,16 +503,16 @@ impl FlowRuntime {
     let instance = FlowInstance {
       name: name.clone(),
       payload: flow_payload,
-      r#type: FlowType::State,
+      r#type: FlowType::Facet,
     };
 
     event_bus.emit(FlowEvent {
       name: name.clone(),
       payload: instance.payload.to_json(),
       action: FlowAction::Apply,
-      flow_type: FlowEventType::State,
+      flow_type: FlowEventType::Facet,
     });
-    self.publish_to_state_subscribers(
+    self.publish_to_facet_subscribers(
       dispatch,
       name.as_str(),
       &instance.payload,
@@ -627,7 +520,7 @@ impl FlowRuntime {
       def.subscribers.as_deref(),
     );
 
-    let entry = sm.states.entry(name).or_default();
+    let entry = sm.facets.entry(name).or_default();
     match &instance.payload {
       FlowPayload::String(_) | FlowPayload::Bytes(_) | FlowPayload::None(_) => {
         entry.clear();
@@ -691,9 +584,9 @@ impl FlowRuntime {
     Ok(())
   }
 
-  fn remove_state(
+  fn remove_facet(
     &mut self,
-    sm: &mut StateMachine,
+    sm: &mut FacetGraph,
     name: &str,
     filter: Option<FlowMatchOperation>,
     variables: Option<&VariableHeap>,
@@ -701,7 +594,7 @@ impl FlowRuntime {
     event_bus: &EventBus,
     dispatch: &RuntimeDispatcher,
   ) -> CoreResult<()> {
-    if let Some(branches) = sm.states.remove(name) {
+    if let Some(branches) = sm.facets.remove(name) {
       let (to_keep, to_remove): (Vec<_>, Vec<_>) = if let Some(filter) = &filter {
         branches
           .into_iter()
@@ -711,7 +604,7 @@ impl FlowRuntime {
       };
 
       for mut branch in to_remove {
-        branch.r#type = FlowType::State;
+        branch.r#type = FlowType::Facet;
         let guard_key = Ustr::from(format!(
           "revert::{}::{}",
           branch.name,
@@ -726,10 +619,10 @@ impl FlowRuntime {
           name: branch.name.clone(),
           payload: branch.payload.to_json(),
           action: FlowAction::Revert,
-          flow_type: FlowEventType::State,
+          flow_type: FlowEventType::Facet,
         });
-        let subscribers = self.state_subscribers_for(&name.to_ustr());
-        self.publish_to_state_subscribers(
+        let subscribers = self.facet_subscribers_for(&name.to_ustr());
+        self.publish_to_facet_subscribers(
           dispatch,
           branch.name.as_str(),
           &branch.payload,
@@ -759,14 +652,14 @@ impl FlowRuntime {
       }
 
       if !to_keep.is_empty() {
-        sm.states.insert(Ustr::from(name.to_string()), to_keep);
+        sm.facets.insert(Ustr::from(name.to_string()), to_keep);
       }
     }
 
     Ok(())
   }
 
-  fn emit_signal(
+  fn impulse(
     &self,
     name: impl Into<Ustr>,
     payload: Option<FlowPayload>,
@@ -774,7 +667,7 @@ impl FlowRuntime {
   ) -> Result<(), CoreError> {
     let name = name.into();
     let def = self
-      .signal_defs
+      .impulse_defs
       .get(&name)
       .or_else(|| {
         let item_name = name
@@ -783,7 +676,7 @@ impl FlowRuntime {
           .map(|(_, n)| n)
           .unwrap_or(name.as_str());
         self
-          .signal_defs
+          .impulse_defs
           .iter()
           .find(|(_, d)| d.name.as_str() == item_name)
           .map(|(_, d)| d)
@@ -802,21 +695,21 @@ impl FlowRuntime {
       name: name.clone(),
       payload: flow_payload.to_json(),
       action: FlowAction::Apply,
-      flow_type: FlowEventType::Signal,
+      flow_type: FlowEventType::Impulse,
     });
 
     Ok(())
   }
 
-  fn reconcile_signal_transcendence(
+  fn reconcile_impulse_transcendence(
     &self,
-    sm: &StateMachine,
+    sm: &FacetGraph,
     source: &FlowInstance,
     event_bus: &EventBus,
     emitted: &mut HashSet<Ustr>,
   ) {
     let dependents: Vec<(Ustr, FlowPayload)> = self
-      .signal_defs
+      .impulse_defs
       .iter()
       .filter_map(|(full_name, def)| {
         let after = def.after.as_ref()?;
@@ -844,13 +737,13 @@ impl FlowRuntime {
         continue;
       }
       emitted.insert(sig);
-      let _ = self.emit_signal(signal_name, Some(payload), event_bus);
+      let _ = self.impulse(signal_name, Some(payload), event_bus);
     }
   }
 
   fn reconcile_transcendence(
     &mut self,
-    sm: &mut StateMachine,
+    sm: &mut FacetGraph,
     source: &FlowInstance,
     action: FlowAction,
     variables: Option<&VariableHeap>,
@@ -863,7 +756,7 @@ impl FlowRuntime {
     };
 
     for full_name in targets {
-      let Some(def) = self.state_defs.get(&full_name) else {
+      let Some(def) = self.facet_defs.get(&full_name) else {
         continue;
       };
 
@@ -893,7 +786,7 @@ impl FlowRuntime {
       //   .all(|cond| condition_matches(sm, cond, Some(source), Some(&payload)));
 
       match action {
-        FlowAction::Apply => self.set_state(
+        FlowAction::Apply => self.set_facet(
           sm,
           full_name,
           Some(payload),
@@ -902,7 +795,7 @@ impl FlowRuntime {
           event_bus,
           dispatch,
         )?,
-        FlowAction::Revert => self.remove_state(
+        FlowAction::Revert => self.remove_facet(
           sm,
           &full_name,
           payload_to_filter(&payload),
@@ -942,7 +835,7 @@ impl FlowRuntime {
 
   fn reconcile_inverse_transcendence_for_source(
     &mut self,
-    sm: &mut StateMachine,
+    sm: &mut FacetGraph,
     source: &FlowInstance,
     action: FlowAction,
     variables: Option<&VariableHeap>,
@@ -956,7 +849,7 @@ impl FlowRuntime {
     let target_names: Vec<Ustr> = targets.iter().cloned().collect();
 
     for full_name in target_names {
-      let Some(def) = self.state_defs.get(&full_name).cloned() else {
+      let Some(def) = self.facet_defs.get(&full_name).cloned() else {
         continue;
       };
       let Some(deps): Option<Vec<InverseBranchingConfig>> = def.stop_on.clone() else {
@@ -968,14 +861,14 @@ impl FlowRuntime {
       for payload in if auto_activate {
         auto_payloads_for(&def, None, variables)
       } else {
-        sm.states.get(&full_name).map_or(Vec::new(), |x| {
+        sm.facets.get(&full_name).map_or(Vec::new(), |x| {
           x.iter().map(|x| x.payload.clone()).collect()
         })
       } {
         let should_activate = auto_activate
           && deps.iter().all(|cfg| {
             let branches = sm
-              .states
+              .facets
               .get(cfg.name())
               .map(|v| v.as_slice())
               .unwrap_or(&[]);
@@ -1000,7 +893,7 @@ impl FlowRuntime {
           });
 
         let currently_active = sm
-          .states
+          .facets
           .get(&full_name)
           .map(|branches| {
             branches
@@ -1010,7 +903,7 @@ impl FlowRuntime {
           .unwrap_or(false);
 
         if should_activate && !currently_active {
-          self.set_state(
+          self.set_facet(
             sm,
             full_name.clone(),
             Some(payload.clone()),
@@ -1020,7 +913,7 @@ impl FlowRuntime {
             dispatch,
           )?;
         } else if !should_activate && currently_active {
-          self.remove_state(
+          self.remove_facet(
             sm,
             full_name.as_str(),
             payload_to_filter(&payload),
@@ -1038,7 +931,7 @@ impl FlowRuntime {
 
   fn reconcile_inverse_transcendence_all(
     &mut self,
-    sm: &mut StateMachine,
+    sm: &mut FacetGraph,
     variables: Option<&VariableHeap>,
     guard: &mut HashSet<Ustr>,
     event_bus: &EventBus,
@@ -1049,7 +942,7 @@ impl FlowRuntime {
       let source_instance = FlowInstance {
         name: source,
         payload: FlowPayload::None(false),
-        r#type: FlowType::State,
+        r#type: FlowType::Facet,
       };
       self.reconcile_inverse_transcendence_for_source(
         sm,
@@ -1069,8 +962,8 @@ impl FlowRuntime {
     &self,
     metadata: &MetadataRegistry,
   ) -> (
-    HashMap<Ustr, Arc<StateMetadata>>,
-    HashMap<Ustr, Arc<SignalMetadata>>,
+    HashMap<Ustr, Arc<FlowFacetMetadata>>,
+    HashMap<Ustr, Arc<FlowImpulseMetadata>>,
   ) {
     let mut state_defs = HashMap::new();
     let mut signal_defs = HashMap::new();
@@ -1080,14 +973,15 @@ impl FlowRuntime {
         continue;
       };
       for group in m.groups() {
-        if let Some(states) = metadata.group_items::<State>(meta_name.clone(), group.clone()) {
+        if let Some(states) = metadata.group_items::<FlowFacet>(meta_name.clone(), group.clone()) {
           for s in states {
             let key = Ustr::from(format!("{group}:{}@{}", s.name, meta_name));
             state_defs.insert(key.clone(), s.clone());
             state_defs.insert(Ustr::from(format!("{group}:{}", s.name)), s);
           }
         }
-        if let Some(signals) = metadata.group_items::<Signal>(meta_name.clone(), group.clone()) {
+        if let Some(signals) = metadata.group_items::<FlowImpulse>(meta_name.clone(), group.clone())
+        {
           for s in signals {
             let key = Ustr::from(format!("{group}:{}@{}", s.name, meta_name));
             signal_defs.insert(key.clone(), s.clone());
@@ -1102,15 +996,15 @@ impl FlowRuntime {
 
   fn refresh_metadata_and_indexes(&mut self, metadata: &MetadataRegistry) {
     let (state_defs, signal_defs) = self.collect_defs(metadata);
-    self.state_defs = state_defs;
-    self.signal_defs = signal_defs;
+    self.facet_defs = state_defs;
+    self.impulse_defs = signal_defs;
     self.rebuild_inverse_transcendence_index();
     self.rebuild_transcendence_index();
   }
 
   fn rebuild_inverse_transcendence_index(&mut self) {
     self.inverse_transcendence_index.clear();
-    for (full_name, def) in &self.state_defs {
+    for (full_name, def) in &self.facet_defs {
       let Some(deps) = &def.stop_on else {
         continue;
       };
@@ -1126,7 +1020,7 @@ impl FlowRuntime {
 
   fn rebuild_transcendence_index(&mut self) {
     self.transcendence_index.clear();
-    for (full_name, def) in &self.state_defs {
+    for (full_name, def) in &self.facet_defs {
       let Some(after) = &def.after else {
         continue;
       };
@@ -1146,8 +1040,8 @@ impl FlowRuntime {
     match cond {
       FlowItem::Simple(name) => Some(name.clone()),
       FlowItem::Detailed {
-        state,
-        signal: _,
+        facet: state,
+        impulse: _,
         target: _,
         branch: _,
       } => state.clone(),
@@ -1169,16 +1063,16 @@ impl Runtime for FlowRuntime {
     log: &LogHandle,
   ) -> Result<Option<RuntimePayload>, CoreError> {
     match action {
-      "set_state" => {
+      "set_facet" => {
         let name = payload.get::<Ustr>("name")?;
         let flow_payload = FlowPayload::from_json(payload.get::<serde_json::Value>("payload").ok());
         ctx
           .registry
-          .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-            (StateMachine::KEY.into(), VariableHeap::KEY.into()),
+          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+            (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
             |_, (sm, vh)| {
               let mut guard = HashSet::new();
-              self.set_state(
+              self.set_facet(
                 sm,
                 name.clone(),
                 Some(flow_payload.clone()),
@@ -1187,7 +1081,7 @@ impl Runtime for FlowRuntime {
                 ctx.event_bus,
                 dispatch,
               )?;
-              self.save_state_machine(sm)
+              self.save_facet_graph(sm)
             },
           )?;
 
@@ -1200,7 +1094,7 @@ impl Runtime for FlowRuntime {
           notifier.notify()?;
         }
       }
-      "remove_state" => {
+      "remove_facet" => {
         let name = payload.get::<Ustr>("name")?;
         let filter_json: Option<serde_json::Value> =
           payload.get("filter").ok().or(payload.get("payload").ok());
@@ -1215,11 +1109,11 @@ impl Runtime for FlowRuntime {
 
         ctx
           .registry
-          .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-            (StateMachine::KEY.into(), VariableHeap::KEY.into()),
+          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+            (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
             |_, (sm, vh)| {
               let mut guard = HashSet::new();
-              self.remove_state(
+              self.remove_facet(
                 sm,
                 name.as_str(),
                 filter.clone(),
@@ -1228,7 +1122,7 @@ impl Runtime for FlowRuntime {
                 ctx.event_bus,
                 dispatch,
               )?;
-              self.save_state_machine(sm)
+              self.save_facet_graph(sm)
             },
           )?;
 
@@ -1241,9 +1135,9 @@ impl Runtime for FlowRuntime {
           notifier.notify()?;
         }
 
-        if let Some(sm) = ctx.registry.singleton::<StateMachine>(StateMachine::KEY) {
+        if let Some(sm) = ctx.registry.singleton::<FacetGraph>(FacetGraph::KEY) {
           let should_drop_scope = sm
-            .states
+            .facets
             .get(&name)
             .map(|branches| branches.is_empty())
             .unwrap_or(true);
@@ -1258,40 +1152,40 @@ impl Runtime for FlowRuntime {
           }
         }
       }
-      "emit_signal" => {
+      "impulse" => {
         let name = payload.get::<Ustr>("name")?;
         let flow_payload = FlowPayload::from_json(payload.get("payload").ok());
         let mut fields = HashMap::new();
         fields.insert("name".to_string(), name.to_string());
         fields.insert("payload".into(), format!("{flow_payload:?}"));
-        self.emit_signal(name.clone(), Some(flow_payload.clone()), ctx.event_bus)?;
+        self.impulse(name.clone(), Some(flow_payload.clone()), ctx.event_bus)?;
         let source = FlowInstance {
           name,
           payload: flow_payload,
-          r#type: FlowType::Signal,
+          r#type: FlowType::Impulse,
         };
         let mut emitted = HashSet::new();
         let sm = ctx
           .registry
-          .singleton_mut::<StateMachine>(StateMachine::KEY)
+          .singleton_mut::<FacetGraph>(FacetGraph::KEY)
           .ok_or(CoreError::InvalidState(
             "state machine store not found".into(),
           ))?;
         log.log(LogLevel::Trace, "flow-runtime", "emitting signal", fields);
-        self.reconcile_signal_transcendence(sm, &source, ctx.event_bus, &mut emitted);
+        self.reconcile_impulse_transcendence(sm, &source, ctx.event_bus, &mut emitted);
       }
       "bootstrap" => {
         self.refresh_metadata_and_indexes(ctx.registry.metadata);
-        self.setup_all_state_subscribers(dispatch);
+        self.setup_all_facet_subscribers(dispatch);
         ctx
           .registry
-          .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-            (StateMachine::KEY.into(), VariableHeap::KEY.into()),
+          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+            (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
             |_, (sm, vh)| {
               let mut guard = HashSet::new();
 
               let existing_states = sm
-                .states
+                .facets
                 .values()
                 .flat_map(|branches| branches.iter().cloned())
                 .collect::<Vec<_>>();
@@ -1315,7 +1209,7 @@ impl Runtime for FlowRuntime {
                 ctx.event_bus,
                 dispatch,
               )?;
-              self.save_state_machine(sm)
+              self.save_facet_graph(sm)
             },
           )?;
       }
@@ -1343,21 +1237,23 @@ pub fn state_root_path() -> PathBuf {
 }
 
 pub fn state_scope_path(scope: &str) -> PathBuf {
-  if scope == "static" && let Ok(path) = std::env::var("RIND_STATE_PATH") {
+  if scope == "static"
+    && let Ok(path) = std::env::var("RIND_STATE_PATH")
+  {
     return PathBuf::from(path);
   }
   state_root_path().join(scope).join("state.bin")
 }
 
 pub fn condition_is_active(
-  sm: &StateMachine,
+  sm: &FacetGraph,
   cond: &FlowItem,
   payload: Option<&FlowPayload>,
 ) -> bool {
-  for branches in sm.states.values() {
+  for branches in sm.facets.values() {
     for branch in branches {
       let mut state = branch.clone();
-      state.r#type = FlowType::State;
+      state.r#type = FlowType::Facet;
       if check_condition(cond, &state) && payload_compatible(payload, &state.payload) {
         return true;
       }
@@ -1367,7 +1263,7 @@ pub fn condition_is_active(
 }
 
 pub fn condition_matches(
-  sm: &StateMachine,
+  sm: &FacetGraph,
   cond: &FlowItem,
   event: Option<&FlowInstance>,
   payload: Option<&FlowPayload>,
@@ -1381,7 +1277,7 @@ pub fn condition_matches(
 }
 
 fn payloads_from_toml(
-  def: &StateMetadata,
+  def: &FlowFacetMetadata,
   cfg: &AutoPayloadConfig,
   toml_value: toml::Value,
 ) -> FlowPayload {
@@ -1418,7 +1314,7 @@ fn payloads_from_toml(
 }
 
 fn auto_payloads_for(
-  def: &StateMetadata,
+  def: &FlowFacetMetadata,
   _payload: Option<&FlowPayload>,
   variables: Option<&VariableHeap>,
 ) -> Vec<FlowPayload> {
@@ -1447,7 +1343,7 @@ fn auto_payloads_for(
 }
 
 fn transcendent_payload_for(
-  def: &StateMetadata,
+  def: &FlowFacetMetadata,
   source_payload: &FlowPayload,
 ) -> Option<FlowPayload> {
   match def.payload {

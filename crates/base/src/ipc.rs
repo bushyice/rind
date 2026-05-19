@@ -1,11 +1,11 @@
 use rind_ipc::payloads::{ListPayload, SSPayload};
 use rind_ipc::recv::IpcSourcemap;
 use rind_ipc::ser::{
-  IpcListComponent, SignalSerialized, SocketSerialized, StateSerialized, StringifySerialized,
+  FacetSerialized, ImpulseSerialized, IpcListComponent, IpcListPrinter, SerializeSerialized,
+  SocketSerialized,
 };
 use rind_ipc::{Message, MessageType};
 use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 
@@ -14,10 +14,13 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crate::flow::{Signal, State, StateMachine};
+use crate::flow::{FacetGraph, FlowFacet, FlowImpulse};
 use crate::mount::{Mount, is_mounted};
 use crate::permissions::PERM_LOGIN;
-use crate::scopes::ScopeStore;
+use crate::prelude::{
+  handle_ipc_grant_permission, handle_ipc_revoke_permission, handle_ipc_show_permission,
+};
+use crate::scopes::{ScopeInfo, ScopeStore};
 use crate::services::{Service, handle_ipc_start, handle_ipc_stop};
 use crate::sockets::{Socket, handle_ipc_start_socket, handle_ipc_stop_socket};
 use crate::user::{handle_ipc_login, handle_ipc_logout, handle_ipc_run0};
@@ -67,7 +70,7 @@ fn build_ipc_list_response(
 ) -> Result<Message, CoreError> {
   let sm = ctx
     .registry
-    .singleton::<StateMachine>(StateMachine::KEY)
+    .singleton::<FacetGraph>(FacetGraph::KEY)
     .ok_or_else(|| CoreError::InvalidState("state machine store not found".into()))?;
 
   Ok(if payload.unit_type == "unit" {
@@ -75,8 +78,8 @@ fn build_ipc_list_response(
     let mut services = Vec::new();
     let mut mounts = Vec::new();
     let mut sockets = Vec::new();
-    let mut states = Vec::new();
-    let mut signals = Vec::new();
+    let mut facets = Vec::new();
+    let mut impulses = Vec::new();
     for (scope, items) in ctx.registry.metadata.all_items::<Service>() {
       for (group, meta) in items {
         if group == target_group {
@@ -98,17 +101,17 @@ fn build_ipc_list_response(
         }
       }
     }
-    for (scope, items) in ctx.registry.metadata.all_items::<State>() {
+    for (scope, items) in ctx.registry.metadata.all_items::<FlowFacet>() {
       for (group, meta) in items {
         if group == target_group {
-          states.push((scope.clone(), meta));
+          facets.push((scope.clone(), meta));
         }
       }
     }
-    for (scope, items) in ctx.registry.metadata.all_items::<Signal>() {
+    for (scope, items) in ctx.registry.metadata.all_items::<FlowImpulse>() {
       for (group, meta) in items {
         if group == target_group {
-          signals.push((scope.clone(), meta));
+          impulses.push((scope.clone(), meta));
         }
       }
     }
@@ -168,34 +171,36 @@ fn build_ipc_list_response(
             r#type: format!("{:?}", x.r#type).to_ustr(),
           })
           .collect(),
-        states: states
+        facets: facets
           .iter()
-          .map(|(scope, st)| StateSerialized {
+          .map(|(scope, st)| FacetSerialized {
             name: st.name.clone(),
             instances: sm
-              .states
+              .facets
               .get(&Ustr::from(format!(
                 "{}:{}@{}",
                 payload.name, st.name, scope
               )))
               .or_else(|| {
-                sm.states
+                sm.facets
                   .get(&Ustr::from(format!("{}:{}", payload.name, st.name)))
               })
               .map_or(Default::default(), |x| {
-                x.iter().map(|x| x.payload.to_json()).collect()
+                x.iter()
+                  .map(|x| flexbuffers::to_vec(&x.payload.to_json()).unwrap_or_default())
+                  .collect()
               }),
             keys: st.branch.clone().unwrap_or_default(),
           })
           .collect(),
-        signals: signals
+        impulses: impulses
           .iter()
-          .map(|(_, st)| SignalSerialized {
+          .map(|(_, st)| ImpulseSerialized {
             name: st.name.clone(),
           })
           .collect(),
       }
-      .stringify(),
+      .serialize(),
     )
   } else if payload.unit_type == "service" {
     let Some(service_meta) = ctx
@@ -232,7 +237,7 @@ fn build_ipc_list_response(
           .map(|x| x.exec.clone())
           .collect(),
       }
-      .stringify(),
+      .serialize(),
     )
   } else if payload.unit_type == "socket" {
     let Some(sock_meta) = ctx
@@ -259,28 +264,30 @@ fn build_ipc_list_response(
         triggers: sock_meta.trigger.as_ref().map_or(0, |x| x.len()),
         r#type: format!("{:?}", sock_meta.r#type).to_ustr(),
       }
-      .stringify(),
+      .serialize(),
     )
-  } else if payload.unit_type == "state" && !payload.name.is_empty() {
+  } else if payload.unit_type == "facet" && !payload.name.is_empty() {
     let name_ustr = Ustr::from(payload.name.as_str());
-    let instances = sm.states.get(&name_ustr);
+    let instances = sm.facets.get(&name_ustr);
     let Some(def) = ctx
       .registry
       .metadata
-      .find::<State>("*", payload.name.clone())
+      .find::<FlowFacet>("*", payload.name.clone())
     else {
       return Err(CoreError::MetadataNotFound(format!(
-        "State not found: {}",
+        "Facet not found: {}",
         payload.name
       )));
     };
     let branches = def.branch.as_ref();
 
     Message::from_type(MessageType::Ok).with(
-      StateSerialized {
+      FacetSerialized {
         name: payload.name,
         instances: instances.map_or(Default::default(), |x| {
-          x.iter().map(|x| x.payload.to_json()).collect()
+          x.iter()
+            .map(|x| flexbuffers::to_vec(&x.payload.to_json()).unwrap_or_default())
+            .collect()
         }),
         keys: if let Some(branches) = branches {
           branches.clone()
@@ -288,25 +295,31 @@ fn build_ipc_list_response(
           Default::default()
         },
       }
-      .stringify(),
+      .serialize(),
     )
-  } else if payload.unit_type == "state" {
-    let states = &sm.states;
+  } else if payload.unit_type == "facet" {
+    let facets = &sm.facets;
 
     Message::from_type(MessageType::Ok).with(
-      serde_json::to_string(
-        &states
+      flexbuffers::to_vec(
+        &facets
           .iter()
           .filter_map(|(name, inst)| {
-            let def = ctx.registry.metadata.find::<State>("*", name.as_str())?;
+            let def = ctx
+              .registry
+              .metadata
+              .find::<FlowFacet>("*", name.as_str())?;
             let branches = def.branch.as_ref()?;
-            Some(StateSerialized {
+            Some(FacetSerialized {
               name: name.clone(),
-              instances: inst.iter().map(|x| x.payload.to_json()).collect(),
+              instances: inst
+                .iter()
+                .map(|x| flexbuffers::to_vec(&x.payload.to_json()).unwrap_or_default())
+                .collect(),
               keys: branches.clone(),
             })
           })
-          .collect::<Vec<StateSerialized>>(),
+          .collect::<Vec<FacetSerialized>>(),
       )
       .unwrap_or_default(),
     )
@@ -344,21 +357,21 @@ fn build_ipc_list_response(
             }
           }
         }
-        let mut states = Vec::new();
-        for (scope, items) in ctx.registry.metadata.all_items::<State>() {
+        let mut facets = Vec::new();
+        for (scope, items) in ctx.registry.metadata.all_items::<FlowFacet>() {
           for (g, s) in items {
             if g == group {
-              states.push((scope.clone(), s));
+              facets.push((scope.clone(), s));
             }
           }
         }
 
-        let signals = if let Some(signals) = ctx
+        let impulses = if let Some(impulses) = ctx
           .registry
           .metadata
-          .group_items::<Signal>("*", group.clone())
+          .group_items::<FlowImpulse>("*", group.clone())
         {
-          signals
+          impulses
         } else {
           Vec::new()
         };
@@ -387,12 +400,12 @@ fn build_ipc_list_response(
               .map_or(false, |x| x.iter().any(|x| x.active))
           })
           .count();
-        let active_states = states
+        let active_facets = facets
           .iter()
           .filter(|(scope, s)| {
-            sm.states
+            sm.facets
               .get(&Ustr::from(format!("{group}:{}@{}", s.name, scope)))
-              .or_else(|| sm.states.get(&Ustr::from(format!("{group}:{}", s.name))))
+              .or_else(|| sm.facets.get(&Ustr::from(format!("{group}:{}", s.name))))
               .is_some()
           })
           .count();
@@ -402,14 +415,14 @@ fn build_ipc_list_response(
           UnitSerialized {
             active_services,
             active_sockets,
-            active_states,
+            active_facets,
             mounted: mounted,
             mounts: mounts.len(),
             name: group.clone(),
             services: services.len(),
             sockets: sockets.len(),
-            states: states.len(),
-            signals: signals.len(),
+            facets: facets.len(),
+            impulses: impulses.len(),
           },
         );
       }
@@ -432,7 +445,7 @@ fn build_ipc_list_response(
       .dispatch(None, None, Some(&mut ctx.registry))?
       .downcast::<IpcListComponent>()
       .map_err(|_| CoreError::Unknown)?;
-    Message::from_type(MessageType::Ok).with(msg.stringify())
+    Message::from_type(MessageType::Ok).with(msg.serialize())
   })
 }
 
@@ -448,7 +461,7 @@ pub fn handle_ipc_list(
   Ok(
     build_ipc_list_response(payload, ctx)
       .or_else(|x| {
-        Ok::<Message, Message>(Message::from_type(MessageType::Error).with(x.to_string()))
+        Ok::<Message, Message>(Message::from_type(MessageType::Error).with_string(x.to_string()))
       })
       .unwrap(),
   )
@@ -557,10 +570,7 @@ pub fn handle_ipc_create_scope(
     store.upsert(scope, attrs, lifetime_state.clone());
   }
 
-  if let Some(sm) = ctx
-    .registry
-    .singleton_mut::<StateMachine>(StateMachine::KEY)
-  {
+  if let Some(sm) = ctx.registry.singleton_mut::<FacetGraph>(FacetGraph::KEY) {
     let _ = sm.load_scope_from_persistence(scope);
   }
   ctx.lifecycle.request(LifecycleAction::ReloadUnits);
@@ -591,15 +601,23 @@ pub fn handle_ipc_destroy_scope(
   if let Some(store) = ctx.registry.singleton_mut::<ScopeStore>(ScopeStore::KEY) {
     let _ = store.remove_scope(scope);
   }
-  if let Some(sm) = ctx
-    .registry
-    .singleton_mut::<StateMachine>(StateMachine::KEY)
-  {
+  if let Some(sm) = ctx.registry.singleton_mut::<FacetGraph>(FacetGraph::KEY) {
     let _ = sm.drop_scope(scope);
   }
   ctx.lifecycle.request(LifecycleAction::ReloadUnits);
 
   Ok(Message::ok("scope destroyed"))
+}
+
+impl SerializeSerialized for ScopeInfo {
+  fn serialize(&self) -> Vec<u8> {
+    flexbuffers::to_vec(serde_json::json!({
+      "name": self.name,
+      "attributes": self.attributes,
+      "lifetime_state": self.lifetime_state,
+    }))
+    .unwrap_or_default()
+  }
 }
 
 pub fn handle_ipc_list_scopes(
@@ -608,18 +626,18 @@ pub fn handle_ipc_list_scopes(
   _dispatch: &RuntimeDispatcher,
   _log: &LogHandle,
 ) -> Result<Message, CoreError> {
-  let list = ScopeStore::list_global()
-    .into_iter()
-    .map(|s| {
-      serde_json::json!({
-        "name": s.name,
-        "attributes": s.attributes,
-        "lifetime_state": s.lifetime_state,
-      })
-    })
-    .collect::<Vec<_>>();
+  let mut list = IpcListComponent::default().with_printer(IpcListPrinter {
+    r#type: "list".to_string(),
+    titles: vec!["Name".to_string(), "Attributes".to_string()],
+    keys: vec!["name".to_string(), "attributes".to_string()],
+    colors: vec!["blue".to_string(), "yellow".to_string()],
+  });
 
-  Ok(Message::from_type(MessageType::Ok).with(serde_json::to_string(&list).unwrap_or_default()))
+  for s in ScopeStore::list_global() {
+    list.add(s);
+  }
+
+  Ok(Message::from_type(MessageType::Ok).with(flexbuffers::to_vec(&list).unwrap_or_default()))
 }
 
 fn queue_lifecycle_action(
@@ -720,7 +738,21 @@ impl Runtime for IpcRuntime {
           handle_ipc_destroy_scope,
           PermissionExpr::All,
         );
-        ipcsrc.register("list_scopes", handle_ipc_list_scopes, PermissionExpr::All);
+        ipcsrc.register(
+          "show_permissions",
+          handle_ipc_show_permission,
+          PermissionExpr::All,
+        );
+        ipcsrc.register(
+          "grant_permission",
+          handle_ipc_grant_permission,
+          PermissionExpr::RootOnly,
+        );
+        ipcsrc.register(
+          "revoke_permission",
+          handle_ipc_revoke_permission,
+          PermissionExpr::RootOnly,
+        );
         ipcsrc.register("reload_units", handle_ipc_reload_units, PermissionExpr::All);
         ipcsrc.register("reboot", handle_ipc_reboot, PermissionExpr::All);
         ipcsrc.register("soft_reboot", handle_ipc_soft_reboot, PermissionExpr::All);
@@ -782,23 +814,7 @@ fn handle_client_connection(
 ) {
   let cred = get_peer_cred_stream(&stream).expect("failed to get cred");
   loop {
-    let mut len_buf = [0u8; 4];
-    if stream.read_exact(&mut len_buf).is_err() {
-      break;
-    }
-    let len = u32::from_be_bytes(len_buf) as usize;
-
-    let mut buf = vec![0u8; len];
-    if stream.read_exact(&mut buf).is_err() {
-      break;
-    }
-
-    let raw = match String::from_utf8(buf) {
-      Ok(s) => s,
-      Err(_) => continue,
-    };
-
-    let msg: Message = match serde_json::from_str::<Message>(&raw) {
+    let msg = match Message::read_signed(&mut stream) {
       Ok(m) => {
         if cred.uid == 0 && m.from_uid.is_some() {
           m
@@ -806,7 +822,7 @@ fn handle_client_connection(
           m.from_gid(cred.gid).from_uid(cred.uid).from_pid(cred.pid)
         }
       }
-      Err(_) => continue,
+      Err(_) => break,
     };
 
     let (reply_tx, reply_rx) = mpsc::channel::<Message>();
@@ -822,13 +838,7 @@ fn handle_client_connection(
       Err(_) => break,
     };
 
-    let resp_str = response.as_string().into_bytes();
-    let resp_len = (resp_str.len() as u32).to_be_bytes();
-
-    if stream.write_all(&resp_len).is_err() {
-      break;
-    }
-    if stream.write_all(&resp_str).is_err() {
+    if response.write_signed(&mut stream).is_err() {
       break;
     }
   }
@@ -850,7 +860,7 @@ fn handle_ipc_message(
 
   let Some(source) = ipcsrc_shared.message(&msg.action) else {
     return Message::from_type(MessageType::Error)
-      .with(format!("Message handler not found: {:?}", msg.action));
+      .with_string(format!("Message handler not found: {:?}", msg.action));
   };
 
   drop(ipcsrc_shared);
@@ -858,7 +868,7 @@ fn handle_ipc_message(
   if !matches!(&source.perms, PermissionExpr::All)
     && !pm.user_check(msg.from_uid.unwrap_or(0), &source.perms)
   {
-    return Message::from_type(MessageType::Error).with(format!("Permission Denied"));
+    return Message::from_type(MessageType::Error).with_string(format!("Permission Denied"));
   }
 
   let mut fields = HashMap::new();
@@ -867,6 +877,8 @@ fn handle_ipc_message(
 
   match (source.handler)(msg, ctx, dispatch, log) {
     Ok(resp) => resp,
-    Err(e) => Message::from_type(MessageType::Error).with(format!("IPC handler failed: {e}")),
+    Err(e) => {
+      Message::from_type(MessageType::Error).with_string(format!("IPC handler failed: {e}"))
+    }
   }
 }

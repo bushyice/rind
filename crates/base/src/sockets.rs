@@ -11,7 +11,7 @@ use nix::sys::socket::{
 use rind_core::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::flow::{FlowItem, FlowRuntimePayload, StateMachine, Trigger};
+use crate::flow::{FacetGraph, FlowItem, FlowRuntimePayload, Trigger};
 use crate::permissions::PERM_SYSTEM_SERVICES;
 use crate::prelude::{SocketActivation, VariableHeap, trigger_events};
 use rind_ipc::Message;
@@ -337,8 +337,8 @@ impl Runtime for SocketRuntime {
             trig.state = Some(w.name);
             trig.payload = Some(crate::flow::FlowPayload::from_json(Some(w.payload)));
             trig.flow_type = Some(match w.flow_type {
-              rind_core::prelude::FlowEventType::State => crate::flow::FlowType::State,
-              rind_core::prelude::FlowEventType::Signal => crate::flow::FlowType::Signal,
+              rind_core::prelude::FlowEventType::Facet => crate::flow::FlowType::Facet,
+              rind_core::prelude::FlowEventType::Impulse => crate::flow::FlowType::Impulse,
             });
             trig.action = w.action;
             let _ = dispatch.dispatch(
@@ -360,8 +360,8 @@ impl Runtime for SocketRuntime {
 
         ctx
           .registry
-          .singleton_handle::<(&mut StateMachine, &mut SocketRegistry), _>(
-            (StateMachine::KEY.into(), SocketRegistry::KEY.into()),
+          .singleton_handle::<(&mut FacetGraph, &mut SocketRegistry), _>(
+            (FacetGraph::KEY.into(), SocketRegistry::KEY.into()),
             |registry, (sm, sr)| {
               let target_keys = if let Some(event_name) = emit_trig.state.as_ref() {
                 let mut out = HashSet::new();
@@ -449,14 +449,14 @@ impl Runtime for SocketRuntime {
       "setup_all" => {
         ctx
           .registry
-          .singleton_handle::<(&mut StateMachine, &mut VariableHeap, &mut SocketRegistry), _>(
+          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap, &mut SocketRegistry), _>(
             (
-              StateMachine::KEY.into(),
+              FacetGraph::KEY.into(),
               VariableHeap::KEY.into(),
               SocketRegistry::KEY.into(),
             ),
             |registry, (sm, _vh, sr)| {
-              let Some(active) = sm.states.get("rind:active") else {
+              let Some(active) = sm.facets.get("rind:active") else {
                 return Ok(());
               };
 
@@ -626,8 +626,8 @@ impl Runtime for SocketRuntime {
 
         if let Some(triggers) = &socket.metadata.trigger {
           let triggers = triggers.clone();
-          ctx.registry.singleton_handle::<(&mut StateMachine,), _>(
-            (StateMachine::KEY.into(),),
+          ctx.registry.singleton_handle::<(&mut FacetGraph,), _>(
+            (FacetGraph::KEY.into(),),
             |_, (sm,)| {
               trigger_events(triggers, Some(sm), dispatch);
               Ok(())
@@ -684,6 +684,10 @@ pub fn handle_ipc_start_socket(
     false
   };
 
+  if sock.is_none() {
+    return Err(CoreError::not_found("socket", &payload.name));
+  }
+
   if !can_manage {
     return Err(CoreError::PermissionDenied);
   }
@@ -697,7 +701,7 @@ pub fn handle_ipc_start_socket(
   if payload.persist {
     let _ = dispatch.dispatch(
       "flow",
-      "set_state",
+      "set_facet",
       FlowRuntimePayload::new("rind:active")
         .payload(payload.name.clone())
         .into(),
@@ -759,7 +763,7 @@ pub fn handle_ipc_stop_socket(
   if payload.persist {
     let _ = dispatch.dispatch(
       "flow",
-      "remove_state",
+      "remove_facet",
       FlowRuntimePayload::new("rind:active")
         .payload(payload.name.clone())
         .into(),

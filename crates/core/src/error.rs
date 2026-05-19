@@ -12,8 +12,8 @@ pub enum CoreError {
   ParseError(String),
   MissingField { path: String },
   TypeMismatch { path: String, expected: String },
-  MissingSchema { name: String },
-  DependencyCycle { cycle: Vec<String> },
+  MissingSchema(String),
+  DependencyCycle(Vec<String>),
   RuntimeStopped,
   PermissionDenied,
   DoubleKey,
@@ -28,6 +28,8 @@ pub enum CoreError {
   PamError(PamError),
   Custom(String),
   System(Errno),
+  IoError(String),
+  NotFound(String),
 }
 
 impl Display for CoreError {
@@ -47,18 +49,20 @@ impl Display for CoreError {
           "duplicate permissions for `{id}`. already registered as {name}"
         )
       }
-      CoreError::MissingSchema { name } => write!(f, "missing metadata schema `{name}`"),
-      CoreError::DependencyCycle { cycle } => write!(f, "dependency cycle: {}", cycle.join(" -> ")),
+      CoreError::MissingSchema(name) => write!(f, "missing metadata schema `{name}`"),
+      CoreError::DependencyCycle(cycle) => write!(f, "dependency cycle: {}", cycle.join(" -> ")),
       CoreError::RuntimeStopped => write!(f, "runtime stopped"),
       CoreError::PermissionDenied => write!(f, "Permission Denied"),
       CoreError::Unknown => write!(f, "Unknown error"),
       CoreError::AuthFailed(e) => write!(f, "authentication failed: {e}"),
       CoreError::MetadataNotFound(x) => write!(f, "metadata {x} not found"),
       CoreError::MissingInstances(x) => write!(f, "metadata or instance {x} not found"),
+      CoreError::NotFound(x) => write!(f, "{x} not found"),
       CoreError::InvalidState(x) => write!(f, "invalid state: {x}"),
       CoreError::EventBusError(x) => write!(f, "event bus error: {x}"),
       CoreError::PersistenceError(x) => write!(f, "persistence error: {x}"),
       CoreError::Custom(x) => write!(f, "{x}"),
+      CoreError::IoError(x) => write!(f, "{x}"),
     }
   }
 }
@@ -67,11 +71,15 @@ impl CoreError {
   pub fn custom(thing: impl std::error::Error) -> Self {
     CoreError::Custom(thing.to_string())
   }
+
+  pub fn not_found(name: &str, entity: &str) -> Self {
+    CoreError::NotFound(format!("{name} {entity}"))
+  }
 }
 
 impl From<std::io::Error> for CoreError {
   fn from(value: std::io::Error) -> Self {
-    Self::Custom(value.to_string())
+    Self::IoError(value.to_string())
   }
 }
 

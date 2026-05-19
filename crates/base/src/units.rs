@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::dunits::create_units_metadata;
-use crate::flow::{StateMachine, state_scope_path};
+use crate::flow::{FacetGraph, state_scope_path};
 use crate::loader::RegisterLoader;
 use crate::permissions::{PERM_LOGIN, PERM_RUN0, PERM_SYSTEM_SERVICES};
 use crate::scopes::ScopeStore;
@@ -119,9 +119,9 @@ impl Orchestrator for UnitsOrchestrator {
       .with_instances(|instances| -> std::result::Result<(), CoreError> {
         let mut registry = InstanceRegistry::new(metadata, instances);
 
-        let _ = registry.singleton_or_insert_with::<StateMachine>(StateMachine::KEY, || {
+        let _ = registry.singleton_or_insert_with::<FacetGraph>(FacetGraph::KEY, || {
           let mut state =
-            StateMachine::from_persistence(StatePersistence::new(state_scope_path("static")));
+            FacetGraph::from_persistence(StatePersistence::new(state_scope_path("static")));
           let _ = state.load_from_persistence();
           let _ = state.save_all_scopes();
           state

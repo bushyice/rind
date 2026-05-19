@@ -1,8 +1,6 @@
-use crate::flow::{
-  FlowInstance, FlowItem, FlowMatchOperation, FlowPayload, FlowPayloadType, FlowType, StateMachine,
-  Trigger,
-};
+use crate::flow::{FacetGraph, FlowInstance, FlowItem, FlowType, Trigger};
 use rind_core::prelude::*;
+use rind_ipc::{FlowMatchOperation, FlowPayload, FlowPayloadType};
 
 fn same_flow_name(a: &Ustr, b: &Ustr) -> bool {
   if a == b {
@@ -15,13 +13,13 @@ pub fn check_condition(cond: &FlowItem, trigger: &FlowInstance) -> bool {
   match cond {
     FlowItem::Simple(name) => same_flow_name(name, &trigger.name),
     FlowItem::Detailed {
-      state,
-      signal,
+      facet: state,
+      impulse: signal,
       target,
       branch,
     } => {
       if let Some(state_name) = state {
-        if trigger.r#type != FlowType::State || !same_flow_name(state_name, &trigger.name) {
+        if trigger.r#type != FlowType::Facet || !same_flow_name(state_name, &trigger.name) {
           return false;
         }
         if let Some(target_op) = target {
@@ -36,7 +34,7 @@ pub fn check_condition(cond: &FlowItem, trigger: &FlowInstance) -> bool {
         }
         true
       } else if let Some(sig_name) = signal {
-        if trigger.r#type != FlowType::Signal || !same_flow_name(sig_name, &trigger.name) {
+        if trigger.r#type != FlowType::Impulse || !same_flow_name(sig_name, &trigger.name) {
           return false;
         }
         if let Some(target_op) = target {
@@ -80,7 +78,7 @@ pub fn match_operation(matcher: &FlowMatchOperation, payload: &FlowPayload) -> b
 
 pub fn trigger_events(
   triggers: Vec<Trigger>,
-  sm: Option<&StateMachine>,
+  sm: Option<&FacetGraph>,
   dispatch: &RuntimeDispatcher,
 ) {
   for trigger in triggers {
@@ -107,7 +105,7 @@ pub fn trigger_events(
       match &trigger.payload {
         Some(serde_json::Value::String(s)) => {
           if let Some((state_name, path)) = s.rsplit_once(':') {
-            if let Some(branches) = sm.states.get(state_name) {
+            if let Some(branches) = sm.facets.get(state_name) {
               for branch in branches {
                 let mut resolved_trigger = trigger.clone();
                 let resolved = resolve_path(branch, path);
@@ -123,7 +121,7 @@ pub fn trigger_events(
           let mut primary_state = None;
           for v in map.values() {
             if let Some(s) = v.as_str() {
-              if let Some(spec) = s.strip_prefix("state:") {
+              if let Some(spec) = s.strip_prefix("facet:") {
                 if let Some((state_name, _)) = spec.rsplit_once(':') {
                   primary_state = Some(state_name.to_string());
                   break;
@@ -133,18 +131,18 @@ pub fn trigger_events(
           }
 
           if let Some(state_name) = primary_state {
-            if let Some(branches) = sm.states.get(state_name.as_str()) {
+            if let Some(branches) = sm.facets.get(state_name.as_str()) {
               for branch in branches {
                 let mut resolved_trigger = trigger.clone();
                 let mut new_map = map.clone();
                 for (_k, v) in new_map.iter_mut() {
                   if let Some(s) = v.as_str() {
-                    if let Some(spec) = s.strip_prefix("state:") {
+                    if let Some(spec) = s.strip_prefix("facet:") {
                       if let Some((s_name, path)) = spec.split_once('/') {
                         let branch_to_use = if s_name == state_name {
                           Some(branch)
                         } else {
-                          sm.states.get(s_name).and_then(|b| b.first())
+                          sm.facets.get(s_name).and_then(|b| b.first())
                         };
                         if let Some(b) = branch_to_use {
                           *v = serde_json::Value::String(resolve_path(b, path));
@@ -179,18 +177,18 @@ pub fn trigger_events(
           cmd.args(args);
         }
         let _ = cmd.spawn();
-      } else if let Some(state) = &resolved_trigger.state {
+      } else if let Some(state) = &resolved_trigger.facet {
         let mut p = rpayload!({ "name": state.clone() });
         if let Some(payload) = &resolved_trigger.payload {
           p = p.insert("payload", payload.clone());
         }
-        let _ = dispatch.dispatch("flow", "set_state", p);
-      } else if let Some(signal) = &resolved_trigger.signal {
+        let _ = dispatch.dispatch("flow", "set_facet", p);
+      } else if let Some(signal) = &resolved_trigger.impulse {
         let mut p = rpayload!({ "name": signal.clone() });
         if let Some(payload) = &resolved_trigger.payload {
           p = p.insert("payload", payload.clone());
         }
-        let _ = dispatch.dispatch("flow", "emit_signal", p);
+        let _ = dispatch.dispatch("flow", "impulse", p);
       } else if let Some(service) = &resolved_trigger.service {
         let _ = dispatch.dispatch(
           "services",

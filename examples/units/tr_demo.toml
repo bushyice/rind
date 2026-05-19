@@ -3,35 +3,35 @@ name = "user_session"
 run.exec = "/usr/bin/example-active"
 run.args = ["user-session"]
 restart = false
-start-on = [{ state = "tr_demo:user_active" }]
+start-on = [{ facet = "tr_demo:user_active" }]
 
 [[service]]
 name = "user_login"
 run.exec = "/usr/bin/user_login"
 run.args = []
 restart = false
-start-on = [{ state = "tty:login_required" }]
-transport = { id = "env", options = ["RIND_LOGIN_TTY=state:$/tty"] }
-branching = { enabled = true, source-state = "tty:login_required", key = "tty", max-instances = 16 }
+start-on = [{ facet = "tty:login_required" }]
+transport = { id = "env", options = ["RIND_LOGIN_TTY=facet:$/tty"] }
+branching = { source = "tty:login_required", key = "tty", max-instances = 16 }
 
 [[service]]
 name = "user_shell"
 run.exec = "/usr/bin/user_shell"
 run.args = []
 restart = false
-start-on = [{ state = "rind:user_session" }]
-transport = { id = "env", options = ["RIND_USER_ACTIVE=state:$"] }
-branching = { enabled = true, source-state = "rind:user_session", key = "tty", max-instances = 16, except = ["state:tty:taken"] }
+start-on = [{ facet = "rind:user_session" }]
+transport = { id = "env", options = ["RIND_USER_ACTIVE=facet:$"] }
+branching = { source = "rind:user_session", key = "tty", max-instances = 16, except = ["facet:tty:taken"] }
 
 [[service]]
 name = "niri"
 run.exec = "/usr/bin/example-active"
 run.args = ["niri"]
 restart = false
-start-on = [{ state = "tr_demo:niri_active" }]
-branching = { enabled = true, source-state = "tr_demo:niri_active", key = "tty", max-instances = 16 }
+start-on = [{ facet = "tr_demo:niri_active" }]
+branching = { source = "tr_demo:niri_active", key = "tty", max-instances = 16 }
 
-[[state]]
+[[facet]]
 name = "niri_active"
 payload = "json"
 branch = ["seat:tty"]

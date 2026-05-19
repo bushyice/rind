@@ -66,6 +66,16 @@ impl LogHandle {
       fields,
     });
   }
+
+  pub fn mock() -> Self {
+    let (tx, rx) = mpsc::channel::<LogEntry>();
+    thread::spawn(move || {
+      while let Ok(entry) = rx.recv() {
+        print_entry(&entry);
+      }
+    });
+    LogHandle { tx }
+  }
 }
 
 pub fn start_logger(config: LogConfig) -> LogHandle {
@@ -98,6 +108,17 @@ fn timestamp_fmt(timestamp: u64) -> String {
   s.to_string()
 }
 
+fn print_entry(entry: &LogEntry) {
+  println!(
+    "[{:?} {}] {{{}}}: {} ({:?})",
+    entry.level,
+    timestamp_fmt(entry.timestamp),
+    entry.target,
+    entry.message,
+    entry.fields
+  );
+}
+
 fn logger_loop(config: LogConfig, rx: Receiver<LogEntry>) {
   if let Err(err) = create_dir_all(config.dir.as_path()) {
     eprintln!(
@@ -116,14 +137,7 @@ fn logger_loop(config: LogConfig, rx: Receiver<LogEntry>) {
       continue;
     };
 
-    println!(
-      "[{:?} {}] {{{}}}: {} ({:?})",
-      entry.level,
-      timestamp_fmt(entry.timestamp),
-      entry.target,
-      entry.message,
-      entry.fields
-    );
+    print_entry(&entry);
 
     match encode_record(&entry) {
       Ok(bytes) => {

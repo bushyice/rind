@@ -17,14 +17,14 @@ name = "args_consumer"
 run.exec = "/usr/bin/example-active"
 run.args = ["args-demo"]
 restart = false
-transport = { id = "args", options = ["--from-state", "state:tp_demo:transport_state"] }
+transport = { id = "args", options = ["--from-facet", "facet:tp_demo:transport_state"] }
 
-[[state]]
+[[facet]]
 name = "transport_state"
 payload = "string"
 subscribers = [{ id = "uds", options = ["detached=true"], permissions = ["any"] }]
 
-[[signal]]
+[[impulse]]
 name = "demo_ping"
 payload = "string"
 subscribers = ["uds"]

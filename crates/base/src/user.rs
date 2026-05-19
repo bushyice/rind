@@ -18,7 +18,7 @@ use rind_ipc::{
 use serde_json::json;
 
 use crate::{
-  flow::{FlowRuntimePayload, StateMachine},
+  flow::{FacetGraph, FlowRuntimePayload},
   permissions::PERM_RUN0,
   scopes::ScopeStore,
 };
@@ -278,7 +278,7 @@ impl Runtime for UserRuntime {
 
         let _ = dispatch.dispatch(
           "flow",
-          "set_state",
+          "set_facet",
           FlowRuntimePayload::new("rind:user_session")
             .payload(json!({
               "session_id": session_id,
@@ -335,7 +335,7 @@ impl Runtime for UserRuntime {
 
         let _ = dispatch.dispatch(
           "flow",
-          "remove_state",
+          "remove_facet",
           FlowRuntimePayload::new("rind:user_session")
             .payload(serde_json::Value::Object(filter))
             .into(),
@@ -356,10 +356,7 @@ impl Runtime for UserRuntime {
           if let Some(store) = ctx.registry.singleton_mut::<ScopeStore>(ScopeStore::KEY) {
             let _ = store.remove_scope(scope_name.as_str());
           }
-          if let Some(sm) = ctx
-            .registry
-            .singleton_mut::<StateMachine>(StateMachine::KEY)
-          {
+          if let Some(sm) = ctx.registry.singleton_mut::<FacetGraph>(FacetGraph::KEY) {
             let _ = sm.drop_scope(scope_name.as_str());
           }
           ctx.lifecycle.request(LifecycleAction::ReloadUnits);
@@ -377,9 +374,9 @@ impl Runtime for UserRuntime {
         {
           let sm = ctx
             .registry
-            .singleton_mut::<StateMachine>(StateMachine::KEY)
+            .singleton_mut::<FacetGraph>(FacetGraph::KEY)
             .ok_or_else(|| CoreError::InvalidState("state machine store not found".into()))?;
-          if let Some(users) = sm.states.get_mut(&key) {
+          if let Some(users) = sm.facets.get_mut(&key) {
             for user in users.iter_mut() {
               let username = user.payload.get_json_field_as::<String>("username").ok_or(
                 CoreError::MissingField {

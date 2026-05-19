@@ -3,8 +3,8 @@ name = "test"
 run.exec = "/bin/tcp"
 run.args = ["makano-test"]
 space = "user"
-user-source = { state = "rind:user_session", username-field = "username" }
-start-on = [{ state = "rind:user_session" }]
+user-source = { facet = "rind:user_session", username-field = "username" }
+start-on = [{ facet = "rind:user_session" }]
 
 [[service]]
 name = "something"
@@ -12,20 +12,20 @@ run.exec = "/bin/tcp"
 run.args = ["makano-test"]
 run.env = { PORT = "4433" }
 space = "user"
-user-source = { state = "rind:user_session", username-field = "username" }
+user-source = { facet = "rind:user_session", username-field = "username" }
 
 [[service]]
 name = "many"
 run.variable = "someservice"
 space = "user"
-start-on = [{ state = "rind:user_session" }, { state = "rind:net-configured" }]
-user-source = { state = "rind:user_session", username-field = "username" }
+start-on = [{ facet = "rind:user_session" }, { facet = "rind:net-configured" }]
+user-source = { facet = "rind:user_session", username-field = "username" }
 
 [[variable]]
 name = "someservice"
 default = { exec = "/bin/tcp", args = ["makano-test"], env = { PORT = "4533" } }
 
-[[signal]]
+[[impulse]]
 name = "thething"
 payload = "string"
 
@@ -33,16 +33,16 @@ payload = "string"
 name = "ipcs"
 run.exec = "/bin/ipc_so"
 run.args = ["makano-test"]
-start-on = [{ signal = "test:thething" }]
+start-on = [{ impulse = "test:thething" }]
 
 [[socket]]
 name = "ipcs_s"
 type = "uds"
 listen = "/var/sock/some.sock"
 owner = "test:ipcs"
-start-on = [{ state = "net:configured" }]
+start-on = [{ facet = "net:configured" }]
 trigger = [{
-  signal = "test:thething",
+  impulse = "test:thething",
   payload = "()"
 }]
 
@@ -50,7 +50,7 @@ trigger = [{
 name = "sif"
 run.exec = "/bin/sif"
 transport = "stdio"
-start-on = [{ signal = "rind:boot" }]
+start-on = [{ impulse = "rind:boot" }]
 restart = false
 cgroup = { path = "/sys/fs/cgroup/rind-demo/sif", memory-max = "128M", cpu-max = "50000 100000", pids-max = "64" }
 namespaces = { mount = true, uts = true, ipc = true, net = true, cgroup = true }

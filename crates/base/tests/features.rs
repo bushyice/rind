@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use rind_base::{
-  flow::{FlowRuntime, FlowRuntimePayload, Signal, State, StateMachine},
+  flow::{FacetGraph, FlowFacet, FlowImpulse, FlowRuntime, FlowRuntimePayload},
   prelude::ServiceState,
   services::{Service, ServiceRuntime},
   sockets::{Socket, SocketRegistry, SocketRuntime},
@@ -40,22 +40,22 @@ fn setup_runtime_with_metadata() -> (RuntimeHandle, MetadataRegistry, Resources,
 
   let mut metadata = MetadataRegistry::default();
   let mut units = Metadata::new("units")
-    .of::<State>("state")
-    .of::<Signal>("signal")
+    .of::<FlowFacet>("facet")
+    .of::<FlowImpulse>("impulse")
     .of::<Timer>("timer")
     .of::<Socket>("socket")
     .of::<Service>("service");
 
   let source = r#"
-[[state]]
+[[facet]]
 name = "base"
 payload = "json"
 branch = ["id"]
 
-[[state]]
+[[facet]]
 name = "derived"
 payload = "json"
-after = [{ state = "test:base" }]
+after = [{ facet = "test:base" }]
 branch = ["id"]
 
 [[timer]]
@@ -73,16 +73,16 @@ run.exec = "/bin/sh"
 run.args = ["-c", "exit 0"]
 restart = false
 
-[[signal]]
+[[impulse]]
 name = "sig1"
 payload = "string"
 
-[[signal]]
+[[impulse]]
 name = "sig2"
 payload = "string"
-after = [{ signal = "test:sig1" }]
+after = [{ impulse = "test:sig1" }]
 
-[[signal]]
+[[impulse]]
 name = "sock_hit"
 payload = "none"
 
@@ -90,7 +90,7 @@ payload = "none"
 name = "sig_worker"
 run.exec = "/bin/sh"
 run.args = ["-c", "sleep 1"]
-start-on = [{ signal = "test:sig2" }]
+start-on = [{ impulse = "test:sig2" }]
 restart = false
 
 [[service]]
@@ -103,14 +103,14 @@ restart = { max_retries = 1 }
 name = "sock_worker"
 run.exec = "/bin/sh"
 run.args = ["-c", "sleep 1"]
-start-on = [{ signal = "test:sock_hit" }]
+start-on = [{ impulse = "test:sock_hit" }]
 restart = false
 
 [[socket]]
 name = "trigger_sock"
 type = "tcp"
 listen = "127.0.0.1:0"
-trigger = [{ signal = "test:sock_hit" }]
+trigger = [{ impulse = "test:sock_hit" }]
 "#;
 
   units
@@ -118,10 +118,10 @@ trigger = [{ signal = "test:sock_hit" }]
     .expect("unit toml should parse");
   metadata.insert_metadata(units);
   metadata
-    .ensure_index_for_type::<State>("units")
+    .ensure_index_for_type::<FlowFacet>("units")
     .expect("state index should build");
   metadata
-    .ensure_index_for_type::<Signal>("units")
+    .ensure_index_for_type::<FlowImpulse>("units")
     .expect("signal index should build");
   metadata
     .ensure_index_for_type::<Timer>("units")
@@ -143,8 +143,8 @@ trigger = [{ signal = "test:sock_hit" }]
       let mut registry = InstanceRegistry::new(&metadata, instances);
       let state_path = temp_path("state");
       let vars_path = temp_path("vars");
-      registry.singleton_or_insert_with(StateMachine::KEY, || {
-        StateMachine::from_persistence(StatePersistence::new(state_path))
+      registry.singleton_or_insert_with(FacetGraph::KEY, || {
+        FacetGraph::from_persistence(StatePersistence::new(state_path))
       });
       registry.singleton_or_insert_with(VariableHeap::KEY, || VariableHeap::new(vars_path));
       registry.singleton_or_insert_with(SocketRegistry::KEY, SocketRegistry::default);
@@ -177,7 +177,7 @@ fn flow_runtime_reconciles_dependent_state_and_remove() {
   runtime
     .dispatch(
       "flow",
-      "set_state",
+      "set_facet",
       FlowRuntimePayload::new("test:base")
         .payload(serde_json::json!({"id":"a1","value":7}))
         .into(),
@@ -190,17 +190,17 @@ fn flow_runtime_reconciles_dependent_state_and_remove() {
     .with_instances(|instances| {
       let registry = InstanceRegistry::new(&metadata, instances);
       let sm = registry
-        .singleton::<StateMachine>(StateMachine::KEY)
+        .singleton::<FacetGraph>(FacetGraph::KEY)
         .expect("state machine should exist");
-      assert!(sm.states.contains_key(&Ustr::from("test:base")));
-      assert!(sm.states.contains_key(&Ustr::from("test:derived")));
+      assert!(sm.facets.contains_key(&Ustr::from("test:base")));
+      assert!(sm.facets.contains_key(&Ustr::from("test:derived")));
     })
     .expect("state assertions should succeed");
 
   runtime
     .dispatch(
       "flow",
-      "remove_state",
+      "remove_facet",
       FlowRuntimePayload::new("test:base")
         .filter(serde_json::json!({"id":"a1"}))
         .into(),
@@ -213,10 +213,10 @@ fn flow_runtime_reconciles_dependent_state_and_remove() {
     .with_instances(|instances| {
       let registry = InstanceRegistry::new(&metadata, instances);
       let sm = registry
-        .singleton::<StateMachine>(StateMachine::KEY)
+        .singleton::<FacetGraph>(FacetGraph::KEY)
         .expect("state machine should exist");
-      assert!(!sm.states.contains_key(&Ustr::from("test:base")));
-      assert!(!sm.states.contains_key(&Ustr::from("test:derived")));
+      assert!(!sm.facets.contains_key(&Ustr::from("test:base")));
+      assert!(!sm.facets.contains_key(&Ustr::from("test:derived")));
     })
     .expect("remove assertions should succeed");
 
@@ -392,7 +392,7 @@ fn signal_transcendence_chain_starts_dependent_service() {
   runtime
     .dispatch(
       "flow",
-      "emit_signal",
+      "impulse",
       FlowRuntimePayload::new("test:sig1")
         .payload(serde_json::Value::String("hello".to_string()))
         .into(),
@@ -588,7 +588,7 @@ fn race_like_dispatch_churn_keeps_runtime_consistent() {
     runtime
       .dispatch(
         "flow",
-        "set_state",
+        "set_facet",
         FlowRuntimePayload::new("test:base").payload(payload).into(),
         context_id,
       )
@@ -598,7 +598,7 @@ fn race_like_dispatch_churn_keeps_runtime_consistent() {
       runtime
         .dispatch(
           "flow",
-          "remove_state",
+          "remove_facet",
           FlowRuntimePayload::new("test:base")
             .filter(serde_json::json!({"id": format!("b{i}")}))
             .into(),
@@ -640,9 +640,9 @@ fn race_like_dispatch_churn_keeps_runtime_consistent() {
     .with_instances(|instances| {
       let registry = InstanceRegistry::new(&metadata, instances);
       let sm = registry
-        .singleton::<StateMachine>(StateMachine::KEY)
+        .singleton::<FacetGraph>(FacetGraph::KEY)
         .expect("state machine should exist");
-      if let Some(branches) = sm.states.get(&Ustr::from("test:base")) {
+      if let Some(branches) = sm.facets.get(&Ustr::from("test:base")) {
         for b in branches {
           assert_eq!(b.name, Ustr::from("test:base"));
         }

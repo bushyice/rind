@@ -7,6 +7,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::error::CoreError;
+use crate::prelude::permission_path;
 use crate::types::{ToUstr, Ustr};
 
 #[derive(Debug, Clone)]
@@ -150,7 +151,7 @@ impl UserStore {
       Path::new("/etc/passwd"),
       Path::new("/etc/shadow"),
       Path::new("/etc/group"),
-      Path::new("/etc/rperms"),
+      permission_path().as_path(),
     )
   }
 

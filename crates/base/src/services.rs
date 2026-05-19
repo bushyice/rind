@@ -19,14 +19,15 @@ use std::time::{Duration, Instant};
 use rind_core::{notifier::Notifier, prelude::*};
 
 use crate::flow::{
-  FlowInstance, FlowItem, FlowPayload, FlowRuntimePayload, FlowType, StateMachine, Trigger,
+  FacetGraph, FlowInstance, FlowItem, FlowPayload, FlowRuntimePayload, FlowType, Trigger,
 };
 use crate::permissions::PERM_SYSTEM_SERVICES;
 use crate::prelude::trigger_events;
 use crate::scopes::ScopeStore;
 use crate::sockets::get_all_sockets;
-use crate::transport::{TransportMessage, TransportMethod, start_stdout_listener};
+use crate::transport::{TransportMethod, start_stdout_listener};
 use crate::variables::VariableHeap;
+use rind_ipc::TransportMessage;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RunOption {
@@ -207,10 +208,7 @@ impl DerefMut for ChildInstanceGroup {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BranchingConfig {
-  #[serde(default)]
-  pub enabled: bool,
-  #[serde(rename = "source-state")]
-  pub source_state: Ustr,
+  pub source: Ustr,
   #[serde(default)]
   pub key: Option<String>,
   #[serde(rename = "max-instances", default)]
@@ -227,7 +225,7 @@ fn default_username_field() -> String {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ServiceUserSource {
-  pub state: Ustr,
+  pub facet: Ustr,
   #[serde(rename = "username-field", default = "default_username_field")]
   pub username_field: String,
   #[serde(rename = "match-branch-key")]
@@ -588,12 +586,12 @@ impl ServiceRuntime {
     &self,
     source: &ServiceUserSource,
     branch_ctx: Option<&ServiceBranchContext>,
-    sm: Option<&StateMachine>,
+    sm: Option<&FacetGraph>,
   ) -> CoreResult<Option<Ustr>> {
     let Some(sm) = sm else {
       return Ok(None);
     };
-    let Some(branches) = sm.states.get(&source.state) else {
+    let Some(branches) = sm.facets.get(&source.facet) else {
       return Ok(None);
     };
 
@@ -619,7 +617,7 @@ impl ServiceRuntime {
       if matches.len() > 1 {
         return Err(CoreError::InvalidState(format!(
           "ambiguous users for state '{}' using match key '{}'",
-          source.state, field
+          source.facet, field
         )));
       }
       return Ok(matches.into_iter().next());
@@ -643,7 +641,7 @@ impl ServiceRuntime {
     if users.len() > 1 {
       return Err(CoreError::InvalidState(format!(
         "ambiguous users in state '{}' (set user-source.match-branch-key)",
-        source.state
+        source.facet
       )));
     }
     Ok(users.into_iter().next())
@@ -653,7 +651,7 @@ impl ServiceRuntime {
     &self,
     service: &Service,
     branch_ctx: Option<&ServiceBranchContext>,
-    sm: Option<&StateMachine>,
+    sm: Option<&FacetGraph>,
     scope: Option<&str>,
   ) -> CoreResult<Option<Ustr>> {
     if let Some(user) = branch_ctx.and_then(|ctx| ctx.forced_user.as_ref()) {
@@ -670,19 +668,19 @@ impl ServiceRuntime {
           return Ok(Some(user));
         }
 
-    if let Some(source) = &service.metadata.user_source {
-        let user = self.resolve_user_from_source(source, branch_ctx, sm)?;
-        if let Some(user) = user {
-          return Ok(Some(user));
+        if let Some(source) = &service.metadata.user_source {
+          let user = self.resolve_user_from_source(source, branch_ctx, sm)?;
+          if let Some(user) = user {
+            return Ok(Some(user));
+          }
         }
-    }
 
         if let Some(user) = branch_ctx.and_then(|ctx| ctx.key.as_ref()) {
           return Ok(Some(user.clone()));
         }
 
         if let Some(sm) = sm
-          && let Some(sessions) = sm.states.get("rind:user_session")
+          && let Some(sessions) = sm.facets.get("rind:user_session")
         {
           let mut users = HashSet::new();
           for sess in sessions {
@@ -752,7 +750,7 @@ impl ServiceRuntime {
     dispatch: &RuntimeDispatcher,
     branch_ctx: Option<&ServiceBranchContext>,
     sockets_map: &HashMap<Ustr, SocketActivation>,
-    sm: Option<&StateMachine>,
+    sm: Option<&FacetGraph>,
     variable_heap: Option<&VariableHeap>,
     registry_key: Ustr,
     notifier: Option<Notifier>,
@@ -763,7 +761,7 @@ impl ServiceRuntime {
     if let Some(sm) = sm {
       let key = Self::instance_key_name(registry_key.as_str());
 
-      if let Some(inst) = sm.states.get("rind:inactive")
+      if let Some(inst) = sm.facets.get("rind:inactive")
         && inst
           .iter()
           .any(|x| x.payload.to_string_payload() == key.as_str())
@@ -840,7 +838,7 @@ impl ServiceRuntime {
     log: &LogHandle,
     dispatch: &RuntimeDispatcher,
     sockets_map: &HashMap<Ustr, SocketActivation>,
-    sm: Option<&StateMachine>,
+    sm: Option<&FacetGraph>,
     variable_heap: Option<&VariableHeap>,
     registry_key: Ustr,
     notifier: Option<Notifier>,
@@ -884,7 +882,7 @@ impl ServiceRuntime {
     _dispatch: &RuntimeDispatcher,
     branch_ctx: Option<&ServiceBranchContext>,
     sockets_map: &HashMap<Ustr, SocketActivation>,
-    sm: Option<&StateMachine>,
+    sm: Option<&FacetGraph>,
     variables: Option<&VariableHeap>,
     registry_key: Ustr,
     notifier: Option<Notifier>,
@@ -919,7 +917,7 @@ impl ServiceRuntime {
           {
             payload
           } else {
-            sm.states
+            sm.facets
               .get(state_name)
               .and_then(|v| v.first())
               .map(|x| &x.payload)?
@@ -956,7 +954,7 @@ impl ServiceRuntime {
               let Some((key, value)) = option.split_once('=') else {
                 continue;
               };
-              if let Some(state_name) = value.strip_prefix("state:") {
+              if let Some(state_name) = value.strip_prefix("facet:") {
                 if let Some(val) = resolve_state(state_name) {
                   envs.insert(Ustr::from(key), Ustr::from(val));
                 }
@@ -977,7 +975,7 @@ impl ServiceRuntime {
             permissions: _,
           } if id.0.as_str() == "args" => {
             for option in options {
-              if let Some(state_name) = option.strip_prefix("state:") {
+              if let Some(state_name) = option.strip_prefix("facet:") {
                 let payload = resolve_state(state_name).unwrap_or_default();
                 if !payload.is_empty() {
                   args.push(payload.into());
@@ -1131,7 +1129,7 @@ impl ServiceRuntime {
     service: &mut Service,
     log: &LogHandle,
     sockets_map: &HashMap<Ustr, SocketActivation>,
-    sm: Option<&StateMachine>,
+    sm: Option<&FacetGraph>,
     dispatch: &RuntimeDispatcher,
     variable_heap: Option<&VariableHeap>,
     registry_key: Ustr,
@@ -1211,7 +1209,7 @@ impl ServiceRuntime {
     service: Arc<ServiceMetadata>,
     mode: StopMode,
     dispatch: &RuntimeDispatcher,
-    sm: Option<&StateMachine>,
+    sm: Option<&FacetGraph>,
     key: Option<Ustr>,
     user: Option<Ustr>,
     resources: &mut Resources,
@@ -1260,7 +1258,7 @@ impl ServiceRuntime {
     mode: StopMode,
     log: &LogHandle,
     dispatch: &RuntimeDispatcher,
-    sm: Option<&StateMachine>,
+    sm: Option<&FacetGraph>,
     key: Option<Ustr>,
     user: Option<Ustr>,
     index: Option<usize>,
@@ -1378,7 +1376,7 @@ impl ServiceRuntime {
     code: i32,
     _log: &LogHandle,
     dispatch: &RuntimeDispatcher,
-    sm: Option<&StateMachine>,
+    sm: Option<&FacetGraph>,
     service_key: Ustr,
     resources: &mut Resources,
   ) -> Option<ServiceExitAction> {
@@ -1483,7 +1481,7 @@ impl ServiceRuntime {
   fn run_triggers(
     &self,
     triggers: Option<&Vec<Trigger>>,
-    sm: Option<&StateMachine>,
+    sm: Option<&FacetGraph>,
     dispatch: &RuntimeDispatcher,
   ) {
     if let Some(triggers) = triggers {
@@ -1554,8 +1552,10 @@ impl ServiceRuntime {
 
     let msg = TransportMessage {
       r#type: match event.flow_type {
-        rind_core::prelude::FlowEventType::State => crate::transport::TransportMessageType::State,
-        rind_core::prelude::FlowEventType::Signal => crate::transport::TransportMessageType::Signal,
+        rind_core::prelude::FlowEventType::Facet => crate::transport::TransportMessageType::Facet,
+        rind_core::prelude::FlowEventType::Impulse => {
+          crate::transport::TransportMessageType::Impulse
+        }
       },
       payload: Some(FlowPayload::from_json(Some(event.payload.clone()))),
       branch: None,
@@ -1629,7 +1629,7 @@ impl ServiceRuntime {
     &self,
     spec: &str,
     key: &str,
-    sm: &StateMachine,
+    sm: &FacetGraph,
     vh: Option<&VariableHeap>,
   ) -> bool {
     let key_val = serde_json::json!(key);
@@ -1645,8 +1645,8 @@ impl ServiceRuntime {
       return false;
     }
 
-    let state_name = spec.strip_prefix("state:").unwrap_or(spec);
-    if let Some(instances) = sm.states.get(&Ustr::from(state_name)) {
+    let state_name = spec.strip_prefix("facet:").unwrap_or(spec);
+    if let Some(instances) = sm.facets.get(&Ustr::from(state_name)) {
       for inst in instances {
         if crate::triggers::subset_match(&key_val, &inst.payload.to_json()) {
           return true;
@@ -1735,12 +1735,13 @@ fn start_stdin_writer(
 
   std::thread::spawn(move || {
     while let Ok(msg) = rx.recv() {
-      let Ok(frame) = serde_json::to_string(&msg) else {
+      let Ok(payload) = flexbuffers::to_vec(&msg) else {
         continue;
       };
+      let len = (payload.len() as u32).to_be_bytes();
 
-      if std::io::Write::write_all(&mut stdin, frame.as_bytes()).is_err()
-        || std::io::Write::write_all(&mut stdin, b"\n").is_err()
+      if std::io::Write::write_all(&mut stdin, &len).is_err()
+        || std::io::Write::write_all(&mut stdin, &payload).is_err()
         || std::io::Write::flush(&mut stdin).is_err()
       {
         let mut fields = HashMap::new();
@@ -1860,7 +1861,7 @@ pub fn handle_ipc_start(
   if payload.persist {
     let _ = dispatch.dispatch(
       "flow",
-      "set_state",
+      "set_facet",
       FlowRuntimePayload::new("rind:active")
         .payload(payload.name.clone())
         .into(),
@@ -1929,7 +1930,7 @@ pub fn handle_ipc_stop(
   if payload.persist {
     let _ = dispatch.dispatch(
       "flow",
-      "remove_state",
+      "remove_facet",
       FlowRuntimePayload::new("rind:active")
         .payload(payload.name.clone())
         .into(),
@@ -1968,8 +1969,8 @@ impl Runtime for ServiceRuntime {
             trig.state = Some(w.name);
             trig.payload = Some(FlowPayload::from_json(Some(w.payload)));
             trig.flow_type = Some(match w.flow_type {
-              rind_core::prelude::FlowEventType::State => FlowType::State,
-              rind_core::prelude::FlowEventType::Signal => FlowType::Signal,
+              rind_core::prelude::FlowEventType::Facet => FlowType::Facet,
+              rind_core::prelude::FlowEventType::Impulse => FlowType::Impulse,
             });
             trig.action = w.action;
             let _ = dispatch.dispatch(
@@ -2098,8 +2099,8 @@ impl Runtime for ServiceRuntime {
         let sockets_map = get_all_sockets(&ctx.registry);
         ctx
           .registry
-          .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-            (StateMachine::KEY.into(), VariableHeap::KEY.into()),
+          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+            (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, vh)| {
               let target_keys = if let Some(event_name) = emit_trig.state.as_ref() {
                 let mut out = HashSet::new();
@@ -2169,9 +2170,7 @@ impl Runtime for ServiceRuntime {
                       if let Some(ref branching) = service.metadata.branching {
                         match (emit_trig.action, emit_event.as_ref(), is_running) {
                           (FlowAction::Revert, Some(event), true)
-                            if branching.key.is_some()
-                              && branching.enabled == true
-                              && event.name == branching.source_state =>
+                            if branching.key.is_some() && event.name == branching.source =>
                           {
                             let key = Self::branch_key_from_payload(
                               &event.payload,
@@ -2274,7 +2273,7 @@ impl Runtime for ServiceRuntime {
                   continue;
                 }
 
-                if !meta.branching.as_ref().map(|b| b.enabled).unwrap_or(false) && is_running {
+                if meta.branching.is_none() && is_running {
                   continue;
                 }
 
@@ -2288,139 +2287,137 @@ impl Runtime for ServiceRuntime {
                   .instantiate_one(service_scope, service_base_name, |x| Ok(Service::new(x)))?;
 
                 if let Some(branching) = &ser.metadata.branching {
-                  if branching.enabled {
-                    let mut branches = sm
-                      .states
-                      .get(&branching.source_state)
-                      .cloned()
-                      .unwrap_or_default();
+                  let mut branches = sm
+                    .facets
+                    .get(&branching.source)
+                    .cloned()
+                    .unwrap_or_default();
 
-                    // this might allow for signal branching
-                    if let Some(event) = emit_event.as_ref() {
-                      if event.r#type == FlowType::Signal && event.name == branching.source_state {
-                        branches.push(event.clone());
-                      }
+                  // this might allow for signal branching
+                  if let Some(event) = emit_event.as_ref() {
+                    if event.r#type == FlowType::Impulse && event.name == branching.source {
+                      branches.push(event.clone());
+                    }
+                  }
+
+                  let mut started = 0usize;
+                  for branch in branches {
+                    let Some(key) =
+                      Self::branch_key_from_payload(&branch.payload, branching.key.as_deref())
+                    else {
+                      continue;
+                    };
+
+                    if ser.instances.iter().any(|i| {
+                      i.key == key
+                        && (i.state == ServiceState::Active || i.state == ServiceState::Starting)
+                    }) {
+                      continue;
                     }
 
-                    let mut started = 0usize;
-                    for branch in branches {
-                      let Some(key) =
-                        Self::branch_key_from_payload(&branch.payload, branching.key.as_deref())
-                      else {
-                        continue;
-                      };
-
-                      if ser.instances.iter().any(|i| {
-                        i.key == key
-                          && (i.state == ServiceState::Active || i.state == ServiceState::Starting)
-                      }) {
-                        continue;
-                      }
-
-                      if let Some(onlys) = &branching.only {
-                        let mut matched = false;
-                        for spec in onlys {
-                          if self.check_branch_match(spec, key.as_str(), sm, Some(vh)) {
-                            matched = true;
-                            break;
-                          }
-                        }
-                        if !matched {
-                          continue;
-                        }
-                      }
-
-                      if let Some(excepts) = &branching.except {
-                        let mut skipped = false;
-                        for spec in excepts {
-                          if self.check_branch_match(spec, key.as_str(), sm, Some(vh)) {
-                            skipped = true;
-                            break;
-                          }
-                        }
-                        if skipped {
-                          continue;
-                        }
-                      }
-
-                      if let Some(max) = branching.max_instances {
-                        if ser.instances.len() >= max || started >= max {
+                    if let Some(onlys) = &branching.only {
+                      let mut matched = false;
+                      for spec in onlys {
+                        if self.check_branch_match(spec, key.as_str(), sm, Some(vh)) {
+                          matched = true;
                           break;
                         }
                       }
-                      let branch_ctx = ServiceBranchContext {
-                        key: Some(key.clone()),
-                        payload: Some(branch.payload.clone()),
-                        forced_user: None,
-                      };
-                      match self.spawn_all(
-                        ser,
-                        log,
-                        dispatch,
-                        Some(&branch_ctx),
-                        &sockets_map,
-                        Some(sm),
-                        Some(vh),
-                        service_key.clone().into(),
-                        ctx.notifier.clone(),
-                        ctx.resources,
-                      ) {
-                        Ok(instances) => {
-                          ser.instances.extend(instances);
-                          self.register_stdio_transport(ser, dispatch, None);
-
-                          if !is_running {
-                            if let Some(inst) = ser.instances.as_one_mut() {
-                              inst.state = ServiceState::Active;
-                              self.run_triggers(ser.metadata.on_start.as_ref(), Some(sm), dispatch);
-                            }
-
-                            let _ = dispatch.dispatch(
-                              "services",
-                              "reconcile_stacks",
-                              rpayload!({
-                                "service": service_name.clone(),
-                                "action": ServiceEventKind::Started
-                              }),
-                            );
-
-                            let _ = dispatch.dispatch(
-                              "timer",
-                              "reconcile_timers",
-                              rpayload!({
-                                "service": service_name.clone(),
-                                "action": ServiceEventKind::Started
-                              }),
-                            );
-                          }
-
-                          started += 1;
-                          log.log(
-                            LogLevel::Info,
-                            "service-runtime",
-                            "started branched service instance",
-                            [
-                              ("service".to_string(), service_name.to_string()),
-                              ("branch".into(), key.to_string()),
-                            ]
-                            .into(),
-                          );
-                        }
-                        Err(e) => {
-                          let mut fields = self.log_fields(ser, "start");
-                          fields.insert("branch".into(), key.to_string());
-                          fields.insert("error".into(), e.to_string());
-                          log.log(
-                            LogLevel::Error,
-                            "service-runtime",
-                            "failed to start branched service instance",
-                            fields,
-                          );
-                        }
+                      if !matched {
+                        continue;
                       }
                     }
-                    continue;
+
+                    if let Some(excepts) = &branching.except {
+                      let mut skipped = false;
+                      for spec in excepts {
+                        if self.check_branch_match(spec, key.as_str(), sm, Some(vh)) {
+                          skipped = true;
+                          break;
+                        }
+                      }
+                      if skipped {
+                        continue;
+                      }
+                    }
+
+                    if let Some(max) = branching.max_instances {
+                      if ser.instances.len() >= max || started >= max {
+                        break;
+                      }
+                    }
+                    let branch_ctx = ServiceBranchContext {
+                      key: Some(key.clone()),
+                      payload: Some(branch.payload.clone()),
+                      forced_user: None,
+                    };
+                    match self.spawn_all(
+                      ser,
+                      log,
+                      dispatch,
+                      Some(&branch_ctx),
+                      &sockets_map,
+                      Some(sm),
+                      Some(vh),
+                      service_key.clone().into(),
+                      ctx.notifier.clone(),
+                      ctx.resources,
+                    ) {
+                      Ok(instances) => {
+                        ser.instances.extend(instances);
+                        self.register_stdio_transport(ser, dispatch, None);
+
+                        if !is_running {
+                          if let Some(inst) = ser.instances.as_one_mut() {
+                            inst.state = ServiceState::Active;
+                            self.run_triggers(ser.metadata.on_start.as_ref(), Some(sm), dispatch);
+                          }
+
+                          let _ = dispatch.dispatch(
+                            "services",
+                            "reconcile_stacks",
+                            rpayload!({
+                              "service": service_name.clone(),
+                              "action": ServiceEventKind::Started
+                            }),
+                          );
+
+                          let _ = dispatch.dispatch(
+                            "timer",
+                            "reconcile_timers",
+                            rpayload!({
+                              "service": service_name.clone(),
+                              "action": ServiceEventKind::Started
+                            }),
+                          );
+                        }
+
+                        started += 1;
+                        log.log(
+                          LogLevel::Info,
+                          "service-runtime",
+                          "started branched service instance",
+                          [
+                            ("service".to_string(), service_name.to_string()),
+                            ("branch".into(), key.to_string()),
+                          ]
+                          .into(),
+                        );
+                      }
+                      Err(e) => {
+                        let mut fields = self.log_fields(ser, "start");
+                        fields.insert("branch".into(), key.to_string());
+                        fields.insert("error".into(), e.to_string());
+                        log.log(
+                          LogLevel::Error,
+                          "service-runtime",
+                          "failed to start branched service instance",
+                          fields,
+                        );
+                      }
+                    }
                   }
+                  continue;
                 }
 
                 self.start_service(
@@ -2466,8 +2463,8 @@ impl Runtime for ServiceRuntime {
         let only_user = payload.get::<String>("only_user").ok();
         ctx
           .registry
-          .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-            (StateMachine::KEY.into(), VariableHeap::KEY.into()),
+          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+            (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, vh)| {
               let service_key = Self::ensure_scoped_name(name.as_str());
               let service =
@@ -2576,8 +2573,8 @@ impl Runtime for ServiceRuntime {
 
         ctx
           .registry
-          .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-            (StateMachine::KEY.into(), VariableHeap::KEY.into()),
+          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+            (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, _)| {
               let service =
                 registry.instantiate_one::<Service>("*", name.clone(), |x| Ok(Service::new(x)))?;
@@ -2611,8 +2608,8 @@ impl Runtime for ServiceRuntime {
 
         ctx
           .registry
-          .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-            (StateMachine::KEY.into(), VariableHeap::KEY.into()),
+          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+            (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, _)| {
               let keys: Vec<Ustr> = registry
                 .instances
@@ -2653,10 +2650,10 @@ impl Runtime for ServiceRuntime {
         let sockets_map = get_all_sockets(&ctx.registry);
         ctx
           .registry
-          .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-            (StateMachine::KEY.into(), VariableHeap::KEY.into()),
+          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+            (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
             |registry, (sm, vh)| {
-              let Some(active) = sm.states.get("rind:active") else {
+              let Some(active) = sm.facets.get("rind:active") else {
                 return Ok(());
               };
 
@@ -2790,8 +2787,8 @@ impl Runtime for ServiceRuntime {
           | ServiceEventKind::Exited { code: _ } => {
             ctx
               .registry
-              .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-                (StateMachine::KEY.into(), VariableHeap::KEY.into()),
+              .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+                (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
                 |registry, (sm, _)| {
                   for (dependent, _) in dependents {
                     if let Ok(service) = registry.as_one_mut::<Service>("*", dependent.as_str()) {
@@ -2818,8 +2815,8 @@ impl Runtime for ServiceRuntime {
             let sockets_map = get_all_sockets(&ctx.registry);
             ctx
               .registry
-              .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-                (StateMachine::KEY.into(), VariableHeap::KEY.into()),
+              .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+                (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
                 |registry, (sm, vh)| {
                   for (dependent, svc) in dependents {
                     let should_start = svc.after.as_ref().unwrap().iter().any(|a| {
@@ -2871,8 +2868,8 @@ impl Runtime for ServiceRuntime {
 
           ctx
             .registry
-            .singleton_handle::<(&mut StateMachine, &mut VariableHeap), _>(
-              (StateMachine::KEY.into(), VariableHeap::KEY.into()),
+            .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+              (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
               |registry, (sm, vh)| {
                 if let Some(instances) = registry.instances.get_mut(&service_key) {
                   for instance in instances.iter_mut() {

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::stdout;
 use std::os::raw::c_char;
 use std::os::unix::net::UnixStream;
 use std::ptr::null_mut;
@@ -12,6 +12,7 @@ use once_cell::sync::Lazy;
 use rind_base::flow::{FlowJson, FlowPayload};
 use rind_base::transport::TransportMessage;
 use rind_ipc::Message;
+use rind_ipc::ser::flexbuf_string;
 
 static UDS_CONNECTIONS: Lazy<RwLock<HashMap<u64, UnixStream>>> =
   Lazy::new(|| RwLock::new(HashMap::new()));
@@ -34,10 +35,11 @@ pub enum MessageAction {
 #[repr(C)]
 #[derive(Debug, PartialEq, Eq)]
 pub enum MessageType {
-  Signal = 0,
-  State = 1,
+  Impulse = 0,
+  Facet = 1,
   Enquiry = 2,
   Response = 3,
+  Unknown = 4,
 }
 
 #[repr(C)]
@@ -87,11 +89,11 @@ impl Into<Message> for InvokeCommand {
         "unknown".into()
       },
       payload: if !self.payload.is_null() {
-        unsafe { CStr::from_ptr(self.payload) }
+        let s = unsafe { CStr::from_ptr(self.payload) }
           .to_str()
           .unwrap()
-          .to_string()
-          .into()
+          .to_string();
+        flexbuffers::to_vec(&s).ok()
       } else {
         None
       },
@@ -112,8 +114,9 @@ impl Into<TransportMessage> for &MessageContainer {
       r#type: match self.r#type {
         MessageType::Enquiry => rind_base::transport::TransportMessageType::Enquiry,
         MessageType::Response => rind_base::transport::TransportMessageType::Response,
-        MessageType::Signal => rind_base::transport::TransportMessageType::Signal,
-        MessageType::State => rind_base::transport::TransportMessageType::State,
+        MessageType::Impulse => rind_base::transport::TransportMessageType::Impulse,
+        MessageType::Facet => rind_base::transport::TransportMessageType::Facet,
+        MessageType::Unknown => rind_base::transport::TransportMessageType::Unknown,
       },
       branch: None,
       name: if self.name.is_null() {
@@ -216,6 +219,40 @@ pub extern "C" fn init_tp(
   })
 }
 
+fn transport_to_container(m: TransportMessage) -> MessageContainer {
+  MessageContainer {
+    name: match m.name {
+      Some(s) => {
+        let str = CString::new(&**s).unwrap();
+        str.into_raw()
+      }
+      None => null_mut(),
+    },
+    r#type: match m.r#type {
+      rind_base::transport::TransportMessageType::Enquiry => MessageType::Enquiry,
+      rind_base::transport::TransportMessageType::Response => MessageType::Response,
+      rind_base::transport::TransportMessageType::Impulse => MessageType::Impulse,
+      rind_base::transport::TransportMessageType::Facet => MessageType::Facet,
+      rind_base::transport::TransportMessageType::Unknown => MessageType::Unknown,
+    },
+    action: match &m.action {
+      rind_base::transport::TransportMessageAction::Remove => MessageAction::Remove,
+      rind_base::transport::TransportMessageAction::Set => MessageAction::Set,
+    },
+    payload: if let Some(p) = m.payload {
+      Box::into_raw(Box::new(PayloadContainer {
+        content: CString::new(p.to_string_payload()).unwrap().into_raw(),
+        r#type: match p {
+          FlowPayload::Json(_) => PayloadType::Json,
+          _ => PayloadType::String,
+        },
+      }))
+    } else {
+      null_mut()
+    },
+  }
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn listen_tp(
   tp: *mut TransportProtocol,
@@ -239,53 +276,8 @@ pub extern "C" fn listen_tp(
       conn
     };
 
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-
-    loop {
-      line.clear();
-      let Ok(read) = reader.read_line(&mut line) else {
-        break;
-      };
-      if read == 0 {
-        break;
-      }
-      let trimmed = line.trim();
-
-      let msg: MessageContainer = match serde_json::from_str::<TransportMessage>(&trimmed) {
-        Ok(m) => MessageContainer {
-          name: match m.name {
-            Some(s) => {
-              let str = CString::new(&**s).unwrap();
-              str.into_raw()
-            }
-            None => null_mut(),
-          },
-          r#type: match m.r#type {
-            rind_base::transport::TransportMessageType::Enquiry => MessageType::Enquiry,
-            rind_base::transport::TransportMessageType::Response => MessageType::Response,
-            rind_base::transport::TransportMessageType::Signal => MessageType::Signal,
-            rind_base::transport::TransportMessageType::State => MessageType::State,
-          },
-          action: match &m.action {
-            rind_base::transport::TransportMessageAction::Remove => MessageAction::Remove,
-            rind_base::transport::TransportMessageAction::Set => MessageAction::Set,
-          },
-          payload: if let Some(p) = m.payload {
-            Box::into_raw(Box::new(PayloadContainer {
-              content: CString::new(p.to_string_payload()).unwrap().as_ptr(),
-              r#type: match p {
-                FlowPayload::Json(_) => PayloadType::Json,
-                _ => PayloadType::String,
-              },
-            }))
-          } else {
-            null_mut()
-          },
-        },
-        Err(_) => continue,
-      };
-
+    while let Ok(m) = TransportMessage::read_signed(&stream) {
+      let msg = transport_to_container(m);
       let _ = unsafe { func(msg) };
 
       // if !response.is_null() {
@@ -303,6 +295,94 @@ pub extern "C" fn listen_tp(
       // }
     }
   });
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn enquiry_tp(
+  tp: *const TransportProtocol,
+  message: MessageContainer,
+) -> MessageContainer {
+  if tp.is_null() {
+    return MessageContainer {
+      r#type: MessageType::Unknown,
+      action: MessageAction::Remove,
+      payload: null_mut(),
+      name: null_mut(),
+    };
+  }
+
+  let tp = unsafe { &*tp };
+
+  let mut stream = match tp.protocol {
+    TransportProtocolMethod::STDIO => {
+      return MessageContainer {
+        r#type: MessageType::Unknown,
+        action: MessageAction::Remove,
+        payload: null_mut(),
+        name: null_mut(),
+      };
+    }
+    TransportProtocolMethod::UDS => {
+      let options: Vec<&str> = if tp.options.is_null() || tp.len == 0 {
+        Vec::new()
+      } else {
+        unsafe {
+          let slice = std::slice::from_raw_parts(tp.options, tp.len);
+          slice
+            .iter()
+            .map(|&ptr| {
+              if ptr.is_null() {
+                ""
+              } else {
+                CStr::from_ptr(ptr).to_str().unwrap()
+              }
+            })
+            .collect()
+        }
+      };
+
+      if options.is_empty() {
+        return MessageContainer {
+          r#type: MessageType::Unknown,
+          action: MessageAction::Remove,
+          payload: null_mut(),
+          name: null_mut(),
+        };
+      }
+
+      match UnixStream::connect(options[0]) {
+        Ok(s) => s,
+        Err(_) => {
+          return MessageContainer {
+            r#type: MessageType::Unknown,
+            action: MessageAction::Remove,
+            payload: null_mut(),
+            name: null_mut(),
+          };
+        }
+      }
+    }
+  };
+
+  let msg: TransportMessage = { &message }.into();
+  if msg.write_signed(&mut stream).is_err() {
+    return MessageContainer {
+      r#type: MessageType::Unknown,
+      action: MessageAction::Remove,
+      payload: null_mut(),
+      name: null_mut(),
+    };
+  }
+
+  match TransportMessage::read_signed(&mut stream) {
+    Ok(m) => transport_to_container(m),
+    Err(_) => MessageContainer {
+      r#type: MessageType::Unknown,
+      action: MessageAction::Remove,
+      payload: null_mut(),
+      name: null_mut(),
+    },
+  }
 }
 
 #[repr(C)]
@@ -367,7 +447,7 @@ pub extern "C" fn set_message_name(message: *mut MessageContainer, name: *const 
 
 #[unsafe(no_mangle)]
 pub extern "C" fn set_state(name: *const c_char, payload: PayloadContainer) -> MessageContainer {
-  let mut msg = create_message(MessageType::State, MessageAction::Set);
+  let mut msg = create_message(MessageType::Facet, MessageAction::Set);
   msg.name = name;
   msg.payload = Box::into_raw(Box::new(payload));
   msg
@@ -378,7 +458,7 @@ pub extern "C" fn remove_state(
   name: *const c_char,
   payload: *mut PayloadContainer,
 ) -> MessageContainer {
-  let mut msg = create_message(MessageType::State, MessageAction::Remove);
+  let mut msg = create_message(MessageType::Facet, MessageAction::Remove);
   msg.name = name;
   if !payload.is_null() {
     msg.payload = payload;
@@ -391,7 +471,7 @@ pub extern "C" fn emit_signal(
   name: *const c_char,
   payload: *mut PayloadContainer,
 ) -> MessageContainer {
-  let mut msg = create_message(MessageType::Signal, MessageAction::Set);
+  let mut msg = create_message(MessageType::Impulse, MessageAction::Set);
   msg.name = name;
   if !payload.is_null() {
     msg.payload = payload;
@@ -411,10 +491,11 @@ pub extern "C" fn send_message(tp: *const TransportProtocol, message: MessageCon
 
   match tp.protocol {
     TransportProtocolMethod::STDIO => {
-      println!("{}", serde_json::to_string(&msg).unwrap());
+      // println!("{}", serde_json::to_string(&msg).unwrap());
+      let _ = msg.write_signed(stdout());
     }
     TransportProtocolMethod::UDS => {
-      let mut stream = {
+      let stream = {
         let conns = UDS_CONNECTIONS.read().unwrap();
 
         let conn = conns.get(&tp.id).unwrap().try_clone().unwrap();
@@ -422,17 +503,7 @@ pub extern "C" fn send_message(tp: *const TransportProtocol, message: MessageCon
         conn
       };
 
-      if stream
-        .write_all(
-          &serde_json::to_string(&msg)
-            .map(|s| format!("{s}\n"))
-            .unwrap_or_default()
-            .into_bytes(),
-        )
-        .is_err()
-      {
-        return;
-      }
+      let _ = msg.write_signed(stream);
     }
   }
 }
@@ -470,93 +541,41 @@ pub extern "C" fn invoke(command: InvokeCommand) -> InvokeCommand {
   };
 
   let msg: Message = command.into();
-  let Ok(payload) = serde_json::to_vec(&msg) else {
+
+  let Ok(_) = msg.write_signed(&stream) else {
     return InvokeCommand {
+      r#type: InvokeType::Error,
       action: null_mut(),
       payload: null_mut(),
-      r#type: InvokeType::Error,
     };
   };
-  let len = (payload.len() as u32).to_be_bytes();
 
-  if stream.write_all(&len).is_err() {
+  let Ok(msg) = Message::read_signed(&mut stream) else {
     return InvokeCommand {
+      r#type: InvokeType::Error,
       action: null_mut(),
       payload: null_mut(),
-      r#type: InvokeType::Error,
     };
-  }
-
-  if stream.write_all(&payload).is_err() {
-    return InvokeCommand {
-      action: null_mut(),
-      payload: null_mut(),
-      r#type: InvokeType::Error,
-    };
-  }
-
-  let mut len_buf = [0u8; 4];
-
-  if stream.read_exact(&mut len_buf).is_err() {
-    return InvokeCommand {
-      action: null_mut(),
-      payload: null_mut(),
-      r#type: InvokeType::Error,
-    };
-  }
-
-  let len = u32::from_be_bytes(len_buf) as usize;
-
-  let mut buf = vec![0u8; len];
-
-  if stream.read_exact(&mut buf).is_err() {
-    return InvokeCommand {
-      action: null_mut(),
-      payload: null_mut(),
-      r#type: InvokeType::Error,
-    };
-  }
-
-  let raw = match String::from_utf8(buf) {
-    Ok(s) => s,
-    Err(e) => {
-      let str = CString::new(e.to_string()).unwrap();
-      return InvokeCommand {
-        action: null_mut(),
-        payload: str.into_raw(),
-        r#type: InvokeType::Error,
-      };
-    }
   };
 
-  match serde_json::from_str::<Message>(&raw) {
-    Ok(m) => InvokeCommand {
-      action: {
-        let str = CString::new(m.action).unwrap();
-        str.into_raw()
-      },
-      payload: if let Some(p) = m.payload {
-        let str = CString::new(p).unwrap();
-        str.into_raw()
-      } else {
-        null_mut()
-      },
-      r#type: match m.r#type {
-        rind_ipc::MessageType::Enquire => InvokeType::Enquire,
-        rind_ipc::MessageType::Ok => InvokeType::Ok,
-        rind_ipc::MessageType::Error => InvokeType::Error,
-        rind_ipc::MessageType::Valid => InvokeType::Valid,
-        rind_ipc::MessageType::RequestInput => InvokeType::RequestInput,
-        rind_ipc::MessageType::Unknown => InvokeType::Unknown,
-      },
+  InvokeCommand {
+    action: {
+      let str = CString::new(msg.action).unwrap();
+      str.into_raw()
     },
-    Err(e) => {
-      let str = CString::new(e.to_string()).unwrap();
-      return InvokeCommand {
-        action: null_mut(),
-        payload: str.into_raw(),
-        r#type: InvokeType::Error,
-      };
-    }
+    payload: if let Some(p) = msg.payload {
+      let str = CString::new(flexbuf_string(p)).unwrap();
+      str.into_raw()
+    } else {
+      null_mut()
+    },
+    r#type: match msg.r#type {
+      rind_ipc::MessageType::Enquire => InvokeType::Enquire,
+      rind_ipc::MessageType::Ok => InvokeType::Ok,
+      rind_ipc::MessageType::Error => InvokeType::Error,
+      rind_ipc::MessageType::Valid => InvokeType::Valid,
+      rind_ipc::MessageType::RequestInput => InvokeType::RequestInput,
+      rind_ipc::MessageType::Unknown => InvokeType::Unknown,
+    },
   }
 }

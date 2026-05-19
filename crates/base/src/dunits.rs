@@ -4,7 +4,7 @@ use std::path::Path;
 use rind_core::prelude::*;
 
 use crate::{
-  flow::{Signal, State},
+  flow::{FlowFacet, FlowImpulse},
   loader::load_units_from,
   mount::Mount,
   prelude::{Permission, Service, Variable},
@@ -18,49 +18,49 @@ use std::collections::HashMap;
 fn add_builtin_defs(metadata: &mut Metadata) {
   // TODO: Switch from toml into a declarative method.
   let builtin_toml = r#"
-[[state]]
+[[facet]]
 name = "active"
 payload = "string"
 
-[[state]]
+[[facet]]
 name = "inactive"
 payload = "string"
 
-[[state]]
+[[facet]]
 name = "suspended"
 payload = "string"
 
-[[state]]
+[[facet]]
 name = "user_session"
 payload = "json"
 branch = ["session_id"]
 
-[[state]]
+[[facet]]
 name = "user_auto_login"
 payload = "json"
 branch = ["tty"]
 
-[[signal]]
+[[impulse]]
 name = "activate"
 payload = "string"
 
-[[signal]]
+[[impulse]]
 name = "deactivate"
 payload = "string"
 
-[[signal]]
+[[impulse]]
 name = "request_login"
 payload = "json"
 
-[[signal]]
+[[impulse]]
 name = "request_logout"
 payload = "json"
 
-[[signal]]
+[[impulse]]
 name = "boot"
 payload = "string"
 
-[[signal]]
+[[impulse]]
 name = "ready"
 payload = "none"
 
@@ -82,8 +82,8 @@ pub fn create_units_metadata<P: AsRef<Path>>(
     .of::<Timer>("timer")
     .of::<Mount>("mount")
     .of::<Socket>("socket")
-    .of::<State>("state")
-    .of::<Signal>("signal")
+    .of::<FlowFacet>("facet")
+    .of::<FlowImpulse>("impulse")
     .of::<Permission>("permission")
     .of::<Variable>("variable");
 
@@ -136,8 +136,8 @@ pub fn create_units_metadata<P: AsRef<Path>>(
   ctx.metadata.ensure_index_for_type::<Mount>(scope)?;
   ctx.metadata.ensure_index_for_type::<Socket>(scope)?;
   ctx.metadata.ensure_index_for_type::<Timer>(scope)?;
-  ctx.metadata.ensure_index_for_type::<State>(scope)?;
-  ctx.metadata.ensure_index_for_type::<Signal>(scope)?;
+  ctx.metadata.ensure_index_for_type::<FlowFacet>(scope)?;
+  ctx.metadata.ensure_index_for_type::<FlowImpulse>(scope)?;
 
   EXTENSIONS.with(|extensions| {
     extensions
@@ -182,8 +182,8 @@ pub fn create_scope_metadata_runtime<P: AsRef<Path>>(
     .of::<Timer>("timer")
     .of::<Mount>("mount")
     .of::<Socket>("socket")
-    .of::<State>("state")
-    .of::<Signal>("signal")
+    .of::<FlowFacet>("facet")
+    .of::<FlowImpulse>("impulse")
     .of::<Permission>("permission")
     .of::<Variable>("variable");
 
@@ -214,7 +214,7 @@ pub fn create_scope_metadata_runtime<P: AsRef<Path>>(
   let _ = metadata_registry.ensure_index_for_type::<Mount>(scope.clone());
   let _ = metadata_registry.ensure_index_for_type::<Socket>(scope.clone());
   let _ = metadata_registry.ensure_index_for_type::<Timer>(scope.clone());
-  let _ = metadata_registry.ensure_index_for_type::<State>(scope.clone());
-  let _ = metadata_registry.ensure_index_for_type::<Signal>(scope);
+  let _ = metadata_registry.ensure_index_for_type::<FlowFacet>(scope.clone());
+  let _ = metadata_registry.ensure_index_for_type::<FlowImpulse>(scope);
   Ok(())
 }

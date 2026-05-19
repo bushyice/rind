@@ -1,7 +1,7 @@
 [[service]]
 name = "three"
 start-on = ["my_state"]
-on-start = [{ signal = "else:my_signal", payload = "hi" }]
+on-start = [{ impulse = "else:my_signal", payload = "hi" }]
 run.exec = "/usr/bin/example-active"
 run.args = ["arg1", "arg2"]
 restart = false
@@ -15,13 +15,13 @@ run.args = ["arg1", "arg2"]
 on-start = [{ timer = "else:timeout_four" }]
 singleton = true
 
-[[state]]
+[[facet]]
 name = "my_state"
 payload = "json"
 branch = ["id"]
 #outputs = { pipe-to = "env", matcher = "ENV=(.+);", format = "$1" }
 
-[[state]]
+[[facet]]
 name = "some_state"
 payload = "string"
 
@@ -33,11 +33,11 @@ listen = "/var/sock/my.sock"
 owner = "else:four"
 permissions = ["any"]
 
-[[signal]]
+[[impulse]]
 name = "my_signal"
 payload = "string"
 
-[[signal]]
+[[impulse]]
 name = "my_signal_2"
 payload = "json"
 

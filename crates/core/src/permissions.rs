@@ -1,19 +1,17 @@
 use std::{
   collections::{HashMap, HashSet},
-  path::Path,
+  path::{Path, PathBuf},
   sync::{Arc, Mutex, RwLock},
 };
 
-use once_cell::sync::Lazy;
-
 use crate::{
-  error::CoreError,
+  error::{CoreError, CoreResult},
   types::{ToUstr, Ustr},
   user::UserStoreShared,
 };
 
-static PERM_REGISTRY: Lazy<Mutex<HashMap<u16, Ustr>>> = Lazy::new(|| Mutex::new(HashMap::new()));
-static NAME_REGISTRY: Lazy<Mutex<HashMap<Ustr, u16>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+// static PERM_REGISTRY: Lazy<Mutex<HashMap<u16, Ustr>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+// static NAME_REGISTRY: Lazy<Mutex<HashMap<Ustr, u16>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 pub trait PermissionChecker<T> {
   fn check(&self, store: &PermissionStore, item: T) -> bool;
@@ -22,25 +20,25 @@ pub trait PermissionChecker<T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PermissionId(pub u16);
 
-impl PermissionId {
-  pub fn new(name: impl Into<Ustr>, id: u16) -> Result<Self, CoreError> {
-    let name = name.into();
-    let mut reg = PERM_REGISTRY.lock().map_err(CoreError::custom)?;
-    let mut regn = NAME_REGISTRY.lock().map_err(CoreError::custom)?;
+// impl PermissionId {
+//   pub fn new(name: impl Into<Ustr>, id: u16) -> Result<Self, CoreError> {
+//     let name = name.into();
+//     let mut reg = PERM_REGISTRY.lock().map_err(CoreError::custom)?;
+//     let mut regn = NAME_REGISTRY.lock().map_err(CoreError::custom)?;
 
-    if let Some(name) = reg.get(&id) {
-      return Err(CoreError::DuplicatePermissions {
-        id,
-        name: name.to_string(),
-      });
-    }
+//     if let Some(name) = reg.get(&id) {
+//       return Err(CoreError::DuplicatePermissions {
+//         id,
+//         name: name.to_string(),
+//       });
+//     }
 
-    reg.insert(id, name.clone());
-    regn.insert(name, id);
+//     reg.insert(id, name.clone());
+//     regn.insert(name, id);
 
-    Ok(Self(id))
-  }
-}
+//     Ok(Self(id))
+//   }
+// }
 
 impl From<u16> for PermissionId {
   fn from(value: u16) -> Self {
@@ -69,6 +67,8 @@ pub enum PermissionExpr {
 
   Group(Ustr),
   Perm(PermissionId),
+
+  RootOnly,
 }
 
 impl From<PermissionId> for PermissionExpr {
@@ -92,6 +92,9 @@ impl From<Ustr> for PermissionExpr {
 #[derive(Default, Clone)]
 pub struct PermissionStore {
   inner: Arc<RwLock<PermissionStoreInner>>,
+  by_id: Arc<Mutex<HashMap<u16, Ustr>>>,
+  by_name: Arc<Mutex<HashMap<Ustr, u16>>>,
+
   pub users: UserStoreShared,
 }
 
@@ -179,6 +182,8 @@ impl PermissionStore {
       PermissionExpr::Any(exprs) => exprs.iter().any(|e| self.eval_expr(uid, e, groups)),
 
       PermissionExpr::Exact(exprs) => exprs.iter().all(|e| self.eval_expr(uid, e, groups)),
+
+      PermissionExpr::RootOnly => uid == 0,
     }
   }
 
@@ -186,7 +191,7 @@ impl PermissionStore {
     if name.as_str() == "any" {
       return Some(PermissionId(0));
     }
-    let regn = NAME_REGISTRY.lock().expect("permission store lock");
+    let regn = self.by_name.lock().expect("permission store lock");
     regn.get(name).map(|x| PermissionId(*x))
   }
 
@@ -305,12 +310,8 @@ impl PermissionStore {
   }
 
   pub fn new_perm(&self, name: impl Into<Ustr>, id: u16) -> Result<PermissionId, CoreError> {
-    PermissionId::new(name, id)
-  }
-
-  pub fn reg_perm(&self, perm: PermissionId, name: impl Into<Ustr>) -> Result<&Self, CoreError> {
-    let id = perm.0;
-    let mut reg = PERM_REGISTRY.lock().map_err(CoreError::custom)?;
+    let mut reg = self.by_id.lock().map_err(CoreError::custom)?;
+    let mut regn = self.by_name.lock().map_err(CoreError::custom)?;
 
     if let Some(name) = reg.get(&id) {
       return Err(CoreError::DuplicatePermissions {
@@ -319,10 +320,96 @@ impl PermissionStore {
       });
     }
 
-    reg.insert(id, name.into());
+    let name = name.into();
+
+    reg.insert(id, name.clone());
+    regn.insert(name, id);
+
+    Ok(PermissionId(id))
+  }
+
+  pub fn reg_perm(&self, perm: PermissionId, name: impl Into<Ustr>) -> Result<&Self, CoreError> {
+    let id = perm.0;
+    let mut reg = self.by_id.lock().map_err(CoreError::custom)?;
+    let mut regn = self.by_name.lock().map_err(CoreError::custom)?;
+
+    if let Some(name) = reg.get(&id) {
+      return Err(CoreError::DuplicatePermissions {
+        id,
+        name: name.to_string(),
+      });
+    }
+
+    let name = name.into();
+
+    reg.insert(id, name.clone());
+    regn.insert(name, id);
 
     Ok(self)
   }
+
+  pub fn all(
+    &self,
+    subject: Option<u32>,
+    group: bool,
+  ) -> CoreResult<Vec<(u16, Ustr, Option<Ustr>)>> {
+    let reg = self.by_id.lock().map_err(CoreError::custom)?;
+    let mut all = reg.clone();
+    drop(reg);
+    let inner = self.inner.write().expect("permission store lock");
+    let mut groups = inner.groups.clone();
+    // drop(inner);
+
+    let mut perms = Vec::new();
+
+    for (id, name) in if let (Some(uid), false) = (subject, group) {
+      self
+        .users
+        .lookup_by_uid(uid)
+        .ok_or(CoreError::not_found("user", &uid.to_string()))?
+        .permissions
+        .clone()
+        .iter()
+        .chain(inner.overlay_uid_grants.get(&uid).into_iter().flatten())
+        .filter(|x| {
+          !inner
+            .overlay_uid_revokes
+            .get(&uid)
+            .is_some_and(|r| r.contains(x))
+        })
+        .map(|x| (*x, all.remove(x).unwrap_or("unknown".to_ustr())))
+        .collect::<HashMap<_, _>>()
+    } else if let (Some(gid), true) = (subject, group) {
+      self
+        .users
+        .group(gid)
+        .ok_or(CoreError::not_found("group", &gid.to_string()))?
+        .permissions
+        .clone()
+        .iter()
+        .chain(inner.overlay_gid_grants.get(&gid).into_iter().flatten())
+        .filter(|x| {
+          !inner
+            .overlay_gid_revokes
+            .get(&gid)
+            .is_some_and(|r| r.contains(x))
+        })
+        .map(|x| (*x, all.remove(x).unwrap_or("unknown".to_ustr())))
+        .collect::<HashMap<_, _>>()
+    } else {
+      all
+    } {
+      perms.push((id, name, groups.remove(&id)));
+    }
+
+    Ok(perms)
+  }
+}
+
+pub fn permission_path() -> PathBuf {
+  std::env::var("RIND_PERMS_PATH")
+    .map(PathBuf::from)
+    .unwrap_or_else(|_| PathBuf::from("/etc/rperms"))
 }
 
 #[cfg(test)]

@@ -59,4 +59,9 @@ pub struct ScopeDestroyPayload {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-pub struct ScopeListPayload {}
+pub struct PermissionPayload {
+  pub subject: String,
+  pub permission: String,
+  #[serde(default)]
+  pub group: bool,
+}
