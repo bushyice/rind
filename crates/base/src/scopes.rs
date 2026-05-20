@@ -38,7 +38,7 @@ impl ScopeStore {
   ) {
     let name = name.into();
 
-    // Remove old state_to_scope mapping if the scope exists with a different state
+    // TODO: Remove old state_to_scope mapping if the scope exists with a different state
     if let Some(existing) = self.scopes.get(&name) {
       if let Some(old_state) = &existing.lifetime_state {
         if Some(old_state) != lifetime_state.as_ref() {

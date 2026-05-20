@@ -55,3 +55,10 @@ restart = false
 cgroup = { path = "/sys/fs/cgroup/rind-demo/sif", memory-max = "128M", cpu-max = "50000 100000", pids-max = "64" }
 namespaces = { mount = true, uts = true, ipc = true, net = true, cgroup = true }
 watchdog = { interval-ms = 1000, grace-ms = 5000, action = "restart" }
+
+[[service]]
+name = "shm"
+run.exec = "/bin/shm"
+transport = "shm"
+start-on = [{ impulse = "rind:boot" }]
+restart = false

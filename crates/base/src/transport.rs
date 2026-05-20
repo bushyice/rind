@@ -8,7 +8,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex};
 
 use crate::flow::{FacetGraph, FlowFacet, FlowImpulse};
-use crate::prelude::Service;
+use crate::prelude::{Service, stdio_log_entry};
 use rind_core::notifier::Notifier;
 use rind_core::prelude::*;
 pub use rind_ipc::{
@@ -79,7 +79,7 @@ impl TransportResponder {
 
 type ClientMap = Arc<Mutex<HashMap<Ustr, Vec<UnixStream>>>>;
 
-fn socket_path(endpoint: &str) -> std::path::PathBuf {
+pub fn socket_path(endpoint: &str) -> std::path::PathBuf {
   std::path::PathBuf::from("/run/rind-tp").join(format!("{endpoint}.sock"))
 }
 
@@ -251,6 +251,7 @@ pub fn start_stdout_listener(
 
 pub struct TransportRuntime {
   pub uds: UdsTransport,
+  pub shm: crate::transport_shm::ShmTransport,
   pub stdio_endpoints: std::collections::HashSet<Ustr>,
 }
 
@@ -285,8 +286,8 @@ impl TransportRuntime {
         }
         _ => {
           response.payload = Some(FlowPayload::from_json(Some(serde_json::json!({
-              "error": "unknown enquiry",
-              "enquiry": name.as_str()
+            "error": "unknown enquiry",
+            "enquiry": name.as_str()
           }))));
         }
       }
@@ -297,14 +298,31 @@ impl TransportRuntime {
 
   fn ingest(
     &self,
-    _endpoint: Ustr,
+    endpoint: Ustr,
     msg: TransportMessage,
     uid: u32,
     dispatch: &RuntimeDispatcher,
     pm: &PermissionStore,
     ctx: &mut RuntimeContext<'_>,
     responder: Option<TransportResponder>,
+    log: &LogHandle,
   ) -> CoreResult<()> {
+    if msg.name.as_ref().map(|x| x.as_str()) == Some("watchdog") {
+      let _ = dispatch.dispatch(
+        "services",
+        "watchdog_ping",
+        rpayload!({ "service": endpoint.clone() }),
+      );
+      return Ok(());
+    }
+
+    if msg.name.as_ref().map(|x| x.as_str()) == Some("log") {
+      let service_name = rslvns!(snorm endpoint).to_ustr();
+      let (level, message_text, fields) = stdio_log_entry(&service_name, &msg);
+      log.log(level, "service-transport", message_text, fields);
+      return Ok(());
+    }
+
     match msg.r#type {
       TransportMessageType::Enquiry => {
         if let Some(responder) = responder {
@@ -386,6 +404,7 @@ impl Default for TransportRuntime {
   fn default() -> Self {
     Self {
       uds: UdsTransport::default(),
+      shm: crate::transport_shm::ShmTransport::default(),
       stdio_endpoints: std::collections::HashSet::new(),
     }
   }
@@ -402,7 +421,7 @@ impl Runtime for TransportRuntime {
     mut payload: RuntimePayload,
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
-    _log: &LogHandle,
+    log: &LogHandle,
   ) -> Result<Option<RuntimePayload>, CoreError> {
     let pm = ctx
       .scope
@@ -416,6 +435,17 @@ impl Runtime for TransportRuntime {
         let permissions = payload.get::<Vec<Ustr>>("permissions").ok();
 
         self.uds.setup(
+          endpoint.as_str(),
+          permissions,
+          Some(pm),
+          ctx.notifier.clone(),
+        );
+      }
+      "setup_shm" => {
+        let endpoint = payload.get::<Ustr>("endpoint")?;
+        let permissions = payload.get::<Vec<Ustr>>("permissions").ok();
+
+        self.shm.setup(
           endpoint.as_str(),
           permissions,
           Some(pm),
@@ -465,6 +495,7 @@ impl Runtime for TransportRuntime {
           );
         } else {
           self.uds.send_message(endpoint.as_str(), &msg);
+          self.shm.send_message(endpoint.as_str(), &msg);
         }
       }
       "ingest" => {
@@ -488,12 +519,17 @@ impl Runtime for TransportRuntime {
           0
         };
 
-        self.ingest(endpoint, message, uid, dispatch, &pm, ctx, None)?;
+        self.ingest(endpoint, message, uid, dispatch, &pm, ctx, None, log)?;
       }
       "drain_incoming" => {
         if let Ok(rx) = self.uds.incoming_rx.lock() {
           while let Ok((endpoint, msg, uid, responder)) = rx.try_recv() {
-            self.ingest(endpoint, msg, uid, dispatch, &pm, ctx, responder)?;
+            self.ingest(endpoint, msg, uid, dispatch, &pm, ctx, responder, log)?;
+          }
+        }
+        if let Ok(rx) = self.shm.incoming_rx.lock() {
+          while let Ok((endpoint, msg, uid, responder)) = rx.try_recv() {
+            self.ingest(endpoint, msg, uid, dispatch, &pm, ctx, responder, log)?;
           }
         }
       }

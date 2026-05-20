@@ -72,8 +72,6 @@ pub enum FlowType {
   Facet,
 }
 
-// Redundant definitions removed
-
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct FlowInstance {
   pub name: Ustr,
@@ -104,8 +102,6 @@ impl From<&FlowInstance> for StateEntry {
     StateEntry { data }
   }
 }
-
-// Redundant FlowPayloadType removed
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
@@ -315,8 +311,6 @@ impl FacetGraph {
         branches.iter().map(StateEntry::from).collect::<Vec<_>>(),
       );
     }
-    // Always materialize static persistence so the scoped layout exists
-    // even before the first persisted flow state is written.
     per_scope.entry(Ustr::from("static")).or_default();
 
     for (scope, snapshot) in per_scope {
@@ -378,12 +372,17 @@ impl FlowRuntime {
     endpoint: &str,
     subscriber: &TransportMethod,
   ) {
-    if self.transport_id(subscriber) == "uds" {
-      // println!("{:?} {:?}", subscriber, subscriber.get_permissions());
+    let id = self.transport_id(subscriber);
+    if id == "uds" || id == "shm" {
+      let action = if id == "uds" {
+        "setup_uds"
+      } else {
+        "setup_shm"
+      };
       let payload = RuntimePayload::default().insert("endpoint", endpoint.to_ustr());
       let _ = dispatch.dispatch(
         "transport",
-        "setup_uds",
+        action,
         if let Some(perms) = subscriber.get_permissions() {
           payload.insert("permissions", perms)
         } else {

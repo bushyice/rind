@@ -23,6 +23,7 @@ binaries = [
   "tcp",
   "ipc_so",
   "sif",
+  "shm",
 
   # plugins
   "librind_test_plugin.so:/usr/lib/rind/plugins/",

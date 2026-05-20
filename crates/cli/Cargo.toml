@@ -40,11 +40,16 @@ path = "demo/ipc_socket.rs"
 name = "sif"
 path = "demo/sif.rs"
 
+[[bin]]
+name = "shm"
+path = "demo/shm.rs"
+
 [dependencies]
 clap.workspace = true
 rind-ipc = { path = "../ipc", default-features = false, features = [] }
 rind-core = { path = "../core" }
 libc.workspace = true
+nix.workspace = true
 
 serde_json.workspace = true
 serde.workspace = true

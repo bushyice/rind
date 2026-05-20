@@ -529,6 +529,7 @@ dependencies = [
  "crc32fast",
  "flexbuffers",
  "libc",
+ "nix",
  "owo-colors",
  "rind-core",
  "rind-ipc",

@@ -11,6 +11,7 @@ pub mod services;
 pub mod sockets;
 pub mod timers;
 pub mod transport;
+pub mod transport_shm;
 pub mod triggers;
 pub mod units;
 pub mod user;

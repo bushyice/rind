@@ -20,7 +20,7 @@ once_cell = "*"
 # sdlang = "*"
 toml = "*"
 glob = "*"
-nix = { version = "*", features = ["process", "acct", "socket", "term", "poll", "user", "ioctl", "fs", "signal", "mount", "event", "time", "net"] }
+nix = { version = "*", features = ["process", "acct", "socket", "term", "poll", "user", "ioctl", "fs", "signal", "mount", "event", "time", "net", "mman"] }
 libc = "*"
 serde = { version = "*", features = ["derive"] }
 clap = { version = "*", features = ["derive"] }
