@@ -13,10 +13,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::{ptr, thread};
 
 use once_cell::sync::Lazy;
-use rind_base::flow::{FlowJson, FlowPayload};
-use rind_base::transport::TransportMessage;
-use rind_ipc::Message;
+use rind_flow::transport::TransportMessage;
+use rind_flow::{FlowJson, FlowPayload};
 use rind_ipc::ser::flexbuf_string;
+use rind_ipc::{Message, TransportMessageAction, TransportMessageType};
 
 static UDS_CONNECTIONS: Lazy<RwLock<HashMap<u64, UnixStream>>> =
   Lazy::new(|| RwLock::new(HashMap::new()));
@@ -112,15 +112,15 @@ impl Into<TransportMessage> for &rind_msg {
   fn into(self) -> TransportMessage {
     TransportMessage {
       action: match self.action {
-        RIND_MSG_ACTION::REMOVE => rind_base::transport::TransportMessageAction::Remove,
-        RIND_MSG_ACTION::SET => rind_base::transport::TransportMessageAction::Set,
+        RIND_MSG_ACTION::REMOVE => TransportMessageAction::Remove,
+        RIND_MSG_ACTION::SET => TransportMessageAction::Set,
       },
       r#type: match self.r#type {
-        RIND_MSG_TYPE::ENQUIRY => rind_base::transport::TransportMessageType::Enquiry,
-        RIND_MSG_TYPE::RESPONSE => rind_base::transport::TransportMessageType::Response,
-        RIND_MSG_TYPE::IMPULSE => rind_base::transport::TransportMessageType::Impulse,
-        RIND_MSG_TYPE::FACET => rind_base::transport::TransportMessageType::Facet,
-        RIND_MSG_TYPE::UNKNOWN => rind_base::transport::TransportMessageType::Unknown,
+        RIND_MSG_TYPE::ENQUIRY => TransportMessageType::Enquiry,
+        RIND_MSG_TYPE::RESPONSE => TransportMessageType::Response,
+        RIND_MSG_TYPE::IMPULSE => TransportMessageType::Impulse,
+        RIND_MSG_TYPE::FACET => TransportMessageType::Facet,
+        RIND_MSG_TYPE::UNKNOWN => TransportMessageType::Unknown,
       },
       branch: None,
       name: if self.name.is_null() {
@@ -230,15 +230,15 @@ fn transport_to_container(m: TransportMessage) -> rind_msg {
       None => null_mut(),
     },
     r#type: match m.r#type {
-      rind_base::transport::TransportMessageType::Enquiry => RIND_MSG_TYPE::ENQUIRY,
-      rind_base::transport::TransportMessageType::Response => RIND_MSG_TYPE::RESPONSE,
-      rind_base::transport::TransportMessageType::Impulse => RIND_MSG_TYPE::IMPULSE,
-      rind_base::transport::TransportMessageType::Facet => RIND_MSG_TYPE::FACET,
-      rind_base::transport::TransportMessageType::Unknown => RIND_MSG_TYPE::UNKNOWN,
+      TransportMessageType::Enquiry => RIND_MSG_TYPE::ENQUIRY,
+      TransportMessageType::Response => RIND_MSG_TYPE::RESPONSE,
+      TransportMessageType::Impulse => RIND_MSG_TYPE::IMPULSE,
+      TransportMessageType::Facet => RIND_MSG_TYPE::FACET,
+      TransportMessageType::Unknown => RIND_MSG_TYPE::UNKNOWN,
     },
     action: match &m.action {
-      rind_base::transport::TransportMessageAction::Remove => RIND_MSG_ACTION::REMOVE,
-      rind_base::transport::TransportMessageAction::Set => RIND_MSG_ACTION::SET,
+      TransportMessageAction::Remove => RIND_MSG_ACTION::REMOVE,
+      TransportMessageAction::Set => RIND_MSG_ACTION::SET,
     },
     payload: if let Some(p) = m.payload {
       Box::into_raw(Box::new(rind_payload {

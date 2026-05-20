@@ -222,6 +222,7 @@ dependencies = [
 name = "display"
 version = "0.1.0"
 dependencies = [
+ "rind-core",
  "rind-plugins",
  "rind-plugins-common",
  "serde",
@@ -244,15 +245,6 @@ dependencies = [
  "num_enum",
  "serde",
  "serde_derive",
-]
-
-[[package]]
-name = "fxhash"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c31b6d751ae2c7f11320402d34e41349dd1016f8d5d45e48c4312bc8625af50c"
-dependencies = [
- "byteorder",
 ]
 
 [[package]]
@@ -304,6 +296,7 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "nix",
+ "rind-core",
  "rind-plugins",
 ]
 
@@ -364,6 +357,8 @@ name = "networking"
 version = "0.1.0"
 dependencies = [
  "flexbuffers",
+ "rind-core",
+ "rind-flow",
  "rind-ipc",
  "rind-plugins",
  "serde",
@@ -496,27 +491,22 @@ dependencies = [
  "libc",
  "libloading",
  "once_cell",
- "rind-base",
+ "rind-flow",
  "rind-ipc",
  "serde_json",
 ]
 
 [[package]]
-name = "rind-base"
+name = "rind-cfg"
 version = "0.1.0"
 dependencies = [
- "bincode-next",
- "crc32fast",
  "flexbuffers",
- "fxhash",
- "libc",
- "nix",
- "once_cell",
  "rind-core",
+ "rind-flow",
  "rind-ipc",
- "serde",
+ "rind-primitives",
+ "rind-services",
  "serde_json",
- "strumbra",
  "toml",
 ]
 
@@ -557,6 +547,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "rind-flow"
+version = "0.1.0"
+dependencies = [
+ "flexbuffers",
+ "rind-core",
+ "rind-ipc",
+ "rind-primitives",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
 name = "rind-init"
 version = "0.1.0"
 dependencies = [
@@ -564,7 +567,7 @@ dependencies = [
  "flexbuffers",
  "libc",
  "nix",
- "rind-base",
+ "rind-cfg",
  "rind-core",
  "rind-ipc",
  "rind-plugins",
@@ -601,7 +604,6 @@ dependencies = [
  "bitflags 2.11.0",
  "libc",
  "libloading",
- "rind-base",
  "rind-core",
 ]
 
@@ -609,15 +611,33 @@ dependencies = [
 name = "rind-plugins-common"
 version = "0.1.0"
 dependencies = [
- "rind-plugins",
+ "rind-core",
  "serde",
 ]
 
 [[package]]
-name = "rind-test-plugin"
+name = "rind-primitives"
 version = "0.1.0"
 dependencies = [
- "rind-plugins",
+ "flexbuffers",
+ "nix",
+ "rind-core",
+ "rind-ipc",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "rind-services"
+version = "0.1.0"
+dependencies = [
+ "flexbuffers",
+ "libc",
+ "nix",
+ "rind-core",
+ "rind-flow",
+ "rind-ipc",
+ "rind-primitives",
  "serde",
 ]
 
@@ -830,8 +850,12 @@ checksum = "ab16f14aed21ee8bfd8ec22513f7287cd4a91aa92e44edfe2c17ddd004e92607"
 name = "tty-plugin"
 version = "0.1.0"
 dependencies = [
+ "rind-core",
+ "rind-flow",
+ "rind-ipc",
  "rind-plugins",
  "rind-plugins-common",
+ "rind-primitives",
  "serde",
 ]
 

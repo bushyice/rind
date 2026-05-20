@@ -3,17 +3,17 @@ use std::path::Path;
 
 use rind_core::prelude::*;
 
-use crate::{
-  flow::{FlowFacet, FlowImpulse},
-  loader::load_units_from,
-  mount::Mount,
-  prelude::{Permission, Service, Variable},
-  scopes::ScopeStore,
-  sockets::Socket,
-  timers::Timer,
-};
+use rind_flow::{FlowFacet, FlowImpulse};
+use rind_primitives::mounts::Mount;
+use rind_primitives::prelude::{Permission, Variable};
+use rind_primitives::scopes::ScopeStore;
+use rind_services::services::Service;
+use rind_services::sockets::Socket;
+use rind_services::timers::Timer;
 
 use std::collections::HashMap;
+
+use crate::loader::load_units_from;
 
 fn add_builtin_defs(metadata: &mut Metadata) {
   // TODO: Switch from toml into a declarative method.

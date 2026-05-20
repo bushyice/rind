@@ -1,4 +1,4 @@
-use rind_plugins::prelude::Ustr;
+use rind_core::types::Ustr;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub enum TTYPayload {

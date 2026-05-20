@@ -14,23 +14,24 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use crate::flow::{FacetGraph, FlowFacet, FlowImpulse};
-use crate::mount::{Mount, is_mounted};
-use crate::permissions::PERM_LOGIN;
-use crate::prelude::{
-  handle_ipc_grant_permission, handle_ipc_revoke_permission, handle_ipc_show_permission,
-};
-use crate::scopes::{ScopeInfo, ScopeStore};
-use crate::services::{Service, handle_ipc_start, handle_ipc_stop};
-use crate::sockets::{Socket, handle_ipc_start_socket, handle_ipc_stop_socket};
 use crate::user::{handle_ipc_login, handle_ipc_logout, handle_ipc_run0};
-use crate::variables::VariableHeap;
 use rind_core::prelude::*;
+use rind_core::reexports::*;
 use rind_core::types::Ustr;
+use rind_flow::{FacetGraph, FlowFacet, FlowImpulse};
 use rind_ipc::payloads::{ScopeCreatePayload, ScopeDestroyPayload};
 use rind_ipc::ser::{
   MountSerialized, ServiceSerialized, UnitItemsSerialized, UnitSerialized, serialize_many,
 };
+use rind_primitives::mounts::{Mount, is_mounted};
+use rind_primitives::permissions::PERM_LOGIN;
+use rind_primitives::permissions::{
+  handle_ipc_grant_permission, handle_ipc_revoke_permission, handle_ipc_show_permission,
+};
+use rind_primitives::scopes::ScopeStore;
+use rind_primitives::variables::VariableHeap;
+use rind_services::sockets::{Socket, handle_ipc_start_socket, handle_ipc_stop_socket};
+use rind_services::{Service, handle_ipc_start, handle_ipc_stop};
 
 pub const IPC_RUNTIME_ID: &str = "ipc";
 
@@ -607,17 +608,6 @@ pub fn handle_ipc_destroy_scope(
   ctx.lifecycle.request(LifecycleAction::ReloadUnits);
 
   Ok(Message::ok("scope destroyed"))
-}
-
-impl SerializeSerialized for ScopeInfo {
-  fn serialize(&self) -> Vec<u8> {
-    flexbuffers::to_vec(serde_json::json!({
-      "name": self.name,
-      "attributes": self.attributes,
-      "lifetime_state": self.lifetime_state,
-    }))
-    .unwrap_or_default()
-  }
 }
 
 pub fn handle_ipc_list_scopes(

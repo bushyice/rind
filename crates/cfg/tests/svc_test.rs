@@ -1,16 +1,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use rind_base::{
-  flow::{FacetGraph, FlowRuntime},
-  prelude::ServiceState,
-  reaper::ReaperRuntime,
-  services::{Service, ServiceRuntime},
-  sockets::{Socket, SocketRegistry, SocketRuntime},
-  timers::TimerRuntime,
-  transport::TransportRuntime,
-  variables::VariableHeap,
-};
+use rind_flow::{transport::TransportRuntime, *};
+use rind_primitives::prelude::VariableHeap;
+use rind_services::*;
+
 use rind_core::{
   prelude::{
     InstanceRegistry, LogConfig, Metadata, MetadataRegistry, Resources, RuntimeHandle,
@@ -305,7 +299,7 @@ restart = false
 
   std::fs::write(tmp_dir.join("dynamic.toml"), source).unwrap();
 
-  rind_base::dunits::create_scope_metadata_runtime("dynamic", &mut metadata, &tmp_dir).unwrap();
+  rind_cfg::dunits::create_scope_metadata_runtime("dynamic", &mut metadata, &tmp_dir).unwrap();
 
   runtime
     .dispatch("services", "bootstrap", Default::default(), context_id)
@@ -408,7 +402,7 @@ fn test_user_service_resolution() {
 
   let mut units = Metadata::new("test")
     .of::<Service>("service")
-    .of::<rind_base::flow::FlowFacet>("facet");
+    .of::<FlowFacet>("facet");
 
   let source = r#"
 [[facet]]
@@ -429,9 +423,7 @@ restart = false
   units.from_toml(source, "svc").unwrap();
   metadata.insert_metadata(units);
   metadata.ensure_index_for_type::<Service>("test").unwrap();
-  metadata
-    .ensure_index_for_type::<rind_base::flow::FlowFacet>("test")
-    .unwrap();
+  metadata.ensure_index_for_type::<FlowFacet>("test").unwrap();
 
   runtime
     .dispatch("services", "bootstrap", Default::default(), context_id)
@@ -445,7 +437,7 @@ restart = false
     .dispatch(
       "flow",
       "set_facet",
-      rind_base::flow::FlowRuntimePayload::new("test:user_session")
+      FlowRuntimePayload::new("test:user_session")
         .payload(serde_json::json!({"session_id": "s1", "user": "nonexistent_user_xyz"}))
         .into(),
       context_id,

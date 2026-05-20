@@ -13,7 +13,7 @@ backoff = "0.4.0"
 libc.workspace = true
 nix.workspace = true
 serde_json.workspace = true
-rind-base = { path = "../base" }
+rind-cfg = { path = "../cfg" }
 rind-core = { path = "../core" }
 rind-plugins = { path = "../plugins" }
 # rind-daemon = { path = "../rind-daemon" }

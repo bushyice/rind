@@ -1,3 +1,4 @@
+use rind_flow::triggers::trigger_events;
 use rind_ipc::payloads::SSPayload;
 use std::collections::{HashMap, HashSet};
 use std::os::fd::{AsRawFd, RawFd};
@@ -11,10 +12,13 @@ use nix::sys::socket::{
 use rind_core::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::flow::{FacetGraph, FlowItem, FlowRuntimePayload, Trigger};
-use crate::permissions::PERM_SYSTEM_SERVICES;
-use crate::prelude::{SocketActivation, VariableHeap, trigger_events};
-use rind_ipc::Message;
+use crate::services::SocketActivation;
+use rind_flow::{
+  FacetGraph, FlowInstance, FlowItem, FlowRuntimePayload, FlowType, Trigger, condition_matches,
+};
+use rind_ipc::{FlowPayload, Message};
+use rind_primitives::permissions::PERM_SYSTEM_SERVICES;
+use rind_primitives::variables::VariableHeap;
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -335,10 +339,10 @@ impl Runtime for SocketRuntime {
           while let Some(w) = rx.try_recv() {
             let mut trig = crate::services::EmitTrigger::default();
             trig.state = Some(w.name);
-            trig.payload = Some(crate::flow::FlowPayload::from_json(Some(w.payload)));
+            trig.payload = Some(FlowPayload::from_json(Some(w.payload)));
             trig.flow_type = Some(match w.flow_type {
-              rind_core::prelude::FlowEventType::Facet => crate::flow::FlowType::Facet,
-              rind_core::prelude::FlowEventType::Impulse => crate::flow::FlowType::Impulse,
+              rind_core::prelude::FlowEventType::Facet => FlowType::Facet,
+              rind_core::prelude::FlowEventType::Impulse => FlowType::Impulse,
             });
             trig.action = w.action;
             let _ = dispatch.dispatch(
@@ -396,7 +400,7 @@ impl Runtime for SocketRuntime {
                 emit_trig.flow_type,
                 emit_trig.payload.as_ref(),
               ) {
-                (Some(name), Some(flow_type), Some(payload)) => Some(crate::flow::FlowInstance {
+                (Some(name), Some(flow_type), Some(payload)) => Some(FlowInstance {
                   name: name.clone().into(),
                   payload: payload.clone(),
                   r#type: flow_type,
@@ -420,9 +424,9 @@ impl Runtime for SocketRuntime {
                   .start_on
                   .as_ref()
                   .map(|conds| {
-                    conds.iter().any(|cond| {
-                      crate::flow::condition_matches(sm, cond, emit_event.as_ref(), None)
-                    })
+                    conds
+                      .iter()
+                      .any(|cond| condition_matches(sm, cond, emit_event.as_ref(), None))
                   })
                   .unwrap_or(false);
 
@@ -430,9 +434,9 @@ impl Runtime for SocketRuntime {
                   .stop_on
                   .as_ref()
                   .map(|conds| {
-                    conds.iter().any(|cond| {
-                      crate::flow::condition_matches(sm, cond, emit_event.as_ref(), None)
-                    })
+                    conds
+                      .iter()
+                      .any(|cond| condition_matches(sm, cond, emit_event.as_ref(), None))
                   })
                   .unwrap_or(false);
 

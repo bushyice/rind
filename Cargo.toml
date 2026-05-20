@@ -4,9 +4,8 @@ members = [
   # "crates/daemon",
   "crates/core",
   # "crates/common",
-  "crates/base",
   "crates/init", "crates/macros",
-  "crates/ipc", "crates/api", "crates/plugins", "crates/rind-test-plugin", "crates/tty-plugin", "crates/networking", "crates/display", "crates/common", "crates/initramfs",
+  "crates/ipc", "crates/api", "crates/plugins", "crates/tty-plugin", "crates/networking", "crates/display", "crates/common", "crates/initramfs", "crates/services", "crates/primitives", "crates/flow", "crates/cfg",
 ]
 resolver = "3"
 

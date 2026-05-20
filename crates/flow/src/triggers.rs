@@ -1,4 +1,4 @@
-use crate::flow::{FacetGraph, FlowInstance, FlowItem, FlowType, Trigger};
+use crate::{FacetGraph, FlowInstance, FlowItem, FlowType, Trigger};
 use rind_core::prelude::*;
 use rind_ipc::{FlowMatchOperation, FlowPayload, FlowPayloadType};
 
@@ -84,8 +84,8 @@ pub fn trigger_events(
   for trigger in triggers {
     let mut resolved_triggers = Vec::new();
 
-    let resolve_path = |branch: &crate::flow::FlowInstance, path: &str| -> String {
-      if let crate::flow::FlowPayload::Json(j) = &branch.payload {
+    let resolve_path = |branch: &FlowInstance, path: &str| -> String {
+      if let FlowPayload::Json(j) = &branch.payload {
         let mut cur = j.into_json();
         for key in path.split('/') {
           if let Some(val) = cur.get(key) {

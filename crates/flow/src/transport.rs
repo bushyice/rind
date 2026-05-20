@@ -9,8 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex};
 
-use crate::flow::{FacetGraph, FlowFacet, FlowImpulse};
-use crate::prelude::{Service, stdio_log_entry};
+use crate::{FacetGraph, FlowFacet, FlowImpulse};
 use rind_core::notifier::Notifier;
 use rind_core::prelude::*;
 pub use rind_ipc::{
@@ -253,7 +252,7 @@ pub fn start_stdout_listener(
 
 pub struct TransportRuntime {
   pub uds: UdsTransport,
-  pub shm: crate::transport_shm::ShmTransport,
+  pub shm: crate::shm_tp::ShmTransport,
   pub stdio_endpoints: std::collections::HashSet<Ustr>,
 }
 
@@ -406,7 +405,7 @@ impl Default for TransportRuntime {
   fn default() -> Self {
     Self {
       uds: UdsTransport::default(),
-      shm: crate::transport_shm::ShmTransport::default(),
+      shm: crate::shm_tp::ShmTransport::default(),
       stdio_endpoints: std::collections::HashSet::new(),
     }
   }
@@ -502,24 +501,8 @@ impl Runtime for TransportRuntime {
       }
       "ingest" => {
         let endpoint = payload.get::<Ustr>("endpoint")?;
-        let index = payload.get::<usize>("index")?;
+        let uid = payload.get::<u32>("uid")?;
         let message = payload.get::<TransportMessage>("message")?;
-
-        let child = ctx
-          .registry
-          .as_one::<Service>("*", endpoint.clone())?
-          .instances
-          .get(index)
-          .ok_or(CoreError::Unknown)?;
-
-        let uid = if let Some(user) = &child.user {
-          pm.users
-            .lookup_by_name(&user)
-            .ok_or(CoreError::Unknown)?
-            .uid
-        } else {
-          0
-        };
 
         self.ingest(endpoint, message, uid, dispatch, &pm, ctx, None, log)?;
       }
@@ -538,5 +521,67 @@ impl Runtime for TransportRuntime {
       _ => {}
     }
     Ok(None)
+  }
+}
+
+pub fn stdio_log_entry(
+  service_name: &str,
+  message: &TransportMessage,
+) -> (LogLevel, String, HashMap<String, String>) {
+  let mut level = LogLevel::Info;
+  let mut text = String::new();
+  let mut fields = HashMap::new();
+  fields.insert("service".to_string(), service_name.to_string());
+  fields.insert("source".to_string(), "stdio".to_string());
+
+  if let Some(payload) = message.payload.as_ref() {
+    match payload {
+      FlowPayload::String(s) => {
+        text = s.clone();
+      }
+      FlowPayload::Bytes(b) => {
+        text = String::from_utf8(b.clone()).unwrap_or_default();
+      }
+      FlowPayload::Json(json) => {
+        let value = json.into_json();
+        if let Some(s) = value.get("message").and_then(|v| v.as_str()) {
+          text = s.to_string();
+        } else {
+          text = value.to_string();
+        }
+
+        if let Some(lvl) = value.get("level").and_then(|v| v.as_str()) {
+          level = parse_log_level(lvl);
+        }
+
+        if let Some(extra) = value.get("fields").and_then(|v| v.as_object()) {
+          for (k, v) in extra {
+            let val = v
+              .as_str()
+              .map(|s| s.to_string())
+              .unwrap_or_else(|| v.to_string());
+            fields.insert(k.clone(), val);
+          }
+        }
+      }
+      FlowPayload::None(_) => {}
+    }
+  }
+
+  if text.is_empty() {
+    text = "log".to_string();
+  }
+
+  (level, text, fields)
+}
+
+fn parse_log_level(input: &str) -> LogLevel {
+  match input.to_ascii_lowercase().as_str() {
+    "trace" => LogLevel::Trace,
+    "debug" => LogLevel::Debug,
+    "warn" | "warning" => LogLevel::Warn,
+    "error" => LogLevel::Error,
+    "fatal" => LogLevel::Fatal,
+    _ => LogLevel::Info,
   }
 }

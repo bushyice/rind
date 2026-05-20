@@ -1,4 +1,7 @@
 use rind_core::prelude::*;
+use std::collections::HashMap;
+use std::fs;
+use std::path::PathBuf;
 
 #[model(meta_name = name, meta_fields(name, env, default), derive_metadata(Debug, Clone))]
 pub struct Variable {
@@ -6,12 +9,6 @@ pub struct Variable {
   pub default: Option<toml::Value>,
   pub env: Option<Ustr>,
 }
-
-use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
-
-use rind_core::error::CoreError;
 
 #[derive(Clone)]
 pub struct VariableHeap {

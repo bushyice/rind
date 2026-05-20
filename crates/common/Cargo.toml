@@ -10,4 +10,4 @@ path = "src/common.rs"
 
 [dependencies]
 serde.workspace = true
-rind-plugins = { path = "../plugins" }
+rind-core = { path = "../core" }

@@ -2,8 +2,8 @@ use nix::sys::signal::{Signal, kill};
 use nix::sys::time::TimeSpec;
 use nix::sys::timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags};
 use nix::unistd::Pid;
-use rind_ipc::Message;
 use rind_ipc::payloads::SSPayload;
+use rind_ipc::{Message, TransportMessageAction, TransportMessageType};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
@@ -16,18 +16,21 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
+use rind_core::reexports::*;
 use rind_core::{notifier::Notifier, prelude::*};
 
-use crate::flow::{
-  FacetGraph, FlowInstance, FlowItem, FlowPayload, FlowRuntimePayload, FlowType, Trigger,
-};
-use crate::permissions::PERM_SYSTEM_SERVICES;
-use crate::prelude::{socket_path, trigger_events};
-use crate::scopes::ScopeStore;
 use crate::sockets::get_all_sockets;
-use crate::transport::{TransportMethod, start_stdout_listener};
-use crate::variables::VariableHeap;
+use rind_flow::transport::socket_path;
+use rind_flow::transport::{TransportMethod, start_stdout_listener};
+use rind_flow::triggers::{check_condition, subset_match, trigger_events};
+use rind_flow::{
+  FacetGraph, FlowInstance, FlowItem, FlowPayload, FlowRuntimePayload, FlowType, Trigger,
+  condition_is_active, condition_matches,
+};
 use rind_ipc::TransportMessage;
+use rind_primitives::permissions::PERM_SYSTEM_SERVICES;
+use rind_primitives::scopes::ScopeStore;
+use rind_primitives::variables::VariableHeap;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct RunOption {
@@ -945,7 +948,7 @@ impl ServiceRuntime {
         };
 
         match transport {
-          crate::transport::TransportMethod::Options {
+          TransportMethod::Options {
             id,
             options,
             permissions: _,
@@ -969,7 +972,7 @@ impl ServiceRuntime {
               }
             }
           }
-          crate::transport::TransportMethod::Options {
+          TransportMethod::Options {
             id,
             options,
             permissions: _,
@@ -991,8 +994,8 @@ impl ServiceRuntime {
               }
             }
           }
-          crate::transport::TransportMethod::Type(id)
-          | crate::transport::TransportMethod::Options {
+          TransportMethod::Type(id)
+          | TransportMethod::Options {
             id,
             options: _,
             permissions: _,
@@ -1589,18 +1592,16 @@ impl ServiceRuntime {
 
     let msg = TransportMessage {
       r#type: match event.flow_type {
-        rind_core::prelude::FlowEventType::Facet => crate::transport::TransportMessageType::Facet,
-        rind_core::prelude::FlowEventType::Impulse => {
-          crate::transport::TransportMessageType::Impulse
-        }
+        rind_core::prelude::FlowEventType::Facet => TransportMessageType::Facet,
+        rind_core::prelude::FlowEventType::Impulse => TransportMessageType::Impulse,
       },
       payload: Some(FlowPayload::from_json(Some(event.payload.clone()))),
       branch: None,
       name: Some(event.name.clone()),
       action: if event.action == FlowAction::Revert {
-        crate::transport::TransportMessageAction::Remove
+        TransportMessageAction::Remove
       } else {
-        crate::transport::TransportMessageAction::Set
+        TransportMessageAction::Set
       },
     };
 
@@ -1623,7 +1624,7 @@ impl ServiceRuntime {
       if let Some(vh) = vh {
         if let Some(val) = vh.get(var_name) {
           if let Ok(json_val) = serde_json::to_value(val) {
-            return crate::triggers::subset_match(&key_val, &json_val);
+            return subset_match(&key_val, &json_val);
           }
         }
       }
@@ -1633,7 +1634,7 @@ impl ServiceRuntime {
     let state_name = spec.strip_prefix("facet:").unwrap_or(spec);
     if let Some(instances) = sm.facets.get(&Ustr::from(state_name)) {
       for inst in instances {
-        if crate::triggers::subset_match(&key_val, &inst.payload.to_json()) {
+        if subset_match(&key_val, &inst.payload.to_json()) {
           return true;
         }
       }
@@ -1653,17 +1654,6 @@ fn is_stdio_transport(method: &TransportMethod) -> bool {
     TransportMethod::Type(id) => id.0.as_str() == "stdio",
     TransportMethod::Options { id, .. } => id.0.as_str() == "stdio",
     TransportMethod::Object { id, .. } => id.0.as_str() == "stdio",
-  }
-}
-
-fn parse_log_level(input: &str) -> LogLevel {
-  match input.to_ascii_lowercase().as_str() {
-    "trace" => LogLevel::Trace,
-    "debug" => LogLevel::Debug,
-    "warn" | "warning" => LogLevel::Warn,
-    "error" => LogLevel::Error,
-    "fatal" => LogLevel::Fatal,
-    _ => LogLevel::Info,
   }
 }
 
@@ -1967,13 +1957,36 @@ impl Runtime for ServiceRuntime {
         }
 
         while let Ok((service_name, message, index)) = self.stdio_rx.try_recv() {
+          let user = ctx
+            .registry
+            .as_one::<Service>("*", service_name.clone())?
+            .instances
+            .get(index)
+            .ok_or(CoreError::Unknown)?
+            .user
+            .clone();
+
+          let uid = if let Some(user) = &user {
+            ctx
+              .scope
+              .get::<PermissionStore>()
+              .cloned()
+              .unwrap_or_default()
+              .users
+              .lookup_by_name(&user)
+              .ok_or(CoreError::Unknown)?
+              .uid
+          } else {
+            0
+          };
+
           let _ = dispatch.dispatch(
             "transport",
             "ingest",
             rpayload!({
               "endpoint": service_name,
               "message": message,
-              "index": index,
+              "uid": uid,
             }),
           );
         }
@@ -2184,9 +2197,9 @@ impl Runtime for ServiceRuntime {
                           .stop_on
                           .as_ref()
                           .map(|conds| {
-                            conds.iter().any(|cond| {
-                              crate::flow::condition_matches(sm, cond, emit_event.as_ref(), None)
-                            })
+                            conds
+                              .iter()
+                              .any(|cond| condition_matches(sm, cond, emit_event.as_ref(), None))
                           })
                           .unwrap_or(false);
 
@@ -2199,8 +2212,7 @@ impl Runtime for ServiceRuntime {
                           ) {
                             (FlowAction::Revert, Some(event), Some(start_conds)) => {
                               start_conds.iter().any(|cond| {
-                                crate::triggers::check_condition(cond, event)
-                                  && !crate::flow::condition_is_active(sm, cond, None)
+                                check_condition(cond, event) && !condition_is_active(sm, cond, None)
                               })
                             }
                             _ => false,
@@ -2233,9 +2245,9 @@ impl Runtime for ServiceRuntime {
                   .start_on
                   .as_ref()
                   .map(|conds| {
-                    conds.iter().all(|cond| {
-                      crate::flow::condition_matches(sm, cond, emit_event.as_ref(), None)
-                    })
+                    conds
+                      .iter()
+                      .all(|cond| condition_matches(sm, cond, emit_event.as_ref(), None))
                   })
                   .unwrap_or(false);
 
@@ -2915,55 +2927,4 @@ impl Runtime for ServiceRuntime {
   fn id(&self) -> &str {
     "services"
   }
-}
-
-pub fn stdio_log_entry(
-  service_name: &str,
-  message: &TransportMessage,
-) -> (LogLevel, String, HashMap<String, String>) {
-  let mut level = LogLevel::Info;
-  let mut text = String::new();
-  let mut fields = HashMap::new();
-  fields.insert("service".to_string(), service_name.to_string());
-  fields.insert("source".to_string(), "stdio".to_string());
-
-  if let Some(payload) = message.payload.as_ref() {
-    match payload {
-      FlowPayload::String(s) => {
-        text = s.clone();
-      }
-      FlowPayload::Bytes(b) => {
-        text = String::from_utf8(b.clone()).unwrap_or_default();
-      }
-      FlowPayload::Json(json) => {
-        let value = json.into_json();
-        if let Some(s) = value.get("message").and_then(|v| v.as_str()) {
-          text = s.to_string();
-        } else {
-          text = value.to_string();
-        }
-
-        if let Some(lvl) = value.get("level").and_then(|v| v.as_str()) {
-          level = parse_log_level(lvl);
-        }
-
-        if let Some(extra) = value.get("fields").and_then(|v| v.as_object()) {
-          for (k, v) in extra {
-            let val = v
-              .as_str()
-              .map(|s| s.to_string())
-              .unwrap_or_else(|| v.to_string());
-            fields.insert(k.clone(), val);
-          }
-        }
-      }
-      FlowPayload::None(_) => {}
-    }
-  }
-
-  if text.is_empty() {
-    text = "log".to_string();
-  }
-
-  (level, text, fields)
 }

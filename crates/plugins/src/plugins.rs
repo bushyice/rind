@@ -9,8 +9,6 @@ use rind_core::{
   prelude::{ExtensionManager, LogHandle, Orchestrator},
 };
 
-pub use rind_base as base;
-
 bitflags::bitflags! {
   #[repr(C)]
   #[derive(Clone, Copy)]
@@ -172,11 +170,11 @@ pub mod prelude {
     ($name:ident) => {
 
       thread_local! {
-        pub static $name: rind_plugins::base::core::once_cell::unsync::OnceCell<&'static ::rind_plugins::base::core::extensions::ExtensionManager> = rind_plugins::base::core::once_cell::unsync::OnceCell::new();
+        pub static $name: rind_core::reexports::once_cell::unsync::OnceCell<&'static ::rind_core::extensions::ExtensionManager> = rind_core::reexports::once_cell::unsync::OnceCell::new();
       }
 
       #[unsafe(no_mangle)]
-      pub extern "Rust" fn extension_entry(ext: &'static ::rind_plugins::base::core::extensions::ExtensionManager) {
+      pub extern "Rust" fn extension_entry(ext: &'static ::rind_core::extensions::ExtensionManager) {
         EXTENSIONS.with(|e| match e.set(ext) {
           Ok(_) => {}
           Err(_) => {},
@@ -234,17 +232,15 @@ pub mod prelude {
       }
     };
     (@register $exts:ident, act, $func:path) => {
-      $exts.register(::rind_plugins::base::core::extensions::Extension::Act($func));
+      $exts.register(::rind_core::extensions::Extension::Act($func));
     };
 
     (@register $exts:ident, resolve, $func:path) => {
-      $exts.register(::rind_plugins::base::core::extensions::Extension::Resolve($func));
+      $exts.register(::rind_core::extensions::Extension::Resolve($func));
     };
 
     (@register $exts:ident, enquire, $func:path) => {
-      $exts.register(::rind_plugins::base::core::extensions::Extension::Enquire($func));
+      $exts.register(::rind_core::extensions::Extension::Enquire($func));
     };
   }
-
-  pub use super::base::prelude::*;
 }

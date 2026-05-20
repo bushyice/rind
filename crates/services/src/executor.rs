@@ -1,13 +1,13 @@
-use crate::flow::FacetGraph;
 use crate::services::{
   RunOption, Service, ServiceBranchContext, ServiceNamespaces, SocketActivation,
 };
-use crate::variables::VariableHeap;
 use nix::sys::signal::{Signal, kill};
 use nix::unistd::Pid;
 use rind_core::notifier::Notifier;
 use rind_core::prelude::*;
 use rind_core::utils::read_env_file;
+use rind_flow::FacetGraph;
+use rind_primitives::prelude::VariableHeap;
 use std::collections::HashMap;
 use std::net::TcpStream;
 use std::os::fd::RawFd;

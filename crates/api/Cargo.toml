@@ -12,7 +12,7 @@ crate-type = ["cdylib"]
 libloading.workspace = true
 once_cell.workspace = true
 rind-ipc = { path = "../ipc" }
-rind-base = { path = "../base" }
+rind-flow = { path = "../flow" }
 serde_json.workspace = true
 libc.workspace = true
 flexbuffers.workspace = true

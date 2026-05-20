@@ -1,4 +1,4 @@
-use rind_base::variables::VariableHeap;
+use rind_primitives::variables::VariableHeap;
 
 fn tmp_path(tag: &str) -> std::path::PathBuf {
   let now = std::time::SystemTime::now()

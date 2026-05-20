@@ -1,15 +1,15 @@
 use std::time::{Duration, Instant};
 
-pub use crate::core::events::ServiceEventKind;
-pub use crate::prelude::FacetGraph;
-use crate::prelude::VariableHeap;
 use nix::sys::time::TimeSpec;
 use nix::sys::timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags};
+pub use rind_core::events::ServiceEventKind;
 use rind_core::prelude::*;
+use rind_primitives::variables::VariableHeap;
 use std::os::fd::{AsFd, AsRawFd};
 
-use crate::flow::Trigger;
-use crate::triggers::trigger_events;
+pub use rind_flow::FacetGraph;
+use rind_flow::Trigger;
+use rind_flow::triggers::trigger_events;
 
 #[model(
   meta_name = name,

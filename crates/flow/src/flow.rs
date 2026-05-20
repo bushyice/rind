@@ -1,18 +1,24 @@
+pub mod shm_tp;
+pub mod transport;
+pub mod triggers;
+
+use rind_primitives::scopes::GLOBAL_SCOPE_STORE;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use rind_core::prelude::*;
+use rind_core::reexports::*;
 pub use rind_ipc::{FlowJson, FlowMatchOperation, FlowPayload, FlowPayloadType};
 
-use crate::scopes::ScopeStore;
 use crate::transport::TransportMethod;
 use crate::triggers::{
   branch_target_key, check_condition, default_payload_for_type, json_branch_key, map_json_payload,
   merge_json, payload_compatible, payload_signature, payload_to_filter,
 };
-use crate::variables::VariableHeap;
+use rind_primitives::prelude::ScopeStore;
+use rind_primitives::prelude::VariableHeap;
 
 pub const FLOW_RUNTIME_ID: &str = "flow";
 
@@ -1141,7 +1147,7 @@ impl Runtime for FlowRuntime {
             .map(|branches| branches.is_empty())
             .unwrap_or(true);
           if should_drop_scope {
-            let scope_name = crate::scopes::GLOBAL_SCOPE_STORE
+            let scope_name = GLOBAL_SCOPE_STORE
               .lock()
               .ok()
               .and_then(|s| s.scope_for_state(name.as_str()));

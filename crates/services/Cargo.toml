@@ -1,17 +1,15 @@
 [package]
-name = "networking"
+name = "rind-services"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[lib]
-path = "src/networking.rs"
-crate-type = ["cdylib"]
-
 [dependencies]
 rind-core = { path = "../core" }
-rind-plugins = { path = "../plugins" }
-rind-ipc = { path = "../ipc" }
+rind-primitives = { path = "../primitives" }
 rind-flow = { path = "../flow" }
+rind-ipc = { path = "../ipc", features = ["server"] }
+nix.workspace = true
+libc.workspace = true
 serde.workspace = true
 flexbuffers.workspace = true

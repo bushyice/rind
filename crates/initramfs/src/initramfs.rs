@@ -3,6 +3,7 @@ use std::path::Path;
 
 use nix::mount::{MntFlags, MsFlags, mount, umount2};
 use nix::unistd::{chdir, pivot_root};
+use rind_core::prelude::*;
 use rind_plugins::prelude::*;
 
 #[derive(Default)]

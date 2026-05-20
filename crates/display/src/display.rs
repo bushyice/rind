@@ -1,5 +1,7 @@
 use std::{fs::OpenOptions, io::Write, os::fd::AsRawFd};
 
+use rind_core::prelude::*;
+use rind_core::reexports::libc;
 use rind_plugins::prelude::*;
 use rind_plugins_common::TTYPayload;
 

@@ -10,5 +10,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rind-plugins = { path = "../plugins" }
+rind-core = { path = "../core" }
 rind-plugins-common = { path = "../common" }
+rind-ipc = { path = "../ipc", features = ["server"] }
+rind-primitives = { path = "../primitives" }
+rind-flow = { path = "../flow" }
 serde.workspace = true
