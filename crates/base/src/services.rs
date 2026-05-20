@@ -22,7 +22,7 @@ use crate::flow::{
   FacetGraph, FlowInstance, FlowItem, FlowPayload, FlowRuntimePayload, FlowType, Trigger,
 };
 use crate::permissions::PERM_SYSTEM_SERVICES;
-use crate::prelude::trigger_events;
+use crate::prelude::{socket_path, trigger_events};
 use crate::scopes::ScopeStore;
 use crate::sockets::get_all_sockets;
 use crate::transport::{TransportMethod, start_stdout_listener};
@@ -991,6 +991,17 @@ impl ServiceRuntime {
               }
             }
           }
+          crate::transport::TransportMethod::Type(id)
+          | crate::transport::TransportMethod::Options {
+            id,
+            options: _,
+            permissions: _,
+          } if id.0.as_str() == "uds" || id.0.as_str() == "shm" => {
+            envs.insert(
+              Ustr::from("RIND_TP_SOCK"),
+              socket_path(&registry_key).to_str().unwrap().to_ustr(),
+            );
+          }
           _ => {}
         }
       }
@@ -1159,7 +1170,7 @@ impl ServiceRuntime {
       resources,
     ) {
       Ok(_) => {
-        self.register_service_transport(service, dispatch, None);
+        self.register_service_transport(service, dispatch, Some(registry_key.clone()));
         if let Some(inst) = service.instances.as_one_mut() {
           inst.state = ServiceState::Active;
           self.run_triggers(service.metadata.on_start.as_ref(), sm, dispatch);
@@ -1493,16 +1504,13 @@ impl ServiceRuntime {
     &self,
     service: &Service,
     dispatch: &RuntimeDispatcher,
-    unit: Option<String>,
+    registry_key: Option<Ustr>,
   ) -> bool {
     let Some(transport) = &service.metadata.transport else {
       return false;
     };
 
-    let endpoint = unit
-      .map(|unit| format!("{unit}:{}", service.metadata.name))
-      .unwrap_or(service.metadata.name.to_string())
-      .to_ustr();
+    let endpoint = registry_key.unwrap_or(service.metadata.name.clone());
 
     if is_stdio_transport(transport) {
       let _ = dispatch.dispatch(
@@ -2373,7 +2381,9 @@ impl Runtime for ServiceRuntime {
               let service =
                 registry.instantiate_one::<Service>("*", name.clone(), |x| Ok(Service::new(x)))?;
 
-              if !deferred && self.register_service_transport(service, dispatch, None) {
+              if !deferred
+                && self.register_service_transport(service, dispatch, Some(service_key.clone()))
+              {
                 let mut payload = rpayload!({
                   "name": name,
                   "socket_fds": socket_fds.iter().map(|x| *x as i32).collect::<Vec<_>>(),
@@ -2405,7 +2415,7 @@ impl Runtime for ServiceRuntime {
                 ) {
                   Ok(instances) => {
                     service.instances.extend(instances);
-                    self.register_service_transport(service, dispatch, None);
+                    self.register_service_transport(service, dispatch, Some(service_key.clone()));
                     if !service.instances.is_empty() {
                       // TODO: Set instance state instead of just first one?
                       if let Some(inst) = service.instances.get_mut(0) {
@@ -2469,7 +2479,7 @@ impl Runtime for ServiceRuntime {
                 ) {
                   Ok(instances) => {
                     service.instances.extend(instances);
-                    self.register_service_transport(service, dispatch, None);
+                    self.register_service_transport(service, dispatch, Some(service_key.clone()));
                     if let Some(inst) = service.instances.as_one_mut() {
                       inst.state = ServiceState::Active;
                       self.run_triggers(service.metadata.on_start.as_ref(), Some(sm), dispatch);

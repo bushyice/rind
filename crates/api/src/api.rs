@@ -1,5 +1,7 @@
 // TODO: Add shm tp
 
+#![allow(non_camel_case_types)]
+
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::io::stdout;
@@ -23,63 +25,63 @@ static TRANSPORT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[repr(C)]
 #[derive(Debug, PartialEq, Eq)]
-pub enum TransportProtocolMethod {
+pub enum RIND_TP_METHOD {
   STDIO = 0,
   UDS = 1,
 }
 
 #[repr(C)]
-pub enum MessageAction {
-  Remove = 0,
-  Set = 1,
+pub enum RIND_MSG_ACTION {
+  REMOVE = 0,
+  SET = 1,
 }
 
 #[repr(C)]
 #[derive(Debug, PartialEq, Eq)]
-pub enum MessageType {
-  Impulse = 0,
-  Facet = 1,
-  Enquiry = 2,
-  Response = 3,
-  Unknown = 4,
+pub enum RIND_MSG_TYPE {
+  IMPULSE = 0,
+  FACET = 1,
+  ENQUIRY = 2,
+  RESPONSE = 3,
+  UNKNOWN = 4,
 }
 
 #[repr(C)]
 #[derive(Debug, PartialEq, Eq)]
-pub enum InvokeType {
-  Valid = 0,
-  Ok = 1,
-  Error = 2,
-  Unknown = 3,
-  RequestInput = 4,
-  Enquire = 5,
+pub enum RIND_INVOKE_TYPE {
+  VALID = 0,
+  OK = 1,
+  ERROR = 2,
+  UNKNOWN = 3,
+  REQUEST_INPUT = 4,
+  ENQUIRE = 5,
 }
 
 #[repr(C)]
-pub struct MessageContainer {
-  r#type: MessageType,
-  action: MessageAction,
-  payload: *mut PayloadContainer,
+pub struct rind_msg {
+  r#type: RIND_MSG_TYPE,
+  action: RIND_MSG_ACTION,
+  payload: *mut rind_payload,
   name: *const c_char,
 }
 
 #[repr(C)]
-pub struct InvokeCommand {
-  r#type: InvokeType,
+pub struct rind_invoke_cmd {
+  r#type: RIND_INVOKE_TYPE,
   action: *const c_char,
   payload: *const c_char,
 }
 
-impl Into<Message> for InvokeCommand {
+impl Into<Message> for rind_invoke_cmd {
   fn into(self) -> Message {
     Message {
       r#type: match self.r#type {
-        InvokeType::Enquire => rind_ipc::MessageType::Enquire,
-        InvokeType::Ok => rind_ipc::MessageType::Ok,
-        InvokeType::Error => rind_ipc::MessageType::Error,
-        InvokeType::Valid => rind_ipc::MessageType::Valid,
-        InvokeType::RequestInput => rind_ipc::MessageType::RequestInput,
-        InvokeType::Unknown => rind_ipc::MessageType::Unknown,
+        RIND_INVOKE_TYPE::ENQUIRE => rind_ipc::MessageType::Enquire,
+        RIND_INVOKE_TYPE::OK => rind_ipc::MessageType::Ok,
+        RIND_INVOKE_TYPE::ERROR => rind_ipc::MessageType::Error,
+        RIND_INVOKE_TYPE::VALID => rind_ipc::MessageType::Valid,
+        RIND_INVOKE_TYPE::REQUEST_INPUT => rind_ipc::MessageType::RequestInput,
+        RIND_INVOKE_TYPE::UNKNOWN => rind_ipc::MessageType::Unknown,
       },
       action: if !self.action.is_null() {
         unsafe { CStr::from_ptr(self.action) }
@@ -106,19 +108,19 @@ impl Into<Message> for InvokeCommand {
   }
 }
 
-impl Into<TransportMessage> for &MessageContainer {
+impl Into<TransportMessage> for &rind_msg {
   fn into(self) -> TransportMessage {
     TransportMessage {
       action: match self.action {
-        MessageAction::Remove => rind_base::transport::TransportMessageAction::Remove,
-        MessageAction::Set => rind_base::transport::TransportMessageAction::Set,
+        RIND_MSG_ACTION::REMOVE => rind_base::transport::TransportMessageAction::Remove,
+        RIND_MSG_ACTION::SET => rind_base::transport::TransportMessageAction::Set,
       },
       r#type: match self.r#type {
-        MessageType::Enquiry => rind_base::transport::TransportMessageType::Enquiry,
-        MessageType::Response => rind_base::transport::TransportMessageType::Response,
-        MessageType::Impulse => rind_base::transport::TransportMessageType::Impulse,
-        MessageType::Facet => rind_base::transport::TransportMessageType::Facet,
-        MessageType::Unknown => rind_base::transport::TransportMessageType::Unknown,
+        RIND_MSG_TYPE::ENQUIRY => rind_base::transport::TransportMessageType::Enquiry,
+        RIND_MSG_TYPE::RESPONSE => rind_base::transport::TransportMessageType::Response,
+        RIND_MSG_TYPE::IMPULSE => rind_base::transport::TransportMessageType::Impulse,
+        RIND_MSG_TYPE::FACET => rind_base::transport::TransportMessageType::Facet,
+        RIND_MSG_TYPE::UNKNOWN => rind_base::transport::TransportMessageType::Unknown,
       },
       branch: None,
       name: if self.name.is_null() {
@@ -142,15 +144,15 @@ impl Into<TransportMessage> for &MessageContainer {
 }
 
 #[repr(C)]
-pub struct TransportProtocol {
-  pub protocol: TransportProtocolMethod,
+pub struct rind_tp {
+  pub protocol: RIND_TP_METHOD,
   pub options: *const *const c_char,
   pub len: usize,
   pub id: u64,
 }
 
-fn init_tp_internal(transport: TransportProtocol) -> TransportProtocol {
-  if transport.protocol == TransportProtocolMethod::UDS {
+fn init_tp_internal(transport: rind_tp) -> rind_tp {
+  if transport.protocol == RIND_TP_METHOD::UDS {
     if transport.options.is_null() || transport.len == 0 {
       return transport;
     }
@@ -187,12 +189,9 @@ fn init_tp_internal(transport: TransportProtocol) -> TransportProtocol {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn init_tp(
-  protocol: TransportProtocolMethod,
-  options: *const c_char,
-) -> TransportProtocol {
+pub extern "C" fn rind_init_tp(protocol: RIND_TP_METHOD, options: *const c_char) -> rind_tp {
   if options.is_null() {
-    return init_tp_internal(TransportProtocol {
+    return init_tp_internal(rind_tp {
       protocol,
       options: ptr::null(),
       len: 0,
@@ -213,7 +212,7 @@ pub extern "C" fn init_tp(
   std::mem::forget(boxed);
   std::mem::forget(parts);
 
-  init_tp_internal(TransportProtocol {
+  init_tp_internal(rind_tp {
     protocol,
     options: ptr,
     len,
@@ -221,8 +220,8 @@ pub extern "C" fn init_tp(
   })
 }
 
-fn transport_to_container(m: TransportMessage) -> MessageContainer {
-  MessageContainer {
+fn transport_to_container(m: TransportMessage) -> rind_msg {
+  rind_msg {
     name: match m.name {
       Some(s) => {
         let str = CString::new(&**s).unwrap();
@@ -231,22 +230,22 @@ fn transport_to_container(m: TransportMessage) -> MessageContainer {
       None => null_mut(),
     },
     r#type: match m.r#type {
-      rind_base::transport::TransportMessageType::Enquiry => MessageType::Enquiry,
-      rind_base::transport::TransportMessageType::Response => MessageType::Response,
-      rind_base::transport::TransportMessageType::Impulse => MessageType::Impulse,
-      rind_base::transport::TransportMessageType::Facet => MessageType::Facet,
-      rind_base::transport::TransportMessageType::Unknown => MessageType::Unknown,
+      rind_base::transport::TransportMessageType::Enquiry => RIND_MSG_TYPE::ENQUIRY,
+      rind_base::transport::TransportMessageType::Response => RIND_MSG_TYPE::RESPONSE,
+      rind_base::transport::TransportMessageType::Impulse => RIND_MSG_TYPE::IMPULSE,
+      rind_base::transport::TransportMessageType::Facet => RIND_MSG_TYPE::FACET,
+      rind_base::transport::TransportMessageType::Unknown => RIND_MSG_TYPE::UNKNOWN,
     },
     action: match &m.action {
-      rind_base::transport::TransportMessageAction::Remove => MessageAction::Remove,
-      rind_base::transport::TransportMessageAction::Set => MessageAction::Set,
+      rind_base::transport::TransportMessageAction::Remove => RIND_MSG_ACTION::REMOVE,
+      rind_base::transport::TransportMessageAction::Set => RIND_MSG_ACTION::SET,
     },
     payload: if let Some(p) = m.payload {
-      Box::into_raw(Box::new(PayloadContainer {
+      Box::into_raw(Box::new(rind_payload {
         content: CString::new(p.to_string_payload()).unwrap().into_raw(),
         r#type: match p {
-          FlowPayload::Json(_) => PayloadType::Json,
-          _ => PayloadType::String,
+          FlowPayload::Json(_) => RIND_PAYLOAD_TYPE::JSON,
+          _ => RIND_PAYLOAD_TYPE::STRING,
         },
       }))
     } else {
@@ -256,10 +255,7 @@ fn transport_to_container(m: TransportMessage) -> MessageContainer {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn listen_tp(
-  tp: *mut TransportProtocol,
-  func: unsafe extern "C" fn(MessageContainer),
-) {
+pub extern "C" fn rind_listen_tp(tp: *mut rind_tp, func: unsafe extern "C" fn(rind_msg)) {
   if tp.is_null() {
     return;
   }
@@ -300,14 +296,11 @@ pub extern "C" fn listen_tp(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn enquiry_tp(
-  tp: *const TransportProtocol,
-  message: MessageContainer,
-) -> MessageContainer {
+pub extern "C" fn rind_enquiry_tp(tp: *const rind_tp, message: rind_msg) -> rind_msg {
   if tp.is_null() {
-    return MessageContainer {
-      r#type: MessageType::Unknown,
-      action: MessageAction::Remove,
+    return rind_msg {
+      r#type: RIND_MSG_TYPE::UNKNOWN,
+      action: RIND_MSG_ACTION::REMOVE,
       payload: null_mut(),
       name: null_mut(),
     };
@@ -316,15 +309,15 @@ pub extern "C" fn enquiry_tp(
   let tp = unsafe { &*tp };
 
   let mut stream = match tp.protocol {
-    TransportProtocolMethod::STDIO => {
-      return MessageContainer {
-        r#type: MessageType::Unknown,
-        action: MessageAction::Remove,
+    RIND_TP_METHOD::STDIO => {
+      return rind_msg {
+        r#type: RIND_MSG_TYPE::UNKNOWN,
+        action: RIND_MSG_ACTION::REMOVE,
         payload: null_mut(),
         name: null_mut(),
       };
     }
-    TransportProtocolMethod::UDS => {
+    RIND_TP_METHOD::UDS => {
       let options: Vec<&str> = if tp.options.is_null() || tp.len == 0 {
         Vec::new()
       } else {
@@ -344,9 +337,9 @@ pub extern "C" fn enquiry_tp(
       };
 
       if options.is_empty() {
-        return MessageContainer {
-          r#type: MessageType::Unknown,
-          action: MessageAction::Remove,
+        return rind_msg {
+          r#type: RIND_MSG_TYPE::UNKNOWN,
+          action: RIND_MSG_ACTION::REMOVE,
           payload: null_mut(),
           name: null_mut(),
         };
@@ -355,9 +348,9 @@ pub extern "C" fn enquiry_tp(
       match UnixStream::connect(options[0]) {
         Ok(s) => s,
         Err(_) => {
-          return MessageContainer {
-            r#type: MessageType::Unknown,
-            action: MessageAction::Remove,
+          return rind_msg {
+            r#type: RIND_MSG_TYPE::UNKNOWN,
+            action: RIND_MSG_ACTION::REMOVE,
             payload: null_mut(),
             name: null_mut(),
           };
@@ -368,9 +361,9 @@ pub extern "C" fn enquiry_tp(
 
   let msg: TransportMessage = { &message }.into();
   if msg.write_signed(&mut stream).is_err() {
-    return MessageContainer {
-      r#type: MessageType::Unknown,
-      action: MessageAction::Remove,
+    return rind_msg {
+      r#type: RIND_MSG_TYPE::UNKNOWN,
+      action: RIND_MSG_ACTION::REMOVE,
       payload: null_mut(),
       name: null_mut(),
     };
@@ -378,9 +371,9 @@ pub extern "C" fn enquiry_tp(
 
   match TransportMessage::read_signed(&mut stream) {
     Ok(m) => transport_to_container(m),
-    Err(_) => MessageContainer {
-      r#type: MessageType::Unknown,
-      action: MessageAction::Remove,
+    Err(_) => rind_msg {
+      r#type: RIND_MSG_TYPE::UNKNOWN,
+      action: RIND_MSG_ACTION::REMOVE,
       payload: null_mut(),
       name: null_mut(),
     },
@@ -388,19 +381,19 @@ pub extern "C" fn enquiry_tp(
 }
 
 #[repr(C)]
-pub struct PayloadContainer {
-  r#type: PayloadType,
+pub struct rind_payload {
+  r#type: RIND_PAYLOAD_TYPE,
   content: *const c_char,
 }
 
-impl Into<FlowPayload> for &PayloadContainer {
+impl Into<FlowPayload> for &rind_payload {
   fn into(self) -> FlowPayload {
     let inner = unsafe { CStr::from_ptr(self.content) }
       .to_str()
       .unwrap()
       .to_string();
 
-    if matches!(self.r#type, PayloadType::Json) {
+    if matches!(self.r#type, RIND_PAYLOAD_TYPE::JSON) {
       FlowPayload::Json(FlowJson::from(inner))
     } else {
       FlowPayload::String(inner)
@@ -409,14 +402,14 @@ impl Into<FlowPayload> for &PayloadContainer {
 }
 
 #[repr(C)]
-pub enum PayloadType {
-  String = 0,
-  Json = 1,
+pub enum RIND_PAYLOAD_TYPE {
+  STRING = 0,
+  JSON = 1,
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn create_message(r#type: MessageType, action: MessageAction) -> MessageContainer {
-  MessageContainer {
+pub extern "C" fn rind_create_msg(r#type: RIND_MSG_TYPE, action: RIND_MSG_ACTION) -> rind_msg {
+  rind_msg {
     r#type,
     action,
     payload: null_mut(),
@@ -425,42 +418,39 @@ pub extern "C" fn create_message(r#type: MessageType, action: MessageAction) -> 
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn create_message_payload(
-  r#type: PayloadType,
+pub extern "C" fn rind_create_msg_payload(
+  r#type: RIND_PAYLOAD_TYPE,
   inner: *const c_char,
-) -> PayloadContainer {
-  PayloadContainer {
+) -> rind_payload {
+  rind_payload {
     r#type,
     content: inner,
   }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn set_message_payload(message: *mut MessageContainer, payload: PayloadContainer) {
+pub extern "C" fn rind_set_message_payload(message: *mut rind_msg, payload: rind_payload) {
   let msg = unsafe { &mut *message };
   msg.payload = Box::into_raw(Box::new(payload));
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn set_message_name(message: *mut MessageContainer, name: *const c_char) {
+pub extern "C" fn rind_set_message_name(message: *mut rind_msg, name: *const c_char) {
   let msg = unsafe { &mut *message };
   msg.name = name;
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn set_state(name: *const c_char, payload: PayloadContainer) -> MessageContainer {
-  let mut msg = create_message(MessageType::Facet, MessageAction::Set);
+pub extern "C" fn rind_set_facet(name: *const c_char, payload: rind_payload) -> rind_msg {
+  let mut msg = rind_create_msg(RIND_MSG_TYPE::FACET, RIND_MSG_ACTION::SET);
   msg.name = name;
   msg.payload = Box::into_raw(Box::new(payload));
   msg
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn remove_state(
-  name: *const c_char,
-  payload: *mut PayloadContainer,
-) -> MessageContainer {
-  let mut msg = create_message(MessageType::Facet, MessageAction::Remove);
+pub extern "C" fn rind_remove_facet(name: *const c_char, payload: *mut rind_payload) -> rind_msg {
+  let mut msg = rind_create_msg(RIND_MSG_TYPE::FACET, RIND_MSG_ACTION::REMOVE);
   msg.name = name;
   if !payload.is_null() {
     msg.payload = payload;
@@ -469,11 +459,8 @@ pub extern "C" fn remove_state(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn emit_signal(
-  name: *const c_char,
-  payload: *mut PayloadContainer,
-) -> MessageContainer {
-  let mut msg = create_message(MessageType::Impulse, MessageAction::Set);
+pub extern "C" fn rind_impulse(name: *const c_char, payload: *mut rind_payload) -> rind_msg {
+  let mut msg = rind_create_msg(RIND_MSG_TYPE::IMPULSE, RIND_MSG_ACTION::SET);
   msg.name = name;
   if !payload.is_null() {
     msg.payload = payload;
@@ -482,7 +469,7 @@ pub extern "C" fn emit_signal(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn send_message(tp: *const TransportProtocol, message: MessageContainer) {
+pub extern "C" fn rind_send_message(tp: *const rind_tp, message: rind_msg) {
   if tp.is_null() {
     return;
   }
@@ -492,11 +479,11 @@ pub extern "C" fn send_message(tp: *const TransportProtocol, message: MessageCon
   let msg: TransportMessage = { &message }.into();
 
   match tp.protocol {
-    TransportProtocolMethod::STDIO => {
+    RIND_TP_METHOD::STDIO => {
       // println!("{}", serde_json::to_string(&msg).unwrap());
       let _ = msg.write_signed(stdout());
     }
-    TransportProtocolMethod::UDS => {
+    RIND_TP_METHOD::UDS => {
       let stream = {
         let conns = UDS_CONNECTIONS.read().unwrap();
 
@@ -511,12 +498,12 @@ pub extern "C" fn send_message(tp: *const TransportProtocol, message: MessageCon
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn create_invoke(
-  r#type: InvokeType,
+pub extern "C" fn rind_create_invoke(
+  r#type: RIND_INVOKE_TYPE,
   action: *const c_char,
   payload: *const c_char,
-) -> InvokeCommand {
-  InvokeCommand {
+) -> rind_invoke_cmd {
+  rind_invoke_cmd {
     r#type,
     action,
     payload,
@@ -526,41 +513,41 @@ pub extern "C" fn create_invoke(
 static RIND_SOCK_PATH: Lazy<RwLock<String>> = Lazy::new(|| RwLock::new("/tmp/rind.sock".into()));
 
 #[unsafe(no_mangle)]
-pub extern "C" fn set_rind_sock_path(path: *mut c_char) {
-  *RIND_SOCK_PATH.write().unwrap() = unsafe { CString::from_raw(path) }
+pub extern "C" fn rind_set_sock_path(path: *mut c_char) {
+  *RIND_SOCK_PATH.write().unwrap() = unsafe { CStr::from_ptr(path) }
     .to_string_lossy()
     .to_string();
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn invoke(command: InvokeCommand) -> InvokeCommand {
+pub extern "C" fn rind_invoke(command: rind_invoke_cmd) -> rind_invoke_cmd {
   let Ok(mut stream) = UnixStream::connect(RIND_SOCK_PATH.read().unwrap().clone()) else {
-    return InvokeCommand {
+    return rind_invoke_cmd {
       action: null_mut(),
       payload: null_mut(),
-      r#type: InvokeType::Error,
+      r#type: RIND_INVOKE_TYPE::ERROR,
     };
   };
 
   let msg: Message = command.into();
 
   let Ok(_) = msg.write_signed(&stream) else {
-    return InvokeCommand {
-      r#type: InvokeType::Error,
+    return rind_invoke_cmd {
+      r#type: RIND_INVOKE_TYPE::ERROR,
       action: null_mut(),
       payload: null_mut(),
     };
   };
 
   let Ok(msg) = Message::read_signed(&mut stream) else {
-    return InvokeCommand {
-      r#type: InvokeType::Error,
+    return rind_invoke_cmd {
+      r#type: RIND_INVOKE_TYPE::ERROR,
       action: null_mut(),
       payload: null_mut(),
     };
   };
 
-  InvokeCommand {
+  rind_invoke_cmd {
     action: {
       let str = CString::new(msg.action).unwrap();
       str.into_raw()
@@ -572,12 +559,12 @@ pub extern "C" fn invoke(command: InvokeCommand) -> InvokeCommand {
       null_mut()
     },
     r#type: match msg.r#type {
-      rind_ipc::MessageType::Enquire => InvokeType::Enquire,
-      rind_ipc::MessageType::Ok => InvokeType::Ok,
-      rind_ipc::MessageType::Error => InvokeType::Error,
-      rind_ipc::MessageType::Valid => InvokeType::Valid,
-      rind_ipc::MessageType::RequestInput => InvokeType::RequestInput,
-      rind_ipc::MessageType::Unknown => InvokeType::Unknown,
+      rind_ipc::MessageType::Enquire => RIND_INVOKE_TYPE::ENQUIRE,
+      rind_ipc::MessageType::Ok => RIND_INVOKE_TYPE::OK,
+      rind_ipc::MessageType::Error => RIND_INVOKE_TYPE::ERROR,
+      rind_ipc::MessageType::Valid => RIND_INVOKE_TYPE::VALID,
+      rind_ipc::MessageType::RequestInput => RIND_INVOKE_TYPE::REQUEST_INPUT,
+      rind_ipc::MessageType::Unknown => RIND_INVOKE_TYPE::UNKNOWN,
     },
   }
 }

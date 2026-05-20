@@ -1,5 +1,5 @@
 use std::error::Error;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::process::exit;
 use std::thread;
@@ -28,7 +28,9 @@ fn main() -> Result<(), Box<dyn Error>> {
   println!("connesting to shm tp...");
   let mut stream = None;
   for _ in 0..20 {
-    match UnixStream::connect("/run/rind-tp/shm.sock") {
+    match UnixStream::connect(
+      std::env::var("RIND_TP_SOCK").unwrap_or("/run/rind-tp/shm.sock".to_string()),
+    ) {
       Ok(s) => {
         stream = Some(s);
         break;
@@ -122,5 +124,3 @@ fn main() -> Result<(), Box<dyn Error>> {
     thread::sleep(std::time::Duration::from_secs(1));
   }
 }
-
-type RawFd = std::os::unix::io::RawFd;

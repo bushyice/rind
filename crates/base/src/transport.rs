@@ -2,6 +2,8 @@
 // - have not been impl'd for stdio
 // - probs more things i didn't think about
 
+// TODO: Socket cleanups
+
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
