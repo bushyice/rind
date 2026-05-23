@@ -38,8 +38,7 @@ impl Orchestrator for BootOrchestrator {
 
     ctx.dispatch("user", "create_sessions", Default::default())?;
 
-    ctx.dispatch("sockets", "watch_events", Default::default())?;
-    ctx.dispatch("services", "watch_events", Default::default())?;
+    ctx.dispatch("events", "watch_events", Default::default())?;
 
     ctx.dispatch("ipc", "init_actions", Default::default())?;
     ctx.dispatch("ipc", "start_server", Default::default())?;
@@ -81,8 +80,7 @@ impl Orchestrator for AfterBootOrchestrator {
   fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
     ctx.dispatch("sockets", "setup_all", Default::default())?;
     ctx.dispatch("services", "start_all", Default::default())?;
-    ctx.dispatch("services", "evaluate_triggers", Default::default())?;
-    ctx.dispatch("sockets", "evaluate_triggers", Default::default())?;
+    ctx.dispatch("events", "evaluate_triggers", Default::default())?;
 
     Ok(())
   }
@@ -117,6 +115,7 @@ impl Orchestrator for RuntimeProviderOrchestrator {
       Box::new(UserRuntime::default()),
       Box::new(SocketRuntime::default()),
       Box::new(TimerRuntime::default()),
+      Box::new(EventsRuntime::default()),
     ]
   }
 
@@ -146,8 +145,7 @@ impl Orchestrator for PumpOrchestrator {
   fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
     ctx.dispatch("reaper", "reap_once", Default::default())?;
     ctx.dispatch("reaper", "timeout_sweep", Default::default())?;
-    ctx.dispatch("services", "drain_events", Default::default())?;
-    ctx.dispatch("sockets", "drain_events", Default::default())?;
+    ctx.dispatch("events", "drain_events", Default::default())?;
     ctx.dispatch("transport", "drain_incoming", Default::default())?;
     ctx.dispatch("ipc", "drain_requests", Default::default())?;
     Ok(())
@@ -231,49 +229,43 @@ fn process_lifecycle_action(
     LifecycleAction::ReloadUnits => {
       load_env();
       let _ = boot.reload_units_collection(metadata, instances, runtime, resources);
-      let _ = runtime.dispatch(
-        "services",
-        "bootstrap",
-        Default::default(),
-        boot.primary_context_id().unwrap_or(0),
-      );
-      let _ = runtime.dispatch(
-        "sockets",
-        "bootstrap",
-        Default::default(),
-        boot.primary_context_id().unwrap_or(0),
-      );
-      let _ = runtime.dispatch(
-        "services",
-        "start_all",
-        Default::default(),
-        boot.primary_context_id().unwrap_or(0),
-      );
-      let _ = runtime.dispatch(
-        "sockets",
-        "setup_all",
-        Default::default(),
-        boot.primary_context_id().unwrap_or(0),
-      );
-      let _ = runtime.dispatch(
-        "services",
-        "evaluate_triggers",
-        Default::default(),
-        boot.primary_context_id().unwrap_or(0),
-      );
-      let _ = runtime.dispatch(
-        "sockets",
-        "evaluate_triggers",
-        Default::default(),
-        boot.primary_context_id().unwrap_or(0),
-      );
+      // let _ = runtime.dispatch(
+      //   "services",
+      //   "bootstrap",
+      //   Default::default(),
+      //   boot.primary_context_id().unwrap_or(0),
+      // );
+      // let _ = runtime.dispatch(
+      //   "sockets",
+      //   "bootstrap",
+      //   Default::default(),
+      //   boot.primary_context_id().unwrap_or(0),
+      // );
+      // let _ = runtime.dispatch(
+      //   "services",
+      //   "start_all",
+      //   Default::default(),
+      //   boot.primary_context_id().unwrap_or(0),
+      // );
+      // let _ = runtime.dispatch(
+      //   "sockets",
+      //   "setup_all",
+      //   Default::default(),
+      //   boot.primary_context_id().unwrap_or(0),
+      // );
+      // let _ = runtime.dispatch(
+      //   "events",
+      //   "evaluate_triggers",
+      //   Default::default(),
+      //   boot.primary_context_id().unwrap_or(0),
+      // );
       let _ = runtime.flush_context(boot.primary_context_id().unwrap_or(0), metadata, resources);
       true
     }
     LifecycleAction::SoftReboot => {
       try_stop_services(boot, metadata, runtime, resources, false);
       terminate_all_processes();
-      metadata.remove_metadata("units");
+      metadata.remove_metadata("static");
       let _ = boot.run(metadata, instances, runtime, resources);
       true
     }

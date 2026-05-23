@@ -234,6 +234,15 @@ pub fn start_stdout_listener(
             }
           }
           Err(e) => {
+            if matches!(
+              e.kind(),
+              std::io::ErrorKind::UnexpectedEof
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::ConnectionReset
+            ) {
+              // println!("broken pipe");
+              break;
+            }
             let _ = tx.send((
               service_name.clone(),
               TransportMessage::log(format!("failed to recieve message: {e}")),

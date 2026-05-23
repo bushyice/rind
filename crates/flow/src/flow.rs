@@ -1420,3 +1420,13 @@ impl<'a> Into<RuntimePayload> for FlowRuntimePayload<'a> {
     p
   }
 }
+
+#[derive(Default, Serialize, Deserialize, Clone)]
+pub struct EmitTrigger {
+  pub service: Option<Ustr>,
+  pub name: Option<Ustr>,
+  pub flow_type: Option<FlowType>,
+  pub payload: Option<FlowPayload>,
+  pub action: FlowAction,
+  pub scope: Option<Ustr>,
+}

@@ -150,8 +150,11 @@ impl BootEngine {
       .metadata_names()
       .filter(|name| name.as_str() != "static")
       .collect::<Vec<_>>();
-    for name in to_remove {
-      metadata.remove_metadata(name);
+    for _name in to_remove {
+      // TODO: instance tracking:
+      // - if an item in a metadata has an instance, request to uninstantiate
+      // - wait for uninstantiation, then remove metadata and rebuild index
+      // metadata.remove_metadata(name);
     }
 
     for phase in [BootPhase::Start, BootPhase::End] {

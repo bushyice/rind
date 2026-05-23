@@ -349,6 +349,7 @@ impl Runtime for UserRuntime {
 
         if !pam.has_active_session(username.as_str()) {
           let scope_name = self.user_scope_name(username.as_str());
+          println!("scope: {scope_name}");
           ScopeStore::desired_scope_remove(scope_name.as_str());
           let _ = ScopeStore::remove_scope_global(scope_name.as_str());
           if let Some(store) = ctx.registry.singleton_mut::<ScopeStore>(ScopeStore::KEY) {

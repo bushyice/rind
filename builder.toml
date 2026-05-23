@@ -3,10 +3,10 @@
 [profile.main]
 # Build command
 # example: build_command = "cargo metadata --no-deps --format-version=1 | jq -r '.packages[] | .name as $p | .targets[] | select(.kind[] | index(\"bin\")) | .name as $b | \"\\($p) \\($b)\"' | while read -r p b; do cargo sonic --target-cpus=raptorlake build -p \"$p\" --release --target x86_64-unknown-linux-gnu --bin \"$b\"; done"
-build_command = "cargo build --release --target x86_64-unknown-linux-gnu -j 8"
+build_command = "cargo build --target x86_64-unknown-linux-gnu -j 8"
 
 # Which path the binaries are copied from
-binary_target = "target/x86_64-unknown-linux-gnu/release"
+binary_target = "target/x86_64-unknown-linux-gnu/debug"
 
 # Default destination for binaries copied from `binaries` and busybox applets.
 # Can be "/bin" or "/usr/bin".

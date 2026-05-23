@@ -83,7 +83,9 @@ impl Orchestrator for UnitsOrchestrator {
         .clone()
     })?;
 
-    if ctx.metadata.metadata("static").is_none() {
+    let is_first = ctx.metadata.metadata("static").is_none();
+
+    if is_first {
       self.load_all_units(ctx, &permissions)?;
       self.load_permissions(&permissions)?;
     }
@@ -126,10 +128,12 @@ impl Orchestrator for UnitsOrchestrator {
           let _ = state.save_all_scopes();
           state
         });
-        let scopes = registry
-          .singleton_or_insert_with::<ScopeStore>(ScopeStore::KEY, || ScopeStore::default());
-        scopes.upsert("static", Default::default(), None);
-        ScopeStore::upsert_global("static", Default::default(), None);
+        let _ = registry.singleton_or_insert_with::<ScopeStore>(ScopeStore::KEY, || {
+          let mut ss = ScopeStore::default();
+          ss.upsert("static", Default::default(), None);
+          ScopeStore::upsert_global("static", Default::default(), None);
+          ss
+        });
 
         let _ = registry.singleton_or_insert_with::<Arc<PamHandle>>(PamHandle::KEY, || {
           Arc::new(PamHandle::new(users.clone()))

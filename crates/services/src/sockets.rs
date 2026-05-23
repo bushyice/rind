@@ -14,9 +14,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::services::SocketActivation;
 use rind_flow::{
-  FacetGraph, FlowInstance, FlowItem, FlowRuntimePayload, FlowType, Trigger, condition_matches,
+  EmitTrigger, FacetGraph, FlowInstance, FlowItem, FlowRuntimePayload, Trigger, condition_matches,
 };
-use rind_ipc::{FlowPayload, Message};
+use rind_ipc::Message;
 use rind_primitives::permissions::PERM_SYSTEM_SERVICES;
 use rind_primitives::variables::VariableHeap;
 
@@ -68,7 +68,6 @@ pub struct SocketRuntime {
   owner: HashMap<RawFd, Ustr>,
   paused: HashMap<Ustr, Vec<RawFd>>,
   trigger_index: HashMap<Ustr, std::collections::HashSet<Ustr>>,
-  event_rx: Option<rind_core::events::Subscription<rind_core::prelude::FlowEvent>>,
 }
 
 impl Default for SocketRuntime {
@@ -78,7 +77,6 @@ impl Default for SocketRuntime {
       owner: HashMap::new(),
       paused: HashMap::new(),
       trigger_index: HashMap::new(),
-      event_rx: None,
     }
   }
 }
@@ -331,32 +329,8 @@ impl Runtime for SocketRuntime {
           .singleton_or_insert_with(SocketRegistry::KEY, || SocketRegistry::default());
         self.rebuild_trigger_index(ctx.registry.metadata);
       }
-      "watch_events" => {
-        self.event_rx = Some(ctx.event_bus.subscribe::<rind_core::prelude::FlowEvent>());
-      }
-      "drain_events" => {
-        if let Some(rx) = &self.event_rx {
-          while let Some(w) = rx.try_recv() {
-            let mut trig = crate::services::EmitTrigger::default();
-            trig.state = Some(w.name);
-            trig.payload = Some(FlowPayload::from_json(Some(w.payload)));
-            trig.flow_type = Some(match w.flow_type {
-              rind_core::prelude::FlowEventType::Facet => FlowType::Facet,
-              rind_core::prelude::FlowEventType::Impulse => FlowType::Impulse,
-            });
-            trig.action = w.action;
-            let _ = dispatch.dispatch(
-              "sockets",
-              "evaluate_triggers",
-              RuntimePayload::default().insert("trigger", trig),
-            );
-          }
-        }
-      }
       "evaluate_triggers" => {
-        let emit_trig = payload
-          .get::<crate::services::EmitTrigger>("trigger")
-          .unwrap_or_default();
+        let emit_trig = payload.get::<EmitTrigger>("trigger").unwrap_or_default();
 
         if self.trigger_index.is_empty() {
           self.rebuild_trigger_index(ctx.registry.metadata);
@@ -367,7 +341,7 @@ impl Runtime for SocketRuntime {
           .singleton_handle::<(&mut FacetGraph, &mut SocketRegistry), _>(
             (FacetGraph::KEY.into(), SocketRegistry::KEY.into()),
             |registry, (sm, sr)| {
-              let target_keys = if let Some(event_name) = emit_trig.state.as_ref() {
+              let target_keys = if let Some(event_name) = emit_trig.name.as_ref() {
                 let mut out = HashSet::new();
                 let direct = event_name.clone();
                 let static_alias = if event_name.as_str().ends_with("@static") {
@@ -396,7 +370,7 @@ impl Runtime for SocketRuntime {
               };
 
               let emit_event = match (
-                emit_trig.state.as_ref(),
+                emit_trig.name.as_ref(),
                 emit_trig.flow_type,
                 emit_trig.payload.as_ref(),
               ) {

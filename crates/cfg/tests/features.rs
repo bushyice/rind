@@ -29,6 +29,7 @@ fn setup_runtime_with_metadata() -> (RuntimeHandle, MetadataRegistry, Resources,
       Box::new(TimerRuntime),
       Box::new(SocketRuntime::default()),
       Box::new(ServiceRuntime::default()),
+      Box::new(EventsRuntime::default()),
     ],
     None,
   );
@@ -380,7 +381,7 @@ fn signal_transcendence_chain_starts_dependent_service() {
     .dispatch("services", "bootstrap", Default::default(), context_id)
     .expect("services bootstrap should queue");
   runtime
-    .dispatch("services", "watch_events", Default::default(), context_id)
+    .dispatch("events", "watch_events", Default::default(), context_id)
     .expect("watch events should queue");
   flush(&runtime, context_id, &metadata, &mut resources);
 
@@ -397,8 +398,10 @@ fn signal_transcendence_chain_starts_dependent_service() {
   flush(&runtime, context_id, &metadata, &mut resources);
 
   runtime
-    .dispatch("services", "drain_events", Default::default(), context_id)
+    .dispatch("events", "drain_events", Default::default(), context_id)
     .expect("drain events should queue");
+  flush(&runtime, context_id, &metadata, &mut resources);
+  flush(&runtime, context_id, &metadata, &mut resources);
   flush(&runtime, context_id, &metadata, &mut resources);
 
   runtime
@@ -425,7 +428,7 @@ fn socket_trigger_emits_signal_that_starts_service() {
     .dispatch("services", "bootstrap", Default::default(), context_id)
     .expect("services bootstrap should queue");
   runtime
-    .dispatch("services", "watch_events", Default::default(), context_id)
+    .dispatch("events", "watch_events", Default::default(), context_id)
     .expect("services watch should queue");
   runtime
     .dispatch(
@@ -464,8 +467,10 @@ fn socket_trigger_emits_signal_that_starts_service() {
   flush(&runtime, context_id, &metadata, &mut resources);
 
   runtime
-    .dispatch("services", "drain_events", Default::default(), context_id)
+    .dispatch("events", "drain_events", Default::default(), context_id)
     .expect("services drain should queue");
+  flush(&runtime, context_id, &metadata, &mut resources);
+  flush(&runtime, context_id, &metadata, &mut resources);
   flush(&runtime, context_id, &metadata, &mut resources);
 
   runtime
