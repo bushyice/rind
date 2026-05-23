@@ -2045,6 +2045,7 @@ impl Runtime for ServiceRuntime {
       }
       "evaluate_triggers" => {
         let emit_trig = payload.get::<EmitTrigger>("trigger").unwrap_or_default();
+        let scope = payload.get::<Ustr>("scope").unwrap_or("static".to_ustr());
 
         if self.trigger_index.is_empty() {
           self.rebuild_trigger_index(ctx.registry.metadata);
@@ -2072,14 +2073,10 @@ impl Runtime for ServiceRuntime {
               } else {
                 registry
                   .metadata
-                  .all_items::<Service>()
+                  .items::<Service>(scope.clone())
+                  .unwrap_or_default()
                   .into_iter()
-                  .flat_map(|(scope, services)| {
-                    services
-                      .iter()
-                      .map(|(group, meta)| Ustr::from(format!("{}:{}@{}", group, meta.name, scope)))
-                      .collect::<HashSet<Ustr>>()
-                  })
+                  .map(|(group, meta)| Ustr::from(format!("{}:{}@{}", group, meta.name, scope)))
                   .collect::<HashSet<Ustr>>()
               };
 
@@ -2818,6 +2815,39 @@ impl Runtime for ServiceRuntime {
               )?;
           }
         }
+      }
+      "stop_for_scope" => {
+        let scope = payload.get::<String>("scope")?.to_ustr();
+        let notifier = ctx.notifier.clone();
+
+        ctx
+          .registry
+          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+            (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
+            |registry, (sm, _vh)| {
+              for (group, svc) in registry
+                .metadata
+                .items::<Service>(scope.clone())
+                .unwrap_or_default()
+              {
+                let full_name = rslvns!(u group, svc.name);
+                self.stop_service(
+                  registry.as_one_mut::<Service>(scope.clone(), full_name.clone())?,
+                  StopMode::ForceKill,
+                  log,
+                  dispatch,
+                  Some(sm),
+                  None,
+                  None,
+                  None,
+                  Some(&full_name),
+                  notifier.clone(),
+                  ctx.resources,
+                );
+              }
+              Ok(())
+            },
+          )?;
       }
       "child_exited" => {
         let pid = payload.get::<i32>("pid")? as u32;

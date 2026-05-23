@@ -331,6 +331,7 @@ impl Runtime for SocketRuntime {
       }
       "evaluate_triggers" => {
         let emit_trig = payload.get::<EmitTrigger>("trigger").unwrap_or_default();
+        let scope = payload.get::<Ustr>("scope").unwrap_or("static".to_ustr());
 
         if self.trigger_index.is_empty() {
           self.rebuild_trigger_index(ctx.registry.metadata);
@@ -358,14 +359,10 @@ impl Runtime for SocketRuntime {
               } else {
                 registry
                   .metadata
-                  .all_items::<Socket>()
+                  .items::<Socket>(scope.clone())
+                  .unwrap_or_default()
                   .into_iter()
-                  .flat_map(|(scope, services)| {
-                    services
-                      .iter()
-                      .map(|(group, meta)| Ustr::from(format!("{}:{}@{}", group, meta.name, scope)))
-                      .collect::<HashSet<Ustr>>()
-                  })
+                  .map(|(group, meta)| Ustr::from(format!("{}:{}@{}", group, meta.name, scope)))
                   .collect::<HashSet<Ustr>>()
               };
 
@@ -467,6 +464,26 @@ impl Runtime for SocketRuntime {
         return Ok(Some(rpayload!({
           "fds": fds
         })));
+      }
+      "stop_for_scope" => {
+        let scope = payload.get::<String>("scope")?.to_ustr();
+
+        ctx
+          .registry
+          .singleton_handle::<(&mut SocketRegistry, &mut VariableHeap), _>(
+            (SocketRegistry::KEY.into(), VariableHeap::KEY.into()),
+            |registry, (sr, _vh)| {
+              for (group, soc) in registry
+                .metadata
+                .items::<Socket>(scope.clone())
+                .unwrap_or_default()
+              {
+                let full_name = rslvns!(u group, soc.name);
+                self.stop_socket(full_name, ctx.resources, registry, sr)?;
+              }
+              Ok(())
+            },
+          )?;
       }
       "stop" => {
         let name = payload.get::<Ustr>("name")?;
