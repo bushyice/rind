@@ -1,6 +1,7 @@
 use rind_core::prelude::*;
 use rind_flow::{EmitTrigger, FlowType};
 use rind_ipc::FlowPayload;
+use rind_primitives::scopes::ScopeStore;
 
 #[derive(Default)]
 pub struct EventsRuntime {
@@ -19,6 +20,27 @@ impl Runtime for EventsRuntime {
     match action {
       "watch_events" => {
         self.event_rx = Some(ctx.event_bus.subscribe::<rind_core::prelude::FlowEvent>());
+      }
+      "reload_scopes" => {
+        let ss = ctx
+          .registry
+          .singleton_mut::<ScopeStore>(ScopeStore::KEY)
+          .ok_or_else(|| CoreError::InvalidState("scope store not found".into()))?;
+
+        if !ss.pending_scopes.is_empty() {
+          let _ = dispatch.dispatch("services", "bootstrap", Default::default());
+          let _ = dispatch.dispatch("sockets", "bootstrap", Default::default());
+          let _ = dispatch.dispatch("services", "start_all", Default::default());
+          let _ = dispatch.dispatch("sockets", "setup_all", Default::default());
+
+          for scope in ss.pending_scopes.drain() {
+            let _ = dispatch.dispatch(
+              "events",
+              "evaluate_triggers",
+              RuntimePayload::default().insert("scope", scope),
+            );
+          }
+        }
       }
       "evaluate_triggers" => {
         let emit_trig = payload.get::<EmitTrigger>("trigger").unwrap_or_default();
