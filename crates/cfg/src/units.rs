@@ -1,7 +1,8 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::dunits::create_units_metadata;
+use crate::dunits::{build_indexes, create_units_metadata};
 use crate::loader::RegisterLoader;
 use crate::user::Run0QueueState;
 use rind_core::prelude::*;
@@ -88,7 +89,13 @@ impl Orchestrator for UnitsOrchestrator {
     if is_first {
       self.load_all_units(ctx, &permissions)?;
       self.load_permissions(&permissions)?;
+    } else {
+      for scope in metadata.metadata_names().collect::<Vec<_>>() {
+        build_indexes(ctx, scope.as_str())?;
+      }
     }
+
+    let mut pending_scopes = HashSet::new();
 
     for spec in ScopeStore::desired_scopes() {
       if spec.name.as_str() == "static" {
@@ -112,6 +119,7 @@ impl Orchestrator for UnitsOrchestrator {
         spec.attributes.clone(),
         spec.lifetime_state.clone(),
       );
+      pending_scopes.insert(spec.name);
     }
 
     let metadata = &*ctx.metadata;
@@ -128,12 +136,14 @@ impl Orchestrator for UnitsOrchestrator {
           let _ = state.save_all_scopes();
           state
         });
-        let _ = registry.singleton_or_insert_with::<ScopeStore>(ScopeStore::KEY, || {
+        let scopes = registry.singleton_or_insert_with::<ScopeStore>(ScopeStore::KEY, || {
           let mut ss = ScopeStore::default();
           ss.upsert("static", Default::default(), None);
           ScopeStore::upsert_global("static", Default::default(), None);
           ss
         });
+
+        scopes.pending_scopes.extend(pending_scopes);
 
         let _ = registry.singleton_or_insert_with::<Arc<PamHandle>>(PamHandle::KEY, || {
           Arc::new(PamHandle::new(users.clone()))

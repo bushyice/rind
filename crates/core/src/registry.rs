@@ -18,6 +18,7 @@ use crate::types::Ustr;
 pub struct MetadataRegistry {
   metadata: HashMap<Ustr, Arc<Metadata>>,
   pub indexes: HashMap<TypeId, HashMap<Ustr, usize>>,
+  pub stoppers: HashMap<TypeId, (&'static str, &'static str)>,
 }
 
 impl MetadataRegistry {
@@ -263,6 +264,10 @@ impl MetadataRegistry {
       self.indexes.clear();
     }
     removed
+  }
+
+  pub fn stopper<T: Model + 'static>(&mut self, runtime: &'static str, action: &'static str) {
+    self.stoppers.insert(TypeId::of::<T>(), (runtime, action));
   }
 }
 

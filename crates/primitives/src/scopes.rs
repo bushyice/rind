@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use rind_core::types::Ustr;
@@ -22,6 +22,7 @@ impl ScopeInfo {
 pub struct ScopeStore {
   scopes: HashMap<Ustr, ScopeInfo>,
   state_to_scope: HashMap<Ustr, Ustr>,
+  pub pending_scopes: HashSet<Ustr>,
 }
 
 pub static GLOBAL_SCOPE_STORE: LazyLock<Mutex<ScopeStore>> =

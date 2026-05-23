@@ -132,6 +132,12 @@ pub fn create_units_metadata<P: AsRef<Path>>(
   })?;
 
   ctx.metadata.insert_metadata(metadata);
+  build_indexes(ctx, scope)?;
+
+  Ok(())
+}
+
+pub fn build_indexes(ctx: &mut OrchestratorContext<'_>, scope: &str) -> CoreResult<()> {
   ctx.metadata.ensure_index_for_type::<Service>(scope)?;
   ctx.metadata.ensure_index_for_type::<Mount>(scope)?;
   ctx.metadata.ensure_index_for_type::<Socket>(scope)?;

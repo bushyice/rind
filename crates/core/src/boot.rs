@@ -5,7 +5,7 @@ use crate::notifier::Notifier;
 use crate::orchestrator::{BootCycle, BootPhase, OrchestratorContext, OrchestratorStore};
 use crate::prelude::Resources;
 use crate::registry::{InstanceMap, MetadataRegistry};
-use crate::runtime::{RuntimeHandle, start_runtime};
+use crate::runtime::{RuntimeHandle, RuntimePayload, start_runtime};
 
 pub struct BootEngine {
   pub orchestrators: OrchestratorStore,
@@ -150,11 +150,20 @@ impl BootEngine {
       .metadata_names()
       .filter(|name| name.as_str() != "static")
       .collect::<Vec<_>>();
-    for _name in to_remove {
-      // TODO: instance tracking:
-      // - if an item in a metadata has an instance, request to uninstantiate
-      // - wait for uninstantiation, then remove metadata and rebuild index
-      // metadata.remove_metadata(name);
+    let types = metadata.indexes.keys().cloned().collect::<Vec<_>>();
+    for name in to_remove {
+      let context_id = self.primary_context_id().unwrap_or(0);
+      for t in types.iter() {
+        if let Some((r, a)) = metadata.stoppers.get(t) {
+          let _ = runtime.dispatch(
+            r,
+            a,
+            RuntimePayload::default().insert("scope", name.clone()),
+            context_id,
+          );
+        }
+      }
+      metadata.remove_metadata(name);
     }
 
     for phase in [BootPhase::Start, BootPhase::End] {
@@ -512,7 +521,7 @@ mod tests {
     boot
       .reload_units_collection(&mut metadata, &mut instances, &runtime, &mut resources)
       .expect("reload units collect cycle should succeed");
-    // assert!(metadata.metadata("units").is_none());
+    assert!(metadata.metadata("units").is_none());
 
     let _ = runtime.send(RuntimeCommand::Stop);
   }
