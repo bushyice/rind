@@ -6,6 +6,7 @@ use crate::orchestrator::{BootCycle, BootPhase, OrchestratorContext, Orchestrato
 use crate::prelude::Resources;
 use crate::registry::{InstanceMap, MetadataRegistry};
 use crate::runtime::{RuntimeHandle, RuntimePayload, start_runtime};
+use crate::types::Void;
 
 pub struct BootEngine {
   pub orchestrators: OrchestratorStore,
@@ -44,7 +45,7 @@ impl BootEngine {
     instances: &mut InstanceMap,
     resources: &mut Resources,
     log: LogHandle,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     let runtime = RuntimeHandle::mock(log);
     for phase in [BootPhase::Start, BootPhase::End] {
       let mut ctx = OrchestratorContext {
@@ -60,7 +61,7 @@ impl BootEngine {
         .run_cycle_phase(BootCycle::PreBoot, phase, &mut ctx)?;
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   pub fn run(
@@ -69,7 +70,7 @@ impl BootEngine {
     instances: &mut InstanceMap,
     runtime: &RuntimeHandle,
     resources: &mut Resources,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     self.persistent_context_ids.clear();
 
     for cycle in [
@@ -104,7 +105,7 @@ impl BootEngine {
       }
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   pub fn pump_once(
@@ -113,7 +114,7 @@ impl BootEngine {
     instances: &mut InstanceMap,
     runtime: &RuntimeHandle,
     resources: &mut Resources,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     let context_ids = self.persistent_context_ids.clone();
     for context_id in context_ids {
       for phase in [BootPhase::Start, BootPhase::End] {
@@ -132,7 +133,7 @@ impl BootEngine {
       }
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   pub fn primary_context_id(&self) -> Option<usize> {
@@ -145,7 +146,7 @@ impl BootEngine {
     instances: &mut InstanceMap,
     runtime: &RuntimeHandle,
     resources: &mut Resources,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     let to_remove = metadata
       .metadata_names()
       .filter(|name| name.as_str() != "static")
@@ -190,7 +191,7 @@ impl BootEngine {
       runtime.flush_context(context_id, metadata, resources)?;
     }
 
-    Ok(())
+    Ok(Void)
   }
 }
 
@@ -207,6 +208,7 @@ mod tests {
   };
   use crate::registry::{InstanceMap, MetadataRegistry};
   use crate::runtime::{Runtime, RuntimeCommand, RuntimeDispatcher, RuntimePayload, start_runtime};
+  use crate::types::Void;
 
   use super::*;
 
@@ -242,14 +244,14 @@ mod tests {
       }
     }
 
-    fn build_scope(&mut self, builder: &mut ScopeBuilder) -> Result<(), CoreError> {
+    fn build_scope(&mut self, builder: &mut ScopeBuilder) -> Result<Void, CoreError> {
       let runtime_id = self.runtime_id.clone();
       let value = self.value.clone();
       builder.insert(runtime_id, || value);
-      Ok(())
+      Ok(Void)
     }
 
-    fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
+    fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
       ctx.dispatch(self.runtime_id.as_str(), "boot", Default::default())
     }
   }
@@ -365,12 +367,12 @@ mod tests {
       }
     }
 
-    fn build_scope(&mut self, builder: &mut ScopeBuilder) -> Result<(), CoreError> {
+    fn build_scope(&mut self, builder: &mut ScopeBuilder) -> Result<Void, CoreError> {
       builder.insert("pong", || 7u32);
-      Ok(())
+      Ok(Void)
     }
 
-    fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
+    fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
       ctx.dispatch("ping", "kick", Default::default())
     }
   }
@@ -484,7 +486,7 @@ mod tests {
         phase: BootPhase::Start,
       }
     }
-    fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
+    fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
       ctx.dispatch("resource", "register", Default::default())
     }
   }

@@ -45,11 +45,11 @@ impl Orchestrator for TTYOrchestrator {
     }
   }
 
-  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
+  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
     ctx.dispatch("ttys", "bootstrap", Default::default())?;
     ctx.dispatch("ttys", "watch_events", Default::default())?;
 
-    Ok(())
+    Ok(Void)
   }
 
   fn runtimes(&self) -> Vec<Box<dyn Runtime>> {
@@ -75,10 +75,10 @@ impl Orchestrator for TTYPumpOrchestrator {
     }
   }
 
-  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
+  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
     ctx.dispatch("ttys", "drain_events", Default::default())?;
 
-    Ok(())
+    Ok(Void)
   }
 }
 
@@ -100,7 +100,7 @@ impl Default for TTYRuntime {
 }
 
 impl TTYRuntime {
-  fn switch_tty(&self, n: u64) -> CoreResult<()> {
+  fn switch_tty(&self, n: u64) -> CoreResult<Void> {
     let file = OpenOptions::new()
       .read(true)
       .write(true)
@@ -121,7 +121,7 @@ impl TTYRuntime {
       }
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   fn has_login_required(&self, sm: &FacetGraph, tty: &str) -> bool {
@@ -140,7 +140,7 @@ impl TTYRuntime {
     dispatch: &RuntimeDispatcher,
     tty_name: &str,
     last: &str,
-  ) -> CoreResult<()> {
+  ) -> CoreResult<Void> {
     if tty_name != last && self.has_login_required(sm, &last) {
       dispatch.dispatch(
         "flow",
@@ -170,7 +170,7 @@ impl TTYRuntime {
       )?;
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   fn taken_state(
@@ -178,7 +178,7 @@ impl TTYRuntime {
     dispatch: &RuntimeDispatcher,
     tty_name: Ustr,
     take: bool,
-  ) -> CoreResult<()> {
+  ) -> CoreResult<Void> {
     dispatch.dispatch(
       "flow",
       if take { "set_facet" } else { "remove_facet" },

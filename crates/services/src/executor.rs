@@ -19,7 +19,7 @@ use std::thread;
 
 pub trait InstanceHandle: Send + Sync {
   fn pid(&self) -> Option<u32>;
-  fn kill(&mut self, signal: Signal) -> CoreResult<()>;
+  fn kill(&mut self, signal: Signal) -> CoreResult<Void>;
   fn take_stdout(&mut self) -> Option<Box<dyn std::io::Read + Send>>;
   fn take_stderr(&mut self) -> Option<Box<dyn std::io::Read + Send>>;
   fn take_stdin(&mut self) -> Option<Box<dyn std::io::Write + Send>>;
@@ -32,7 +32,7 @@ impl InstanceHandle for ProcessHandle {
     Some(self.0.id())
   }
 
-  fn kill(&mut self, signal: Signal) -> CoreResult<()> {
+  fn kill(&mut self, signal: Signal) -> CoreResult<Void> {
     let pid = Pid::from_raw(-(self.0.id() as i32));
     kill(pid, signal).map_err(|e| CoreError::System(e))
   }
@@ -156,7 +156,7 @@ impl Executor for NaturalExecutor {
             let _ = libc::fcntl(target_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC);
           }
         }
-        Ok(())
+        Ok(Void)
       });
     }
 
@@ -222,8 +222,8 @@ impl InstanceHandle for RemoteHandle {
     self.remote_pid
   }
 
-  fn kill(&mut self, _signal: Signal) -> CoreResult<()> {
-    Ok(())
+  fn kill(&mut self, _signal: Signal) -> CoreResult<Void> {
+    Ok(Void)
   }
 
   fn take_stdout(&mut self) -> Option<Box<dyn std::io::Read + Send>> {
@@ -256,7 +256,7 @@ impl Executor for RemoteExecutor {
 }
 
 pub struct ImaHandle {
-  pub join_handle: Option<thread::JoinHandle<CoreResult<()>>>,
+  pub join_handle: Option<thread::JoinHandle<CoreResult<Void>>>,
   pub stdout_rx: Arc<Mutex<Receiver<Vec<u8>>>>,
   pub stderr_rx: Arc<Mutex<Receiver<Vec<u8>>>>,
   pub stdin_tx: Sender<Vec<u8>>,
@@ -267,8 +267,8 @@ impl InstanceHandle for ImaHandle {
     None
   }
 
-  fn kill(&mut self, _signal: Signal) -> CoreResult<()> {
-    Ok(())
+  fn kill(&mut self, _signal: Signal) -> CoreResult<Void> {
+    Ok(Void)
   }
 
   fn take_stdout(&mut self) -> Option<Box<dyn std::io::Read + Send>> {

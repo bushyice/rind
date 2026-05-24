@@ -49,153 +49,131 @@ pub fn parse_duration(s: &str) -> Option<Duration> {
 #[derive(Default)]
 pub struct TimerRuntime;
 
-impl Runtime for TimerRuntime {
-  fn id(&self) -> &str {
-    "timer"
-  }
-
-  fn handle(
-    &mut self,
-    action: &str,
-    mut payload: RuntimePayload,
-    ctx: &mut RuntimeContext<'_>,
-    dispatch: &RuntimeDispatcher,
-    log: &LogHandle,
-  ) -> Result<Option<RuntimePayload>, CoreError> {
-    match action {
-      "start" => {
-        let name = payload.get::<Ustr>("name")?;
-        if ctx.registry.as_one::<Timer>("*", name.clone()).is_ok() {
-          return Ok(None);
-        }
-
-        let timer = ctx
-          .registry
-          .instantiate_one::<Timer>("*", name.clone(), |metadata| {
-            let duration_str = metadata.duration.as_str();
-            let duration = parse_duration(duration_str)
-              .ok_or_else(|| CoreError::Custom(format!("invalid duration: {}", duration_str)))?;
-
-            let tfd = TimerFd::new(
-              ClockId::CLOCK_MONOTONIC,
-              TimerFlags::TFD_NONBLOCK | TimerFlags::TFD_CLOEXEC,
-            )
-            .map_err(CoreError::custom)?;
-
-            tfd
-              .set(
-                Expiration::OneShot(TimeSpec::from(duration)),
-                TimerSetTimeFlags::empty(),
-              )
-              .map_err(CoreError::custom)?;
-
-            let fd = tfd.as_fd().as_raw_fd();
-            ctx.resources.own(fd, tfd);
-
-            Ok(Timer {
-              metadata,
-              deadline: Instant::now() + duration,
-              fd,
-            })
-          })?;
-
-        let res_action: ResourceAction = ("timer", "finish_timer").into();
-        ctx.resources.action(
-          timer.fd,
-          res_action.payload(move |p| p.insert("name", name.clone())),
-        );
-
-        log.log(
-          LogLevel::Info,
-          "timer",
-          "started timer",
-          [
-            ("timer".to_string(), timer.metadata.name.to_string()),
-            ("duration".to_string(), timer.metadata.duration.to_string()),
-          ]
-          .into(),
-        );
-      }
-      "stop" => {
-        let name = payload.get::<Ustr>("name")?;
-
-        let timer = ctx.registry.uninstantiate_one::<Timer>("*", name)?;
-        ctx.resources.terminate(timer.fd);
-        log.log(
-          LogLevel::Info,
-          "timer",
-          "stopped timer",
-          [
-            ("timer".to_string(), timer.metadata.name.to_string()),
-            ("duration".to_string(), timer.metadata.duration.to_string()),
-          ]
-          .into(),
-        );
-      }
-      "reconcile_timers" => {
-        let service_name = normalize_uaddr(payload.get::<Ustr>("service")?, "");
-        let service_name = Ustr::from(service_name.as_str().split('@').next().unwrap_or(""));
-        let event_action = payload.get::<ServiceEventKind>("action")?;
-
-        let mut dependents = Vec::new();
-        for meta_name in ctx.registry.metadata.metadata_names() {
-          let Some(meta) = ctx.registry.metadata.metadata(meta_name.clone()) else {
-            continue;
-          };
-          for group in meta.groups() {
-            if let Some(timers) = ctx
-              .registry
-              .metadata
-              .group_items::<Timer>(meta_name.clone(), group.clone())
-            {
-              for timer in timers {
-                if let Some(ref dependencies) = timer.after
-                  && dependencies.contains(&service_name)
-                {
-                  dependents.push(Ustr::from(format!("{}:{}", group, timer.name)));
-                }
-              }
-            }
-          }
-        }
-
-        match event_action {
-          ServiceEventKind::Started => {
-            for dependent in dependents {
-              let _ = dispatch.dispatch("timer", "start", rpayload!({ "name": dependent }));
-            }
-          }
-          ServiceEventKind::Stopped
-          | ServiceEventKind::Failed
-          | ServiceEventKind::Exited { .. } => {
-            for dependent in dependents {
-              let _ = dispatch.dispatch("timer", "stop", rpayload!({ "name": dependent }));
-            }
-          }
-        }
-      }
-      "finish_timer" => {
-        let name = payload.get::<Ustr>("name")?;
-
-        ctx
-          .registry
-          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
-            (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
-            |registry, (sm, _)| {
-              if let Ok(timer) = registry.uninstantiate_one::<Timer>("*", name) {
-                if let Some(triggers) = &timer.metadata.finish {
-                  trigger_events(triggers.clone(), Some(sm), dispatch);
-                }
-                ctx.resources.terminate(timer.fd);
-              }
-              Ok(())
-            },
-          )?;
-      }
-      _ => {}
+#[runtime("timer")]
+impl TimerRuntime {
+  fn start(name: Ustr) {
+    if ctx.registry.as_one::<Timer>("*", name.clone()).is_ok() {
+      return Ok(None);
     }
 
-    Ok(None)
+    let timer = ctx
+      .registry
+      .instantiate_one::<Timer>("*", name.clone(), |metadata| {
+        let duration_str = metadata.duration.as_str();
+        let duration = parse_duration(duration_str)
+          .ok_or_else(|| CoreError::Custom(format!("invalid duration: {}", duration_str)))?;
+
+        let tfd = TimerFd::new(
+          ClockId::CLOCK_MONOTONIC,
+          TimerFlags::TFD_NONBLOCK | TimerFlags::TFD_CLOEXEC,
+        )
+        .map_err(CoreError::custom)?;
+
+        tfd
+          .set(
+            Expiration::OneShot(TimeSpec::from(duration)),
+            TimerSetTimeFlags::empty(),
+          )
+          .map_err(CoreError::custom)?;
+
+        let fd = tfd.as_fd().as_raw_fd();
+        ctx.resources.own(fd, tfd);
+
+        Ok(Timer {
+          metadata,
+          deadline: Instant::now() + duration,
+          fd,
+        })
+      })?;
+
+    let res_action: ResourceAction = ("timer", "finish_timer").into();
+    ctx.resources.action(
+      timer.fd,
+      res_action.payload(move |p| p.insert("name", name.clone())),
+    );
+
+    log.log(
+      LogLevel::Info,
+      "timer",
+      "started timer",
+      [
+        ("timer".to_string(), timer.metadata.name.to_string()),
+        ("duration".to_string(), timer.metadata.duration.to_string()),
+      ]
+      .into(),
+    );
+  }
+
+  fn stop(name: Ustr) {
+    let timer = ctx.registry.uninstantiate_one::<Timer>("*", name)?;
+    ctx.resources.terminate(timer.fd);
+    log.log(
+      LogLevel::Info,
+      "timer",
+      "stopped timer",
+      [
+        ("timer".to_string(), timer.metadata.name.to_string()),
+        ("duration".to_string(), timer.metadata.duration.to_string()),
+      ]
+      .into(),
+    );
+  }
+
+  fn reconcile_timers(service: Ustr, action: ServiceEventKind) {
+    let service_name = normalize_uaddr(service, "");
+    let service_name = Ustr::from(service_name.as_str().split('@').next().unwrap_or(""));
+
+    let mut dependents = Vec::new();
+    for meta_name in ctx.registry.metadata.metadata_names() {
+      let Some(meta) = ctx.registry.metadata.metadata(meta_name.clone()) else {
+        continue;
+      };
+      for group in meta.groups() {
+        if let Some(timers) = ctx
+          .registry
+          .metadata
+          .group_items::<Timer>(meta_name.clone(), group.clone())
+        {
+          for timer in timers {
+            if let Some(ref dependencies) = timer.after
+              && dependencies.contains(&service_name)
+            {
+              dependents.push(Ustr::from(format!("{}:{}", group, timer.name)));
+            }
+          }
+        }
+      }
+    }
+
+    match action {
+      ServiceEventKind::Started => {
+        for dependent in dependents {
+          let _ = dispatch.dispatch("timer", "start", rpayload!({ "name": dependent }));
+        }
+      }
+      ServiceEventKind::Stopped | ServiceEventKind::Failed | ServiceEventKind::Exited { .. } => {
+        for dependent in dependents {
+          let _ = dispatch.dispatch("timer", "stop", rpayload!({ "name": dependent }));
+        }
+      }
+    }
+  }
+
+  fn finish_timer(name: Ustr) {
+    ctx
+      .registry
+      .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+        (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
+        |registry, (sm, _)| {
+          if let Ok(timer) = registry.uninstantiate_one::<Timer>("*", name) {
+            if let Some(triggers) = &timer.metadata.finish {
+              trigger_events(triggers.clone(), Some(sm), dispatch);
+            }
+            ctx.resources.terminate(timer.fd);
+          }
+          Ok(Void)
+        },
+      )?;
   }
 }
 

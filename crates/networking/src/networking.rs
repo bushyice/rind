@@ -65,7 +65,7 @@ impl SerializeSerialized for PortStateSerialized {
   }
 }
 
-fn inject_ipc_control(name: &str, ctx: &mut ExtensionExecutionCtx<SSPayload>) -> CoreResult<()> {
+fn inject_ipc_control(name: &str, ctx: &mut ExtensionExecutionCtx<SSPayload>) -> CoreResult<Void> {
   if name == "ipc:start:network" {
     handle_ipc_network_internal(NetworkPayload {
       iface: ctx.target.name.clone(),
@@ -82,7 +82,7 @@ fn inject_ipc_control(name: &str, ctx: &mut ExtensionExecutionCtx<SSPayload>) ->
     })?
   }
 
-  Ok(())
+  Ok(Void)
 }
 
 fn inject_ipc_list(
@@ -372,12 +372,12 @@ impl Orchestrator for NetworkingOrchestrator {
     }
   }
 
-  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
-    ctx.dispatch("networking", "bootstrap", Default::default())?;
-    ctx.dispatch("networking", "scan", Default::default())?;
-    ctx.dispatch("networking", "configure", Default::default())?;
+  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
+    NetworkingRuntime::actions.bootstrap().orchestrate(ctx)?;
+    NetworkingRuntime::actions.scan().orchestrate(ctx)?;
+    NetworkingRuntime::actions.configure().orchestrate(ctx)?;
 
-    Ok(())
+    Ok(Void)
   }
 
   fn runtimes(&self) -> Vec<Box<dyn Runtime>> {
@@ -403,11 +403,11 @@ impl Orchestrator for NetworkingPumpOrchestrator {
     }
   }
 
-  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
-    ctx.dispatch("networking", "scan", Default::default())?;
-    ctx.dispatch("networking", "reconcile", Default::default())?;
+  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
+    NetworkingRuntime::actions.scan().orchestrate(ctx)?;
+    NetworkingRuntime::actions.reconcile().orchestrate(ctx)?;
 
-    Ok(())
+    Ok(Void)
   }
 }
 
@@ -445,11 +445,11 @@ impl Default for NetworkingRuntime {
 }
 
 impl NetworkingRuntime {
-  fn scan_and_sync(&mut self, dispatch: &RuntimeDispatcher) -> Result<(), CoreError> {
+  fn scan_and_sync(&mut self, dispatch: &RuntimeDispatcher) -> Result<Void, CoreError> {
     if let Some(last_scan) = self.last_scan
       && last_scan.elapsed() < self.scan_interval
     {
-      return Ok(());
+      return Ok(Void);
     }
     self.last_scan = Some(Instant::now());
     let interfaces = collect_wired_interfaces(self.sys_class_net.as_path());
@@ -459,13 +459,10 @@ impl NetworkingRuntime {
         continue;
       }
 
-      dispatch.dispatch(
-        "flow",
-        "set_facet",
-        FlowRuntimePayload::new(NETWORKING_INTERFACE_STATE)
-          .payload(serde_json::to_value(interface).unwrap_or_default())
-          .into(),
-      )?;
+      FlowRuntime::actions
+        .set_facet(NETWORKING_INTERFACE_STATE.to_ustr())
+        .payload(serde_json::to_value(interface).unwrap_or_default())
+        .dispatch(dispatch)?;
     }
 
     for name in self.last_interfaces.keys() {
@@ -473,40 +470,37 @@ impl NetworkingRuntime {
         continue;
       }
 
-      dispatch.dispatch(
-        "flow",
-        "remove_facet",
-        FlowRuntimePayload::new(NETWORKING_INTERFACE_STATE)
-          .filter(serde_json::json!( { "as": { "name": name } }))
-          .into(),
-      )?;
+      FlowRuntime::actions
+        .remove_facet(NETWORKING_INTERFACE_STATE.to_ustr())
+        .filter(serde_json::json!( { "as": { "name": name } }))
+        .dispatch(dispatch)?;
     }
 
     let next_online = interfaces.values().any(WiredInterfaceState::is_online);
     if next_online != self.online {
       if next_online {
-        dispatch.dispatch(
-          "flow",
-          "set_facet",
-          FlowRuntimePayload::new(NETWORKING_ONLINE_STATE).into(),
-        )?;
+        FlowRuntime::actions
+          .set_facet(NETWORKING_ONLINE_STATE.to_ustr())
+          .dispatch(dispatch)?;
       } else {
-        dispatch.dispatch(
-          "flow",
-          "remove_facet",
-          FlowRuntimePayload::new(NETWORKING_ONLINE_STATE).into(),
-        )?;
+        FlowRuntime::actions
+          .remove_facet(NETWORKING_ONLINE_STATE.to_ustr())
+          .dispatch(dispatch)?;
       }
     }
 
     self.last_interfaces = interfaces;
     self.online = next_online;
-    Ok(())
+    Ok(Void)
   }
 
-  fn bootstrap(&mut self, ctx: &mut RuntimeContext<'_>, log: &LogHandle) -> Result<(), CoreError> {
+  fn bootstrap(
+    &mut self,
+    ctx: &mut RuntimeContext<'_>,
+    log: &LogHandle,
+  ) -> Result<Void, CoreError> {
     if self.bootstrapped {
-      return Ok(());
+      return Ok(Void);
     }
     self.bootstrapped = true;
 
@@ -539,7 +533,7 @@ impl NetworkingRuntime {
       }
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   fn configure(
@@ -547,7 +541,7 @@ impl NetworkingRuntime {
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     let configs = Self::load_network_configs(ctx);
 
     for (unit, cfg) in configs {
@@ -595,7 +589,7 @@ impl NetworkingRuntime {
       }
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   fn load_network_configs(
@@ -623,7 +617,7 @@ impl NetworkingRuntime {
     iface: &Ustr,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     let mac = self
       .last_interfaces
       .get(iface)
@@ -661,7 +655,7 @@ impl NetworkingRuntime {
         log.log(LogLevel::Error, "networking", "DHCP failed", fields);
       }
     }
-    Ok(())
+    Ok(Void)
   }
 
   fn configure_static(
@@ -670,7 +664,7 @@ impl NetworkingRuntime {
     cfg: &NetworkConfigMetadata,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     let Some(address) = &cfg.address else {
       log.log(
         LogLevel::Error,
@@ -682,7 +676,7 @@ impl NetworkingRuntime {
           f
         },
       );
-      return Ok(());
+      return Ok(Void);
     };
 
     let (ip, prefix) = parse_cidr(address)
@@ -729,24 +723,19 @@ impl NetworkingRuntime {
     if !dns_servers.is_empty() {
       write_resolv_conf(&dns_servers);
       self.dns_written = true;
-      dispatch.dispatch(
-        "flow",
-        "set_facet",
-        FlowRuntimePayload::new(NETWORKING_DNS_READY_STATE).into(),
-      )?;
+      FlowRuntime::actions
+        .set_facet(NETWORKING_DNS_READY_STATE.to_ustr())
+        .dispatch(dispatch)?;
     }
 
-    dispatch.dispatch(
-      "flow",
-      "set_facet",
-      FlowRuntimePayload::new(NETWORKING_CONFIGURED_STATE)
-        .payload(json!({
-          "name": iface,
-          "ip": format!("{}/{}", ip, prefix),
-          "gateway": gateway.map(|g| g.to_string()).unwrap_or_default(),
-        }))
-        .into(),
-    )?;
+    FlowRuntime::actions
+      .set_facet(NETWORKING_CONFIGURED_STATE.to_ustr())
+      .payload(json!({
+        "name": iface,
+        "ip": format!("{}/{}", ip, prefix),
+        "gateway": gateway.map(|g| g.to_string()).unwrap_or_default(),
+      }))
+      .dispatch(dispatch)?;
 
     let state = self.interface_states.entry(iface.clone()).or_default();
     state.ip = Some(ip);
@@ -767,7 +756,7 @@ impl NetworkingRuntime {
       fields,
     );
 
-    Ok(())
+    Ok(Void)
   }
 
   fn apply_lease(
@@ -776,7 +765,7 @@ impl NetworkingRuntime {
     lease: &DhcpLease,
     dispatch: &RuntimeDispatcher,
     _log: &LogHandle,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     bring_interface_up(iface);
     set_interface_addr(iface, lease.ip, lease.subnet_mask);
 
@@ -787,30 +776,25 @@ impl NetworkingRuntime {
     if !lease.dns_servers.is_empty() {
       write_resolv_conf(&lease.dns_servers);
       self.dns_written = true;
-      dispatch.dispatch(
-        "flow",
-        "set_facet",
-        FlowRuntimePayload::new(NETWORKING_DNS_READY_STATE).into(),
-      )?;
+      FlowRuntime::actions
+        .set_facet(NETWORKING_DNS_READY_STATE.to_ustr())
+        .dispatch(dispatch)?;
     }
 
-    dispatch.dispatch(
-      "flow",
-      "set_facet",
-      FlowRuntimePayload::new(NETWORKING_CONFIGURED_STATE)
-        .payload(json!({
-          "name": iface,
-          "ip": format!("{}/{}", lease.ip, lease.prefix_len()),
-          "gateway": lease.gateway.map(|g| g.to_string()).unwrap_or_default(),
-        }))
-        .into(),
-    )?;
+    FlowRuntime::actions
+      .set_facet(NETWORKING_CONFIGURED_STATE.to_ustr())
+      .payload(json!({
+        "name": iface,
+        "ip": format!("{}/{}", lease.ip, lease.prefix_len()),
+        "gateway": lease.gateway.map(|g| g.to_string()).unwrap_or_default(),
+      }))
+      .dispatch(dispatch)?;
 
     if !self.configured_interfaces.contains(iface) {
       self.configured_interfaces.push(iface.clone());
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   fn reconcile(
@@ -818,10 +802,10 @@ impl NetworkingRuntime {
     ctx: &mut RuntimeContext<'_>,
     dispatch: &RuntimeDispatcher,
     log: &LogHandle,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     if self.configured_interfaces.is_empty() && self.online {
       self.configure(ctx, dispatch, log)?;
-      return Ok(());
+      return Ok(Void);
     }
 
     let ifaces_needing_renewal: Vec<Ustr> = self
@@ -851,61 +835,50 @@ impl NetworkingRuntime {
         .unwrap_or(false);
 
       if !still_online {
-        dispatch.dispatch(
-          "flow",
-          "remove_facet",
-          FlowRuntimePayload::new(NETWORKING_CONFIGURED_STATE)
-            .filter(json!({ "as": { "name": iface } }))
-            .into(),
-        )?;
+        FlowRuntime::actions
+          .remove_facet(NETWORKING_CONFIGURED_STATE.to_ustr())
+          .filter(json!({ "as": { "name": iface } }))
+          .dispatch(dispatch)?;
         self.configured_interfaces.retain(|i| i != &iface);
         self.interface_states.remove(&iface);
       }
     }
 
-    Ok(())
+    Ok(Void)
   }
 }
 
-impl Runtime for NetworkingRuntime {
-  fn id(&self) -> &str {
-    "networking"
+#[runtime("networking")]
+impl NetworkingRuntime {
+  fn scan(&mut self) {
+    self.scan_and_sync(dispatch)?;
   }
 
-  fn handle(
-    &mut self,
-    action: &str,
-    _payload: RuntimePayload,
-    ctx: &mut RuntimeContext<'_>,
-    dispatch: &RuntimeDispatcher,
-    log: &LogHandle,
-  ) -> Result<Option<RuntimePayload>, CoreError> {
-    match action {
-      "scan" => self.scan_and_sync(dispatch)?,
-      "bootstrap" => {
-        let ipcsrc = ctx.scope.get::<IpcSourcemap>().cloned().unwrap_or_default();
-        ipcsrc.register("network", handle_ipc_network, PERM_NETWORK);
+  fn bootstrap(&mut self) {
+    let ipcsrc = ctx.scope.get::<IpcSourcemap>().cloned().unwrap_or_default();
+    ipcsrc.register("network", handle_ipc_network, PERM_NETWORK);
 
-        if let Some(pm) = ctx
-          .registry
-          .singleton::<PermissionStore>(PermissionStore::KEY)
-        {
-          pm.reg_perm(PERM_NETWORK, "Network")?
-            .or_group(PERM_NETWORK.0, "network".to_ustr());
-        }
-
-        self.bootstrap(ctx, log)?
-      }
-      "configure" => self.configure(ctx, dispatch, log)?,
-      "reconcile" => self.reconcile(ctx, dispatch, log)?,
-      _ => {}
+    if let Some(pm) = ctx
+      .registry
+      .singleton::<PermissionStore>(PermissionStore::KEY)
+    {
+      pm.reg_perm(PERM_NETWORK, "Network")?
+        .or_group(PERM_NETWORK.0, "network".to_ustr());
     }
 
-    Ok(None)
+    self.bootstrap(ctx, log)?;
+  }
+
+  fn configure(&mut self) {
+    self.configure(ctx, dispatch, log)?;
+  }
+
+  fn reconcile(&mut self) {
+    self.reconcile(ctx, dispatch, log)?;
   }
 }
 
-pub fn handle_ipc_network_internal(payload: NetworkPayload) -> CoreResult<()> {
+pub fn handle_ipc_network_internal(payload: NetworkPayload) -> CoreResult<Void> {
   if payload.method == "up" || payload.method == "down" {
     unsafe {
       let sock = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
@@ -935,7 +908,7 @@ pub fn handle_ipc_network_internal(payload: NetworkPayload) -> CoreResult<()> {
       }
     }
   }
-  Ok(())
+  Ok(Void)
 }
 
 pub fn handle_ipc_network(

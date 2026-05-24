@@ -1,9 +1,9 @@
 pub mod payloads;
-pub mod shm;
 #[cfg(feature = "server")]
 pub mod recv;
 pub mod send;
 pub mod ser;
+pub mod shm;
 
 use std::io::stdout;
 

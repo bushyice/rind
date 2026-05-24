@@ -30,9 +30,9 @@ impl VariableHeap {
     }
   }
 
-  pub fn load(&mut self) -> Result<(), CoreError> {
+  pub fn load(&mut self) -> Result<Void, CoreError> {
     if !self.path.exists() {
-      return Ok(());
+      return Ok(Void);
     }
 
     let content = fs::read_to_string(&self.path).map_err(|e| {
@@ -55,10 +55,10 @@ impl VariableHeap {
       }
     }
 
-    Ok(())
+    Ok(Void)
   }
 
-  pub fn save(&self) -> Result<(), CoreError> {
+  pub fn save(&self) -> Result<Void, CoreError> {
     if let Some(parent) = self.path.parent() {
       fs::create_dir_all(parent)
         .map_err(|e| CoreError::PersistenceError(format!("failed to create variables dir: {e}")))?;
@@ -78,7 +78,7 @@ impl VariableHeap {
     fs::rename(&tmp, &self.path)
       .map_err(|e| CoreError::PersistenceError(format!("failed to rename variables: {e}")))?;
 
-    Ok(())
+    Ok(Void)
   }
 
   pub fn register(&mut self, id: impl Into<Ustr>, default: Option<toml::Value>, env: Option<Ustr>) {

@@ -178,17 +178,17 @@ pub fn trigger_events(
         }
         let _ = cmd.spawn();
       } else if let Some(state) = &resolved_trigger.facet {
-        let mut p = rpayload!({ "name": state.clone() });
+        let mut act = crate::FlowRuntime::actions.set_facet(state.clone());
         if let Some(payload) = &resolved_trigger.payload {
-          p = p.insert("payload", payload.clone());
+          act = act.payload(payload.clone());
         }
-        let _ = dispatch.dispatch("flow", "set_facet", p);
+        let _ = act.dispatch(dispatch);
       } else if let Some(signal) = &resolved_trigger.impulse {
-        let mut p = rpayload!({ "name": signal.clone() });
+        let mut act = crate::FlowRuntime::actions.impulse(signal.clone());
         if let Some(payload) = &resolved_trigger.payload {
-          p = p.insert("payload", payload.clone());
+          act = act.payload(payload.clone());
         }
-        let _ = dispatch.dispatch("flow", "impulse", p);
+        let _ = act.dispatch(dispatch);
       } else if let Some(service) = &resolved_trigger.service {
         let _ = dispatch.dispatch(
           "services",

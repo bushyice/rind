@@ -11,7 +11,10 @@ use std::{
 
 use clap::{Parser, ValueEnum};
 use owo_colors::OwoColorize;
-use rind_core::logging::{LogEntry, LogLevel};
+use rind_core::{
+  logging::{LogEntry, LogLevel},
+  types::Void,
+};
 use rind_ipc::{
   Message, MessageType,
   payloads::{
@@ -325,11 +328,11 @@ impl OutputSink {
     Ok(Self::Pager { child, stdin })
   }
 
-  fn line(&mut self, line: &str) -> Result<(), String> {
+  fn line(&mut self, line: &str) -> Result<Void, String> {
     match self {
       Self::Stdout => {
         println!("{line}");
-        Ok(())
+        Ok(Void)
       }
       Self::Pager { stdin, .. } => {
         writeln!(stdin, "{line}").map_err(|err| format!("failed to write to less: {err}"))
@@ -337,9 +340,9 @@ impl OutputSink {
     }
   }
 
-  fn finish(mut self) -> Result<(), String> {
+  fn finish(mut self) -> Result<Void, String> {
     match &mut self {
-      Self::Stdout => Ok(()),
+      Self::Stdout => Ok(Void),
       Self::Pager { child, .. } => {
         let _ = child.stdin.take();
         child
@@ -975,7 +978,7 @@ fn tail_logs(
   poll_ms: u64,
   limit: usize,
   sink: &mut OutputSink,
-) -> Result<(), String> {
+) -> Result<Void, String> {
   eprintln!(
     "{} tailing logs from {} (ctrl+c to stop)",
     "Info".on_cyan().black(),
@@ -1140,7 +1143,7 @@ fn level_rank(level: LogLevel) -> u8 {
   }
 }
 
-fn write_log_entry(sink: &mut OutputSink, entry: &LogEntry) -> Result<(), String> {
+fn write_log_entry(sink: &mut OutputSink, entry: &LogEntry) -> Result<Void, String> {
   let level = match entry.level {
     LogLevel::Trace => "TRACE".dimmed().to_string(),
     LogLevel::Debug => "DEBUG".bright_blue().to_string(),
@@ -1178,7 +1181,7 @@ fn write_log_entry(sink: &mut OutputSink, entry: &LogEntry) -> Result<(), String
     ))?;
   }
 
-  Ok(())
+  Ok(Void)
 }
 
 fn format_timestamp(timestamp: u64) -> String {

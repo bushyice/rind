@@ -85,3 +85,8 @@ fn de_name<'de, D: Deserializer<'de>>(deserializer: D) -> Result<UniqueString, D
   let s: String = Deserialize::deserialize(deserializer)?;
   Ok(UniqueString::try_from(s).unwrap())
 }
+
+#[allow(non_camel_case_types)]
+pub type Void = ();
+#[allow(non_upper_case_globals)]
+pub const Void: Void = ();

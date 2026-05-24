@@ -8,7 +8,7 @@ use crate::{
   error::{CoreError, CoreResult},
   metadata::{Metadata, Model, NamedItem},
   rslvns,
-  types::ToUstr,
+  types::{ToUstr, Void},
   utils::parse_scoped_name,
 };
 
@@ -63,10 +63,10 @@ impl MetadataRegistry {
     metadata: &mut Metadata,
     group: impl Into<Ustr>,
     source: &str,
-  ) -> CoreResult<()> {
+  ) -> CoreResult<Void> {
     metadata.from_toml(source, group)?;
     self.indexes.clear();
-    Ok(())
+    Ok(Void)
   }
 
   pub fn group_items<T: Model + 'static>(
@@ -163,22 +163,19 @@ impl MetadataRegistry {
     Some(m.groups().collect())
   }
 
-  pub fn ensure_index_for_type<T>(&mut self, metadata: impl Into<Ustr>) -> CoreResult<()>
+  pub fn ensure_index_for_type<T>(&mut self, metadata: impl Into<Ustr>) -> CoreResult<Void>
   where
     T: Model + 'static,
   {
     let metadata = metadata.into();
     let type_id = TypeId::of::<T>();
-    if self.indexes.contains_key(&type_id) {
-      return Ok(());
-    }
 
     let m = self
       .metadata
       .get_mut(&metadata)
       .ok_or(CoreError::MetadataNotFound(metadata.to_string()))?;
 
-    let mut map = HashMap::new();
+    let map = self.indexes.entry(type_id).or_default();
     for group in m.groups() {
       if let Some(items) = m.get_in_group::<T>(group.clone()) {
         for (idx, item) in items.iter().enumerate() {
@@ -187,9 +184,7 @@ impl MetadataRegistry {
       }
     }
 
-    self.indexes.insert(type_id, map);
-
-    Ok(())
+    Ok(Void)
   }
 
   pub fn find<T>(&self, metadata: impl Into<Ustr>, full_name: impl Into<Ustr>) -> Option<Arc<T::M>>

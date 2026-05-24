@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
   error::{CoreError, CoreResult},
-  types::{ToUstr, Ustr},
+  types::{ToUstr, Ustr, Void},
   user::UserStoreShared,
 };
 
@@ -297,7 +297,7 @@ impl PermissionStore {
       .insert(perm.0);
   }
 
-  pub fn write_perms_with_overlay(&self, perms_path: &Path) -> Result<(), CoreError> {
+  pub fn write_perms_with_overlay(&self, perms_path: &Path) -> Result<Void, CoreError> {
     let inner = self.inner.read().expect("permission store lock");
 
     self.users.write_perms_with_overlay(

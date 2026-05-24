@@ -160,7 +160,7 @@ impl ShmTransport {
         ];
         let cmsg = [ControlMessage::ScmRights(&fds)];
         let iov = [std::io::IoSlice::new(&[0u8])];
-        match sendmsg::<()>(stream.as_raw_fd(), &iov, &cmsg, MsgFlags::empty(), None) {
+        match sendmsg::<Void>(stream.as_raw_fd(), &iov, &cmsg, MsgFlags::empty(), None) {
           Err(e) => eprint!("[shm] failed to send msg: {e}"),
           _ => {}
         }

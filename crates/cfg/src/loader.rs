@@ -7,10 +7,10 @@ use std::{
 use rind_core::{
   error::{CoreError, CoreResult},
   prelude::{Metadata, OrchestratorContext},
-  types::{ToUstr, Ustr},
+  types::{ToUstr, Ustr, Void},
 };
 
-pub type Loader = dyn Fn(&mut Metadata, &str, Ustr, &Path, &mut OrchestratorContext) -> CoreResult<()>
+pub type Loader = dyn Fn(&mut Metadata, &str, Ustr, &Path, &mut OrchestratorContext) -> CoreResult<Void>
   + Send
   + Sync;
 
@@ -27,18 +27,18 @@ fn toml_loader(
   group: Ustr,
   _path: &Path,
   _ctx: &mut OrchestratorContext<'_>,
-) -> CoreResult<()> {
+) -> CoreResult<Void> {
   metadata.from_toml(&content, group)?;
 
-  Ok(())
+  Ok(Void)
 }
 
 fn load_in_dir(
   ctx: &mut OrchestratorContext<'_>,
   units_dir: &Path,
   metadata: &mut Metadata,
-  trigger: &Option<impl Fn(&str, &Ustr, &mut Metadata) -> CoreResult<()>>,
-) -> CoreResult<()> {
+  trigger: &Option<impl Fn(&str, &Ustr, &mut Metadata) -> CoreResult<Void>>,
+) -> CoreResult<Void> {
   let dir = std::fs::read_dir(&units_dir).map_err(|e| {
     CoreError::Custom(format!(
       "failed to read units dir {}: {e}",
@@ -84,17 +84,17 @@ fn load_in_dir(
     }
   }
 
-  Ok(())
+  Ok(Void)
 }
 
 pub fn load_units_from(
   ctx: &mut OrchestratorContext<'_>,
   metadata: &mut Metadata,
   units_dir: &Path,
-  trigger: Option<impl Fn(&str, &Ustr, &mut Metadata) -> CoreResult<()>>,
-) -> CoreResult<()> {
+  trigger: Option<impl Fn(&str, &Ustr, &mut Metadata) -> CoreResult<Void>>,
+) -> CoreResult<Void> {
   load_in_dir(ctx, units_dir, metadata, &trigger)?;
-  Ok(())
+  Ok(Void)
 }
 
 pub fn register_loader(r#type: impl Into<Ustr>, loader: Box<Loader>) {

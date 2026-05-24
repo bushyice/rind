@@ -220,7 +220,7 @@ impl UserRuntime {
     PathBuf::from(&user.home).join(".local/share/rind/units")
   }
 
-  fn create_runtime_dir(&self, user: &UserRecord) -> std::io::Result<()> {
+  fn create_runtime_dir(&self, user: &UserRecord) -> std::io::Result<Void> {
     let dir = runtime_dir(user.uid);
 
     if !dir.exists() {
@@ -230,10 +230,10 @@ impl UserRuntime {
       chown(&dir, Some(user.uid), Some(user.gid))?;
     }
 
-    Ok(())
+    Ok(Void)
   }
 
-  fn remove_runtime_dir(&self, user: &UserRecord, pam: &Arc<PamHandle>) -> std::io::Result<()> {
+  fn remove_runtime_dir(&self, user: &UserRecord, pam: &Arc<PamHandle>) -> std::io::Result<Void> {
     if !pam.has_active_session(&user.username) {
       let dir = runtime_dir(user.uid);
       if dir.exists() {
@@ -241,199 +241,187 @@ impl UserRuntime {
       }
     }
 
-    Ok(())
+    Ok(Void)
   }
 }
 
-impl Runtime for UserRuntime {
-  fn id(&self) -> &str {
-    "user"
-  }
-
-  fn handle(
-    &mut self,
-    action: &str,
-    mut payload: RuntimePayload,
-    ctx: &mut RuntimeContext<'_>,
-    dispatch: &RuntimeDispatcher,
-    _log: &LogHandle,
-  ) -> Result<Option<RuntimePayload>, CoreError> {
+#[runtime("user")]
+impl UserRuntime {
+  fn login(&mut self, session_id: u64, tty: Ustr, username: Ustr) {
     let pam = ctx
       .registry
       .singleton::<Arc<PamHandle>>(PamHandle::KEY)
       .cloned()
       .ok_or_else(|| CoreError::InvalidState("pam handle not found".into()))?;
 
-    match action {
-      "login" => {
-        let session_id = payload.get::<u64>("session_id")?;
-        let tty = payload.get::<Ustr>("tty")?;
-        let username = payload.get::<Ustr>("username")?;
-        let user = pam
-          .store
-          .lookup_by_name(&username)
-          .ok_or(PamError::UserNotFound)?;
+    let user = pam
+      .store
+      .lookup_by_name(&username)
+      .ok_or(PamError::UserNotFound)?;
 
-        let _ = dispatch.dispatch(
-          "flow",
-          "set_facet",
-          FlowRuntimePayload::new("rind:user_session")
-            .payload(json!({
-              "session_id": session_id,
-              "username": username.as_str(),
-              "tty": tty.trim_start_matches("/dev/"),
-              "runtime_dir": runtime_dir(user.uid).to_string_lossy().to_string()
-            }))
-            .into(),
-        );
+    let _ = dispatch.dispatch(
+      "flow",
+      "set_facet",
+      FlowRuntimePayload::new("rind:user_session")
+        .payload(json!({
+          "session_id": session_id,
+          "username": username.as_str(),
+          "tty": tty.trim_start_matches("/dev/"),
+          "runtime_dir": runtime_dir(user.uid).to_string_lossy().to_string()
+        }))
+        .into(),
+    );
 
-        ctx.event_bus.emit(LoginEvent {
-          action: LoginAction::Login,
-          session_id: session_id,
-          uid: user.uid,
-        });
+    ctx.event_bus.emit(LoginEvent {
+      action: LoginAction::Login,
+      session_id: session_id,
+      uid: user.uid,
+    });
 
-        self.create_runtime_dir(user)?;
+    self.create_runtime_dir(user)?;
 
-        let scope_name = self.user_scope_name(username.as_str());
-        let units_dir = self.user_units_dir(user);
-        if units_dir.exists() && !ScopeStore::has_global(&scope_name) {
-          let mut attrs = HashMap::new();
-          attrs.insert(Ustr::from("user"), username.to_string());
-          attrs.insert(
-            Ustr::from("units_dir"),
-            units_dir.to_string_lossy().to_string(),
-          );
-          ScopeStore::desired_scope_upsert(scope_name.clone(), attrs.clone(), None);
-          ScopeStore::upsert_global(scope_name.clone(), attrs.clone(), None);
-          if let Some(store) = ctx.registry.singleton_mut::<ScopeStore>(ScopeStore::KEY) {
-            store.upsert(scope_name.clone(), attrs, None);
-          }
-          ctx.lifecycle.request(LifecycleAction::ReloadUnits);
-        }
-
-        if let Some(ref notifier) = ctx.notifier {
-          notifier.notify()?;
-        }
+    let scope_name = self.user_scope_name(username.as_str());
+    let units_dir = self.user_units_dir(user);
+    if units_dir.exists() && !ScopeStore::has_global(&scope_name) {
+      let mut attrs = HashMap::new();
+      attrs.insert(Ustr::from("user"), username.to_string());
+      attrs.insert(
+        Ustr::from("units_dir"),
+        units_dir.to_string_lossy().to_string(),
+      );
+      ScopeStore::desired_scope_upsert(scope_name.clone(), attrs.clone(), None);
+      ScopeStore::upsert_global(scope_name.clone(), attrs.clone(), None);
+      if let Some(store) = ctx.registry.singleton_mut::<ScopeStore>(ScopeStore::KEY) {
+        store.upsert(scope_name.clone(), attrs, None);
       }
-      "logout" => {
-        let session_id = payload.get::<u64>("session_id")?;
-        let username = payload.get::<Ustr>("username")?;
-        let tty = payload.get::<Ustr>("tty").ok();
-        let user = pam
-          .store
-          .lookup_by_name(&username)
-          .ok_or(PamError::UserNotFound)?;
-
-        let mut filter = serde_json::Map::new();
-        filter.insert("session_id".into(), session_id.into());
-        if let Some(tty) = tty {
-          filter.insert("tty".into(), tty.as_str().into());
-        }
-
-        let _ = dispatch.dispatch(
-          "flow",
-          "remove_facet",
-          FlowRuntimePayload::new("rind:user_session")
-            .payload(serde_json::Value::Object(filter))
-            .into(),
-        );
-
-        ctx.event_bus.emit(LoginEvent {
-          action: LoginAction::Logout,
-          session_id: session_id,
-          uid: user.uid,
-        });
-
-        self.remove_runtime_dir(user, &pam)?;
-
-        if !pam.has_active_session(username.as_str()) {
-          let scope_name = self.user_scope_name(username.as_str());
-          println!("scope: {scope_name}");
-          ScopeStore::desired_scope_remove(scope_name.as_str());
-          let _ = ScopeStore::remove_scope_global(scope_name.as_str());
-          if let Some(store) = ctx.registry.singleton_mut::<ScopeStore>(ScopeStore::KEY) {
-            let _ = store.remove_scope(scope_name.as_str());
-          }
-          if let Some(sm) = ctx.registry.singleton_mut::<FacetGraph>(FacetGraph::KEY) {
-            let _ = sm.drop_scope(scope_name.as_str());
-          }
-          ctx.lifecycle.request(LifecycleAction::ReloadUnits);
-        }
-
-        if let Some(ref notifier) = ctx.notifier {
-          notifier.notify()?;
-        }
-      }
-      "create_sessions" => {
-        let mut pending_scopes: Vec<(String, HashMap<Ustr, String>)> = Vec::new();
-        let key = Ustr::from("rind:user_session");
-        let mut seen_users: HashSet<String> = HashSet::new();
-        let mut queued_reload = false;
-        {
-          let sm = ctx
-            .registry
-            .singleton_mut::<FacetGraph>(FacetGraph::KEY)
-            .ok_or_else(|| CoreError::InvalidState("state machine store not found".into()))?;
-          if let Some(users) = sm.facets.get_mut(&key) {
-            for user in users.iter_mut() {
-              let username = user.payload.get_json_field_as::<String>("username").ok_or(
-                CoreError::MissingField {
-                  path: "username".into(),
-                },
-              )?;
-              let tty = user
-                .payload
-                .get_json_field_as::<String>("tty")
-                .ok_or(CoreError::MissingField { path: "tty".into() })?;
-
-              let session = pam.pam_open_session(&username, &tty)?;
-              user
-                .payload
-                .set_json("session_id".into(), session.id.into());
-
-              let user_record = pam
-                .store
-                .lookup_by_name(&username)
-                .ok_or(PamError::UserNotFound)?;
-
-              self.create_runtime_dir(user_record)?;
-
-              if seen_users.insert(username.clone()) {
-                let scope_name = self.user_scope_name(&username);
-                let units_dir = self.user_units_dir(user_record);
-                if units_dir.exists() {
-                  let mut attrs = HashMap::new();
-                  attrs.insert(Ustr::from("user"), username.clone());
-                  attrs.insert(
-                    Ustr::from("units_dir"),
-                    units_dir.to_string_lossy().to_string(),
-                  );
-                  pending_scopes.push((scope_name, attrs));
-                  queued_reload = true;
-                }
-              }
-            }
-            sm.save_all_scopes()?;
-          }
-        }
-        for (scope_name, attrs) in pending_scopes {
-          ScopeStore::desired_scope_upsert(scope_name.clone(), attrs.clone(), None);
-          ScopeStore::upsert_global(scope_name.clone(), attrs.clone(), None);
-          if let Some(store) = ctx.registry.singleton_mut::<ScopeStore>(ScopeStore::KEY) {
-            store.upsert(scope_name, attrs, None);
-          }
-        }
-        if queued_reload {
-          ctx.lifecycle.request(LifecycleAction::ReloadUnits);
-        }
-      }
-      _ => {}
+      ctx.lifecycle.request(LifecycleAction::ReloadUnits);
     }
 
-    // dispatch.dispatch("flow", "bootstrap", json!({}).into())?;
-    // dispatch.dispatch("services", "evaluate_triggers", json!({}).into())?;
+    if let Some(ref notifier) = ctx.notifier {
+      notifier.notify()?;
+    }
+  }
 
-    Ok(None)
+  fn logout(&mut self, session_id: u64, username: Ustr, #[optional] tty: Ustr) {
+    let pam = ctx
+      .registry
+      .singleton::<Arc<PamHandle>>(PamHandle::KEY)
+      .cloned()
+      .ok_or_else(|| CoreError::InvalidState("pam handle not found".into()))?;
+
+    let user = pam
+      .store
+      .lookup_by_name(&username)
+      .ok_or(PamError::UserNotFound)?;
+
+    let mut filter = serde_json::Map::new();
+    filter.insert("session_id".into(), session_id.into());
+    if let Some(tty) = tty {
+      filter.insert("tty".into(), tty.as_str().into());
+    }
+
+    let _ = dispatch.dispatch(
+      "flow",
+      "remove_facet",
+      FlowRuntimePayload::new("rind:user_session")
+        .payload(serde_json::Value::Object(filter))
+        .into(),
+    );
+
+    ctx.event_bus.emit(LoginEvent {
+      action: LoginAction::Logout,
+      session_id: session_id,
+      uid: user.uid,
+    });
+
+    self.remove_runtime_dir(user, &pam)?;
+
+    if !pam.has_active_session(username.as_str()) {
+      let scope_name = self.user_scope_name(username.as_str());
+      println!("scope: {scope_name}");
+      ScopeStore::desired_scope_remove(scope_name.as_str());
+      let _ = ScopeStore::remove_scope_global(scope_name.as_str());
+      if let Some(store) = ctx.registry.singleton_mut::<ScopeStore>(ScopeStore::KEY) {
+        let _ = store.remove_scope(scope_name.as_str());
+      }
+      if let Some(sm) = ctx.registry.singleton_mut::<FacetGraph>(FacetGraph::KEY) {
+        let _ = sm.drop_scope(scope_name.as_str());
+      }
+      ctx.lifecycle.request(LifecycleAction::ReloadUnits);
+    }
+
+    if let Some(ref notifier) = ctx.notifier {
+      notifier.notify()?;
+    }
+  }
+
+  fn create_sessions(&mut self) {
+    let pam = ctx
+      .registry
+      .singleton::<Arc<PamHandle>>(PamHandle::KEY)
+      .cloned()
+      .ok_or_else(|| CoreError::InvalidState("pam handle not found".into()))?;
+
+    let mut pending_scopes: Vec<(String, HashMap<Ustr, String>)> = Vec::new();
+    let key = Ustr::from("rind:user_session");
+    let mut seen_users: HashSet<String> = HashSet::new();
+    let mut queued_reload = false;
+    {
+      let sm = ctx
+        .registry
+        .singleton_mut::<FacetGraph>(FacetGraph::KEY)
+        .ok_or_else(|| CoreError::InvalidState("state machine store not found".into()))?;
+      if let Some(users) = sm.facets.get_mut(&key) {
+        for user in users.iter_mut() {
+          let username = user.payload.get_json_field_as::<String>("username").ok_or(
+            CoreError::MissingField {
+              path: "username".into(),
+            },
+          )?;
+          let tty = user
+            .payload
+            .get_json_field_as::<String>("tty")
+            .ok_or(CoreError::MissingField { path: "tty".into() })?;
+
+          let session = pam.pam_open_session(&username, &tty)?;
+          user
+            .payload
+            .set_json("session_id".into(), session.id.into());
+
+          let user_record = pam
+            .store
+            .lookup_by_name(&username)
+            .ok_or(PamError::UserNotFound)?;
+
+          self.create_runtime_dir(user_record)?;
+
+          if seen_users.insert(username.clone()) {
+            let scope_name = self.user_scope_name(&username);
+            let units_dir = self.user_units_dir(user_record);
+            if units_dir.exists() {
+              let mut attrs = HashMap::new();
+              attrs.insert(Ustr::from("user"), username.clone());
+              attrs.insert(
+                Ustr::from("units_dir"),
+                units_dir.to_string_lossy().to_string(),
+              );
+              pending_scopes.push((scope_name, attrs));
+              queued_reload = true;
+            }
+          }
+        }
+        sm.save_all_scopes()?;
+      }
+    }
+    for (scope_name, attrs) in pending_scopes {
+      ScopeStore::desired_scope_upsert(scope_name.clone(), attrs.clone(), None);
+      ScopeStore::upsert_global(scope_name.clone(), attrs.clone(), None);
+      if let Some(store) = ctx.registry.singleton_mut::<ScopeStore>(ScopeStore::KEY) {
+        store.upsert(scope_name, attrs, None);
+      }
+    }
+    if queued_reload {
+      ctx.lifecycle.request(LifecycleAction::ReloadUnits);
+    }
   }
 }

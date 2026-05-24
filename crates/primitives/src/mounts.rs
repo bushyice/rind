@@ -38,7 +38,7 @@ impl MountRuntime {
     log: &LogHandle,
     dispatch: &RuntimeDispatcher,
     registry: &mut InstanceRegistry<'_>,
-  ) -> CoreResult<()> {
+  ) -> CoreResult<Void> {
     if let Some(true) = target.create {
       std::fs::create_dir_all(target.target.as_str()).ok();
     }
@@ -88,7 +88,7 @@ impl MountRuntime {
       })?
       .dispatch(Some(dispatch), Some(log), Some(registry))?;
 
-    Ok(())
+    Ok(Void)
   }
 
   pub fn mount_units(
@@ -97,7 +97,7 @@ impl MountRuntime {
     log: &LogHandle,
     dispatch: &RuntimeDispatcher,
     registry: &mut InstanceRegistry<'_>,
-  ) -> CoreResult<()> {
+  ) -> CoreResult<Void> {
     let mut mounted: HashSet<String> = HashSet::new();
     let mut pending = Vec::new();
 
@@ -144,7 +144,7 @@ impl MountRuntime {
       );
     }
 
-    Ok(())
+    Ok(Void)
   }
 }
 
@@ -190,62 +190,46 @@ pub fn is_mounted(target: impl Into<PathBuf>) -> std::io::Result<bool> {
   Ok(false)
 }
 
-impl Runtime for MountRuntime {
-  fn handle(
-    &mut self,
-    action: &str,
-    mut payload: RuntimePayload,
-    ctx: &mut RuntimeContext<'_>,
-    dispatch: &RuntimeDispatcher,
-    log: &LogHandle,
-  ) -> Result<Option<RuntimePayload>, CoreError> {
-    match action {
-      "mount" => {
-        let name = payload.get::<String>("name")?;
-        let metadata = ctx
-          .registry
-          .metadata
-          .find::<Mount>("*", &name)
-          .ok_or(CoreError::MissingSchema(name))?;
-        if !is_mounted(metadata.target.as_str())? {
-          self.mount_target(metadata, log, dispatch, &mut ctx.registry)?;
-        }
-      }
-      "umount" => {
-        let name = payload.get::<String>("name")?;
-        let metadata = ctx
-          .registry
-          .metadata
-          .find::<Mount>("*", &name)
-          .ok_or(CoreError::MissingSchema(name))?;
-        self.umount_target(metadata);
-      }
-      "mount_all" => {
-        let mut all_mounts: Vec<(String, Arc<MountMetadata>)> = Vec::new();
-        for meta_name in ctx.registry.metadata.metadata_names() {
-          let Some(m) = ctx.registry.metadata.metadata(meta_name.clone()) else {
-            continue;
-          };
-          for group in m.groups() {
-            if let Some(mounts) = ctx
-              .registry
-              .metadata
-              .group_items::<Mount>(meta_name.clone(), group.clone())
-            {
-              for mnt in mounts {
-                all_mounts.push((group.to_string(), mnt));
-              }
-            }
-          }
-        }
-        self.mount_units(all_mounts, log, dispatch, &mut ctx.registry)?;
-      }
-      _ => {}
+#[runtime("mounts")]
+impl MountRuntime {
+  fn mount(&mut self, name: String) {
+    let metadata = ctx
+      .registry
+      .metadata
+      .find::<Mount>("*", &name)
+      .ok_or(CoreError::MissingSchema(name))?;
+    if !is_mounted(metadata.target.as_str())? {
+      self.mount_target(metadata, log, dispatch, &mut ctx.registry)?;
     }
-    Ok(None)
   }
 
-  fn id(&self) -> &str {
-    "mounts"
+  fn umount(&mut self, name: String) {
+    let metadata = ctx
+      .registry
+      .metadata
+      .find::<Mount>("*", &name)
+      .ok_or(CoreError::MissingSchema(name))?;
+    self.umount_target(metadata);
+  }
+
+  fn mount_all(&mut self) {
+    let mut all_mounts: Vec<(String, Arc<MountMetadata>)> = Vec::new();
+    for meta_name in ctx.registry.metadata.metadata_names() {
+      let Some(m) = ctx.registry.metadata.metadata(meta_name.clone()) else {
+        continue;
+      };
+      for group in m.groups() {
+        if let Some(mounts) = ctx
+          .registry
+          .metadata
+          .group_items::<Mount>(meta_name.clone(), group.clone())
+        {
+          for mnt in mounts {
+            all_mounts.push((group.to_string(), mnt));
+          }
+        }
+      }
+    }
+    self.mount_units(all_mounts, log, dispatch, &mut ctx.registry)?;
   }
 }

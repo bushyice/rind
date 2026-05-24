@@ -71,7 +71,7 @@ pub enum TransportResponder {
 }
 
 impl TransportResponder {
-  pub fn send(&self, msg: &TransportMessage) -> std::io::Result<()> {
+  pub fn send(&self, msg: &TransportMessage) -> std::io::Result<Void> {
     match self {
       TransportResponder::Uds(stream) => msg.write_signed(stream),
     }
@@ -316,21 +316,21 @@ impl TransportRuntime {
     ctx: &mut RuntimeContext<'_>,
     responder: Option<TransportResponder>,
     log: &LogHandle,
-  ) -> CoreResult<()> {
+  ) -> CoreResult<Void> {
     if msg.name.as_ref().map(|x| x.as_str()) == Some("watchdog") {
       let _ = dispatch.dispatch(
         "services",
         "watchdog_ping",
         rpayload!({ "service": endpoint.clone() }),
       );
-      return Ok(());
+      return Ok(Void);
     }
 
     if msg.name.as_ref().map(|x| x.as_str()) == Some("log") {
       let service_name = rslvns!(snorm endpoint).to_ustr();
       let (level, message_text, fields) = stdio_log_entry(&service_name, &msg);
       log.log(level, "service-transport", message_text, fields);
-      return Ok(());
+      return Ok(Void);
     }
 
     match msg.r#type {
@@ -348,7 +348,7 @@ impl TransportRuntime {
               && let Some(user) = pm.users.lookup_by_uid(uid)
               && username != user.username.as_str()
             {
-              return Ok(());
+              return Ok(Void);
             }
 
             // one-shot perms (is this good?)
@@ -358,24 +358,24 @@ impl TransportRuntime {
                 .iter()
                 .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(uid, x)))
             {
-              return Ok(());
+              return Ok(Void);
             }
           }
 
           let name = name.clone();
 
           if msg.action == TransportMessageAction::Remove {
-            let mut payload = rpayload!({ "name": name });
+            let mut act = crate::FlowRuntime::actions.remove_facet(name);
             if let Some(p) = &msg.payload {
-              payload = payload.insert("filter", p.to_json());
+              act = act.payload(p.to_json());
             }
-            let _ = dispatch.dispatch("flow", "remove_facet", payload);
+            let _ = act.dispatch(dispatch);
           } else if msg.action == TransportMessageAction::Set {
-            let mut payload = rpayload!({ "name": name });
+            let mut act = crate::FlowRuntime::actions.set_facet(name);
             if let Some(p) = &msg.payload {
-              payload = payload.insert("payload", p.to_json());
+              act = act.payload(p.to_json());
             }
-            let _ = dispatch.dispatch("flow", "set_facet", payload);
+            let _ = act.dispatch(dispatch);
           }
         }
       }
@@ -391,22 +391,22 @@ impl TransportRuntime {
               .iter()
               .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(uid, x)))
           {
-            return Ok(());
+            return Ok(Void);
           }
 
           let name = name.clone();
 
-          let mut payload = rpayload!({ "name": name });
+          let mut act = crate::FlowRuntime::actions.impulse(name);
           if let Some(p) = &msg.payload {
-            payload = payload.insert("payload", p.to_json());
+            act = act.payload(p.to_json());
           }
-          let _ = dispatch.dispatch("flow", "impulse", payload);
+          let _ = act.dispatch(dispatch);
         }
       }
       _ => {}
     }
 
-    Ok(())
+    Ok(Void)
   }
 }
 
@@ -420,116 +420,116 @@ impl Default for TransportRuntime {
   }
 }
 
-impl Runtime for TransportRuntime {
-  fn id(&self) -> &str {
-    "transport"
-  }
-
-  fn handle(
-    &mut self,
-    action: &str,
-    mut payload: RuntimePayload,
-    ctx: &mut RuntimeContext<'_>,
-    dispatch: &RuntimeDispatcher,
-    log: &LogHandle,
-  ) -> Result<Option<RuntimePayload>, CoreError> {
+#[runtime("transport")]
+impl TransportRuntime {
+  fn setup_uds(&mut self, endpoint: Ustr, #[optional] permissions: Vec<Ustr>) {
     let pm = ctx
       .scope
       .get::<PermissionStore>()
       .cloned()
       .unwrap_or_default();
 
-    match action {
-      "setup_uds" => {
-        let endpoint = payload.get::<Ustr>("endpoint")?;
-        let permissions = payload.get::<Vec<Ustr>>("permissions").ok();
+    self.uds.setup(
+      endpoint.as_str(),
+      permissions,
+      Some(pm),
+      ctx.notifier.clone(),
+    );
+  }
 
-        self.uds.setup(
-          endpoint.as_str(),
-          permissions,
-          Some(pm),
-          ctx.notifier.clone(),
-        );
-      }
-      "setup_shm" => {
-        let endpoint = payload.get::<Ustr>("endpoint")?;
-        let permissions = payload.get::<Vec<Ustr>>("permissions").ok();
+  fn setup_shm(&mut self, endpoint: Ustr, #[optional] permissions: Vec<Ustr>) {
+    let pm = ctx
+      .scope
+      .get::<PermissionStore>()
+      .cloned()
+      .unwrap_or_default();
 
-        self.shm.setup(
-          endpoint.as_str(),
-          permissions,
-          Some(pm),
-          ctx.notifier.clone(),
-        );
-      }
-      "register_stdio" => {
-        let endpoint = payload.get::<Ustr>("endpoint")?;
-        self.stdio_endpoints.insert(endpoint);
-      }
-      "unregister_stdio" => {
-        let endpoint = payload.get::<Ustr>("endpoint")?;
-        self.stdio_endpoints.remove(endpoint.as_str());
-      }
-      "send" => {
-        let endpoint = payload.get::<Ustr>("endpoint")?;
-        let name = payload.get::<Ustr>("name").ok();
-        let branch = payload.get::<FlowMatchOperation>("branch").ok();
-        let flow_payload = payload.get::<serde_json::Value>("payload").ok();
-        let action_str: String = payload.get::<String>("action").ok().unwrap_or("set".into());
-        let type_str: String = payload.get::<String>("type").ok().unwrap_or("facet".into());
+    self.shm.setup(
+      endpoint.as_str(),
+      permissions,
+      Some(pm),
+      ctx.notifier.clone(),
+    );
+  }
 
-        let msg = TransportMessage {
-          r#type: if type_str == "signal" {
-            TransportMessageType::Impulse
-          } else {
-            TransportMessageType::Facet
-          },
-          payload: flow_payload.map(|v| FlowPayload::from_json(Some(v))),
-          name,
-          action: if action_str == "remove" {
-            TransportMessageAction::Remove
-          } else {
-            TransportMessageAction::Set
-          },
-          branch,
-        };
-        // TODO: Add an option for more transport protocols
-        if self.stdio_endpoints.contains(&endpoint) {
-          let _ = dispatch.dispatch(
-            "services",
-            "send_stdio",
-            rpayload!({
-              "endpoint": endpoint.to_string(),
-              "message": msg
-            }),
-          );
-        } else {
-          self.uds.send_message(endpoint.as_str(), &msg);
-          self.shm.send_message(endpoint.as_str(), &msg);
-        }
-      }
-      "ingest" => {
-        let endpoint = payload.get::<Ustr>("endpoint")?;
-        let uid = payload.get::<u32>("uid")?;
-        let message = payload.get::<TransportMessage>("message")?;
+  fn register_stdio(&mut self, endpoint: Ustr) {
+    self.stdio_endpoints.insert(endpoint);
+  }
 
-        self.ingest(endpoint, message, uid, dispatch, &pm, ctx, None, log)?;
-      }
-      "drain_incoming" => {
-        if let Ok(rx) = self.uds.incoming_rx.lock() {
-          while let Ok((endpoint, msg, uid, responder)) = rx.try_recv() {
-            self.ingest(endpoint, msg, uid, dispatch, &pm, ctx, responder, log)?;
-          }
-        }
-        if let Ok(rx) = self.shm.incoming_rx.lock() {
-          while let Ok((endpoint, msg, uid, responder)) = rx.try_recv() {
-            self.ingest(endpoint, msg, uid, dispatch, &pm, ctx, responder, log)?;
-          }
-        }
-      }
-      _ => {}
+  fn unregister_stdio(&mut self, endpoint: Ustr) {
+    self.stdio_endpoints.remove(endpoint.as_str());
+  }
+
+  fn send(
+    &mut self,
+    endpoint: Ustr,
+    #[optional] name: Ustr,
+    #[optional] branch: FlowMatchOperation,
+    #[optional] action: String,
+    #[optional] r#type: String,
+    #[optional] payload: serde_json::Value,
+  ) {
+    let action_str = action.unwrap_or_else(|| "set".into());
+    let type_str = r#type.unwrap_or_else(|| "facet".into());
+
+    let msg = TransportMessage {
+      r#type: if type_str == "signal" {
+        TransportMessageType::Impulse
+      } else {
+        TransportMessageType::Facet
+      },
+      payload: payload.map(|v| FlowPayload::from_json(Some(v))),
+      name,
+      action: if action_str == "remove" {
+        TransportMessageAction::Remove
+      } else {
+        TransportMessageAction::Set
+      },
+      branch,
+    };
+    // TODO: Add an option for more transport protocols
+    if self.stdio_endpoints.contains(&endpoint) {
+      let _ = dispatch.dispatch(
+        "services",
+        "send_stdio",
+        rpayload!({
+          "endpoint": endpoint.to_string(),
+          "message": msg
+        }),
+      );
+    } else {
+      self.uds.send_message(endpoint.as_str(), &msg);
+      self.shm.send_message(endpoint.as_str(), &msg);
     }
-    Ok(None)
+  }
+
+  fn ingest(&mut self, endpoint: Ustr, uid: u32, message: TransportMessage) {
+    let pm = ctx
+      .scope
+      .get::<PermissionStore>()
+      .cloned()
+      .unwrap_or_default();
+
+    self.ingest(endpoint, message, uid, dispatch, &pm, ctx, None, log)?;
+  }
+
+  fn drain_incoming(&mut self) {
+    let pm = ctx
+      .scope
+      .get::<PermissionStore>()
+      .cloned()
+      .unwrap_or_default();
+
+    if let Ok(rx) = self.uds.incoming_rx.lock() {
+      while let Ok((endpoint, msg, uid, responder)) = rx.try_recv() {
+        self.ingest(endpoint, msg, uid, dispatch, &pm, ctx, responder, log)?;
+      }
+    }
+    if let Ok(rx) = self.shm.incoming_rx.lock() {
+      while let Ok((endpoint, msg, uid, responder)) = rx.try_recv() {
+        self.ingest(endpoint, msg, uid, dispatch, &pm, ctx, responder, log)?;
+      }
+    }
   }
 }
 

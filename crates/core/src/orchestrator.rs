@@ -4,7 +4,8 @@ use crate::context::ScopeBuilder;
 use crate::error::CoreError;
 use crate::prelude::Resources;
 use crate::registry::{InstanceMap, InstanceRegistry, MetadataRegistry};
-use crate::runtime::{Runtime, RuntimeCommand, RuntimeHandle, RuntimePayload};
+use crate::runtime::{Runtime, RuntimeActionSpec, RuntimeHandle, RuntimePayload};
+use crate::types::Void;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BootCycle {
@@ -45,14 +46,20 @@ impl OrchestratorContext<'_> {
     runtime_id: impl Into<String>,
     action: impl Into<String>,
     payload: RuntimePayload,
-  ) -> Result<(), CoreError> {
-    self.runtime.send(RuntimeCommand::Dispatch {
-      runtime_id: runtime_id.into(),
-      action: action.into(),
+  ) -> Result<Void, CoreError> {
+    self.runtime.dispatch(
+      runtime_id.into().as_str(),
+      action.into().as_str(),
       payload,
-      context_id: self.context_id,
-      reply: None,
-    })
+      self.context_id,
+    )
+  }
+
+  pub fn dispatch_typed<A: RuntimeActionSpec>(
+    &self,
+    payload: A::Payload,
+  ) -> Result<Void, CoreError> {
+    self.runtime.dispatch_typed::<A>(payload, self.context_id)
   }
 }
 
@@ -60,13 +67,13 @@ pub trait Orchestrator: Send {
   fn id(&self) -> &str;
   fn depends_on(&self) -> &[&str];
   fn when(&self) -> OrchestratorWhen<'static>;
-  fn build_scope(&mut self, _builder: &mut ScopeBuilder) -> Result<(), CoreError> {
-    Ok(())
+  fn build_scope(&mut self, _builder: &mut ScopeBuilder) -> Result<Void, CoreError> {
+    Ok(Void)
   }
-  fn preload(&mut self, _ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
-    Ok(())
+  fn preload(&mut self, _ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
+    Ok(Void)
   }
-  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError>;
+  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError>;
   fn runtimes(&self) -> Vec<Box<dyn Runtime>> {
     Vec::new()
   }
@@ -170,7 +177,7 @@ impl OrchestratorStore {
     cycle: BootCycle,
     phase: BootPhase,
     ctx: &mut OrchestratorContext<'_>,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     let plan = self.planned_indexes(cycle, phase)?;
     for idx in plan {
       let orchestrator = self
@@ -183,7 +190,7 @@ impl OrchestratorStore {
         orchestrator.run(ctx)?;
       }
     }
-    Ok(())
+    Ok(Void)
   }
 
   pub fn build_scope_cycle_phase(
@@ -191,7 +198,7 @@ impl OrchestratorStore {
     cycle: BootCycle,
     phase: BootPhase,
     builder: &mut ScopeBuilder,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     let plan = self.planned_indexes(cycle, phase)?;
     for idx in plan {
       let orchestrator = self
@@ -200,7 +207,7 @@ impl OrchestratorStore {
         .ok_or_else(|| CoreError::InvalidState("orchestrator index out of bounds".to_string()))?;
       orchestrator.build_scope(builder)?;
     }
-    Ok(())
+    Ok(Void)
   }
 
   pub fn runtimes(&self) -> Vec<Box<dyn Runtime>> {
@@ -215,7 +222,9 @@ fn conflicting_cycles(cycles: &[BootCycle]) -> bool {
 #[cfg(test)]
 mod tests {
   use super::{BootCycle, BootPhase, Orchestrator, OrchestratorStore, OrchestratorWhen};
-  use crate::{context::ScopeBuilder, error::CoreError, orchestrator::OrchestratorContext};
+  use crate::{
+    context::ScopeBuilder, error::CoreError, orchestrator::OrchestratorContext, types::Void,
+  };
 
   struct TestOrchestrator {
     id: &'static str,
@@ -236,12 +245,12 @@ mod tests {
       self.when
     }
 
-    fn build_scope(&mut self, _builder: &mut ScopeBuilder) -> Result<(), CoreError> {
-      Ok(())
+    fn build_scope(&mut self, _builder: &mut ScopeBuilder) -> Result<Void, CoreError> {
+      Ok(Void)
     }
 
-    fn run(&mut self, _ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
-      Ok(())
+    fn run(&mut self, _ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
+      Ok(Void)
     }
   }
 

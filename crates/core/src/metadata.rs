@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
   error::{CoreError, CoreResult},
-  types::Ustr,
+  types::{Ustr, Void},
 };
 use toml::Value;
 
@@ -60,12 +60,12 @@ impl Metadata {
     self
   }
 
-  pub fn from_toml(&mut self, toml: &str, group: impl Into<Ustr>) -> CoreResult<()> {
+  pub fn from_toml(&mut self, toml: &str, group: impl Into<Ustr>) -> CoreResult<Void> {
     let value: Value = toml::from_str(toml)?;
     self.collect_value(value, group)
   }
 
-  pub fn collect_value(&mut self, value: Value, group: impl Into<Ustr>) -> CoreResult<()> {
+  pub fn collect_value(&mut self, value: Value, group: impl Into<Ustr>) -> CoreResult<Void> {
     let table = value
       .as_table()
       .ok_or_else(|| CoreError::ParseError("root must be table".into()))?;
@@ -78,7 +78,7 @@ impl Metadata {
       }
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   pub fn insert_value(
@@ -86,7 +86,7 @@ impl Metadata {
     name: impl Into<Ustr>,
     value: Value,
     group: impl Into<Ustr>,
-  ) -> CoreResult<()> {
+  ) -> CoreResult<Void> {
     let name = name.into();
     let type_id = *self
       .name_to_type
@@ -108,7 +108,7 @@ impl Metadata {
       .or_default()
       .insert(type_id, Arc::new(parsed));
 
-    Ok(())
+    Ok(Void)
   }
 
   pub fn get_in_group<T: Model + 'static>(

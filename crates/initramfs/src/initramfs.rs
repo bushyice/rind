@@ -15,14 +15,14 @@ fn env_truthy(name: &str) -> bool {
     .unwrap_or(false)
 }
 
-fn ensure_dir(path: &str) -> CoreResult<()> {
+fn ensure_dir(path: &str) -> CoreResult<Void> {
   fs::create_dir_all(path)?;
-  Ok(())
+  Ok(Void)
 }
 
-fn move_mount_if_exists(src: &str, new_root: &str) -> CoreResult<()> {
+fn move_mount_if_exists(src: &str, new_root: &str) -> CoreResult<Void> {
   if !Path::new(src).exists() {
-    return Ok(());
+    return Ok(Void);
   }
   let target = format!("{new_root}{}", src);
   ensure_dir(&target)?;
@@ -33,13 +33,13 @@ fn move_mount_if_exists(src: &str, new_root: &str) -> CoreResult<()> {
     MsFlags::MS_MOVE,
     Option::<&str>::None,
   )?;
-  Ok(())
+  Ok(Void)
 }
 
-fn switch_to_real_root() -> CoreResult<()> {
+fn switch_to_real_root() -> CoreResult<Void> {
   let real_root = match std::env::var("RIND_INITRAMFS_REAL_ROOT") {
     Ok(v) if !v.trim().is_empty() => v,
-    _ => return Ok(()),
+    _ => return Ok(Void),
   };
 
   let new_root = std::env::var("RIND_INITRAMFS_NEW_ROOT").unwrap_or("/newroot".to_string());
@@ -74,7 +74,7 @@ fn switch_to_real_root() -> CoreResult<()> {
 
   umount2("/.old_root", MntFlags::MNT_DETACH)?;
   let _ = fs::remove_dir_all("/.old_root");
-  Ok(())
+  Ok(Void)
 }
 
 impl Orchestrator for InitramfsOrchestrator {
@@ -93,7 +93,7 @@ impl Orchestrator for InitramfsOrchestrator {
     }
   }
 
-  fn run(&mut self, _ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
+  fn run(&mut self, _ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
     switch_to_real_root()?;
 
     let mode = std::env::var("RIND_INITRAMFS_HANDOFF_MODE")
@@ -110,7 +110,7 @@ impl Orchestrator for InitramfsOrchestrator {
       }
     }
 
-    Ok(())
+    Ok(Void)
   }
 }
 

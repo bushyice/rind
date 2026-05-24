@@ -12,7 +12,7 @@ use crate::logging::{LogHandle, LogLevel};
 use crate::notifier::Notifier;
 use crate::prelude::Resources;
 use crate::registry::{InstanceMap, InstanceRegistry, MetadataRegistry};
-use crate::types::Ustr;
+use crate::types::{Ustr, Void};
 
 pub enum RuntimeCommand {
   RegisterScopes {
@@ -83,6 +83,12 @@ pub trait Runtime: Send {
   ) -> Result<Option<RuntimePayload>, CoreError>;
 }
 
+pub trait RuntimeActionSpec {
+  const RUNTIME: &'static str;
+  const ACTION: &'static str;
+  type Payload: Into<RuntimePayload>;
+}
+
 #[derive(Clone)]
 pub struct RuntimeDispatcher {
   handle: RuntimeHandle,
@@ -99,7 +105,7 @@ impl RuntimeDispatcher {
     runtime_id: impl Into<String>,
     action: impl Into<String>,
     payload: RuntimePayload,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     self.handle.send(RuntimeCommand::Dispatch {
       runtime_id: runtime_id.into(),
       action: action.into(),
@@ -107,6 +113,13 @@ impl RuntimeDispatcher {
       context_id: self.context_id,
       reply: None,
     })
+  }
+
+  pub fn dispatch_typed<A: RuntimeActionSpec>(
+    &self,
+    payload: A::Payload,
+  ) -> Result<Void, CoreError> {
+    self.dispatch(A::RUNTIME, A::ACTION, payload.into())
   }
 
   #[deprecated]
@@ -154,7 +167,7 @@ struct RuntimeContextState {
 }
 
 impl RuntimeHandle {
-  pub fn send(&self, command: RuntimeCommand) -> Result<(), CoreError> {
+  pub fn send(&self, command: RuntimeCommand) -> Result<Void, CoreError> {
     let mut inner = self.inner.borrow_mut();
     if inner.stopped {
       return Err(CoreError::RuntimeStopped);
@@ -179,7 +192,7 @@ impl RuntimeHandle {
       other => inner.queue.push_back(other),
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   pub fn log(
@@ -188,7 +201,7 @@ impl RuntimeHandle {
     target: &str,
     message: &str,
     fields: HashMap<String, String>,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     let inner = self.inner.borrow();
     if inner.stopped {
       return Err(CoreError::RuntimeStopped);
@@ -196,7 +209,7 @@ impl RuntimeHandle {
 
     inner.log.log(level, target, message, fields);
 
-    Ok(())
+    Ok(Void)
   }
 
   pub fn dispatch(
@@ -205,7 +218,7 @@ impl RuntimeHandle {
     action: &str,
     payload: RuntimePayload,
     context_id: usize,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     self.send(RuntimeCommand::Dispatch {
       runtime_id: target.to_string(),
       action: action.to_string(),
@@ -213,6 +226,14 @@ impl RuntimeHandle {
       context_id,
       reply: None,
     })
+  }
+
+  pub fn dispatch_typed<A: RuntimeActionSpec>(
+    &self,
+    payload: A::Payload,
+    context_id: usize,
+  ) -> Result<Void, CoreError> {
+    self.dispatch(A::RUNTIME, A::ACTION, payload.into(), context_id)
   }
 
   #[deprecated]
@@ -238,7 +259,11 @@ impl RuntimeHandle {
       .map(Some)
   }
 
-  pub fn register_scopes(&self, context_id: usize, scopes: RuntimeScopes) -> Result<(), CoreError> {
+  pub fn register_scopes(
+    &self,
+    context_id: usize,
+    scopes: RuntimeScopes,
+  ) -> Result<Void, CoreError> {
     self.send(RuntimeCommand::RegisterScopes { context_id, scopes })
   }
 
@@ -263,7 +288,7 @@ impl RuntimeHandle {
     context_id: usize,
     metadata: &MetadataRegistry,
     resources: &mut Resources,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     loop {
       let command = {
         let mut inner = self.inner.borrow_mut();
@@ -374,7 +399,7 @@ impl RuntimeHandle {
       }
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   pub fn mock(log: LogHandle) -> Self {

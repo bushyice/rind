@@ -27,20 +27,20 @@ impl UnitsOrchestrator {
     }
   }
 
-  fn load_permissions(&self, permissions: &PermissionStore) -> Result<(), CoreError> {
+  fn load_permissions(&self, permissions: &PermissionStore) -> Result<Void, CoreError> {
     permissions
       .reg_perm(PERM_LOGIN, "Login")?
       .reg_perm(PERM_SYSTEM_SERVICES, "SystemServices")?
       .reg_perm(PERM_RUN0, "Run0")?;
 
-    Ok(())
+    Ok(Void)
   }
 
   fn load_all_units(
     &self,
     ctx: &mut OrchestratorContext<'_>,
     permissions: &PermissionStore,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     create_units_metadata("static", ctx, &self.units_dir, Some(permissions))
   }
 }
@@ -65,7 +65,7 @@ impl Orchestrator for UnitsOrchestrator {
     Vec::new()
   }
 
-  fn preload(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
+  fn preload(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
     EXTENSIONS.with(|extensions| {
       extensions
         .get()
@@ -126,7 +126,7 @@ impl Orchestrator for UnitsOrchestrator {
     let users = self.users.clone();
     ctx
       .runtime
-      .with_instances(|instances| -> std::result::Result<(), CoreError> {
+      .with_instances(|instances| -> std::result::Result<Void, CoreError> {
         let mut registry = InstanceRegistry::new(metadata, instances);
 
         let _ = registry.singleton_or_insert_with::<FacetGraph>(FacetGraph::KEY, || {
@@ -172,13 +172,13 @@ impl Orchestrator for UnitsOrchestrator {
           }
         }
 
-        Ok(())
+        Ok(Void)
       })??;
 
-    Ok(())
+    Ok(Void)
   }
 
-  fn build_scope(&mut self, builder: &mut ScopeBuilder) -> Result<(), CoreError> {
+  fn build_scope(&mut self, builder: &mut ScopeBuilder) -> Result<Void, CoreError> {
     // Why do all the monsters come out at night?
     // Why do we sleep where we want to hide?
     // Why do I run back to you like I don't mind if you fuck up my life?
@@ -192,10 +192,10 @@ impl Orchestrator for UnitsOrchestrator {
       scope.insert::<Run0QueueState>(run0_queue.clone());
     });
 
-    Ok(())
+    Ok(Void)
   }
 
-  fn run(&mut self, _ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
-    Ok(())
+  fn run(&mut self, _ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
+    Ok(Void)
   }
 }

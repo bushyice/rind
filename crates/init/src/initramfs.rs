@@ -3,6 +3,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::{collections::HashMap, ffi::CString};
 
+use rind_core::types::Void;
 use rind_core::{
   boot::BootEngine,
   error::CoreResult,
@@ -95,7 +96,7 @@ pub fn initramfs_init() -> CoreResult<bool> {
   Ok(!should_short_circuit())
 }
 
-pub fn exec_real_init_from_env() -> Result<(), Box<dyn std::error::Error>> {
+pub fn exec_real_init_from_env() -> Result<Void, Box<dyn std::error::Error>> {
   let init_path = std::env::var("RIND_REAL_INIT").unwrap_or("/usr/bin/init".to_string());
   let path = std::path::Path::new(&init_path);
   let c_path = CString::new(path.as_os_str().as_bytes())?;
@@ -109,5 +110,5 @@ pub fn exec_real_init_from_env() -> Result<(), Box<dyn std::error::Error>> {
   }
 
   nix::unistd::execv(&c_path, &argv)?;
-  Ok(())
+  Ok(Void)
 }

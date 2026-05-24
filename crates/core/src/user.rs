@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use crate::error::CoreError;
 use crate::prelude::permission_path;
-use crate::types::{ToUstr, Ustr};
+use crate::types::{ToUstr, Ustr, Void};
 
 #[derive(Debug, Clone)]
 pub struct UserRecord {
@@ -316,7 +316,7 @@ impl UserStore {
     user_revokes: &HashMap<u32, HashSet<u16>>,
     group_grants: &HashMap<u32, HashSet<u16>>,
     group_revokes: &HashMap<u32, HashSet<u16>>,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     let mut buf = Vec::new();
 
     for user in &self.users {
@@ -543,7 +543,7 @@ impl PamHandle {
     Ok(user)
   }
 
-  pub fn pam_acct_mgmt(&self, username: &str) -> Result<(), PamError> {
+  pub fn pam_acct_mgmt(&self, username: &str) -> Result<Void, PamError> {
     let shadow = self
       .store
       .shadow_for(username)
@@ -559,7 +559,7 @@ impl PamHandle {
       return Err(PamError::PasswordExpired);
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   pub fn pam_open_session(&self, username: &str, tty: &str) -> Result<PamSession, PamError> {
@@ -580,7 +580,7 @@ impl PamHandle {
     Ok(session)
   }
 
-  pub fn pam_close_session(&self, session_id: u64) -> Result<(), PamError> {
+  pub fn pam_close_session(&self, session_id: u64) -> Result<Void, PamError> {
     let mut sessions = self
       .sessions
       .write()
@@ -588,7 +588,7 @@ impl PamHandle {
     sessions
       .remove(&session_id)
       .ok_or(PamError::SessionError("session not found".into()))?;
-    Ok(())
+    Ok(Void)
   }
 
   pub fn sessions_for(&self, username: &str) -> Vec<PamSession> {
@@ -609,9 +609,9 @@ impl PamHandle {
     sessions.values().any(|s| s.username == username)
   }
 
-  fn check_lockout(&self, username: &str) -> Result<(), PamError> {
+  fn check_lockout(&self, username: &str) -> Result<Void, PamError> {
     let Ok(lockouts) = self.lockouts.read() else {
-      return Ok(());
+      return Ok(Void);
     };
     if let Some(state) = lockouts.get(username) {
       if state.failed_attempts >= self.config.max_retries {
@@ -622,7 +622,7 @@ impl PamHandle {
         }
       }
     }
-    Ok(())
+    Ok(Void)
   }
 
   fn record_failure(&self, username: &str) {

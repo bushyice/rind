@@ -26,9 +26,9 @@ impl Orchestrator for DisplayOrchestrator {
     }
   }
 
-  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
-    ctx.dispatch("display", "bootstrap", Default::default())?;
-    Ok(())
+  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
+    DisplayRuntime::actions.bootstrap().orchestrate(ctx)?;
+    Ok(Void)
   }
 
   fn runtimes(&self) -> Vec<Box<dyn Runtime>> {
@@ -39,41 +39,24 @@ impl Orchestrator for DisplayOrchestrator {
 #[derive(Default)]
 pub struct DisplayRuntime;
 
-impl Runtime for DisplayRuntime {
-  fn id(&self) -> &str {
-    "display"
-  }
-
-  fn handle(
-    &mut self,
-    action: &str,
-    _payload: RuntimePayload,
-    _ctx: &mut RuntimeContext<'_>,
-    _dispatch: &RuntimeDispatcher,
-    _log: &LogHandle,
-  ) -> Result<Option<RuntimePayload>, CoreError> {
-    match action {
-      "bootstrap" => {
-        if let Ok(mut file) = OpenOptions::new().write(true).open("/dev/tty2") {
-          if unsafe { libc::ioctl(file.as_raw_fd(), libc::TIOCSCTTY, 1) } != 0 {
-            // log.log(
-            //   LogLevel::Error,
-            //   "display",
-            //   &format!("Failed to take tty {}", std::io::Error::last_os_error()),
-            //   Default::default(),
-            // );
-          }
-          let _ = write!(
-            file,
-            "\x1b[2J\x1b[H\x1b[32mHello World from Display Plugin!\x1b[0m\n"
-          );
-          let _ = file.flush();
-        }
+#[runtime("display")]
+impl DisplayRuntime {
+  fn bootstrap(&mut self) {
+    if let Ok(mut file) = OpenOptions::new().write(true).open("/dev/tty2") {
+      if unsafe { libc::ioctl(file.as_raw_fd(), libc::TIOCSCTTY, 1) } != 0 {
+        // log.log(
+        //   LogLevel::Error,
+        //   "display",
+        //   &format!("Failed to take tty {}", std::io::Error::last_os_error()),
+        //   Default::default(),
+        // );
       }
-      _ => {}
+      let _ = write!(
+        file,
+        "\x1b[2J\x1b[H\x1b[32mHello World from Display Plugin!\x1b[0m\n"
+      );
+      let _ = file.flush();
     }
-
-    Ok(None)
   }
 }
 

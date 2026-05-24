@@ -1,3 +1,5 @@
+// TODO: Reload @static
+
 use std::fs;
 use std::path::Path;
 
@@ -74,7 +76,7 @@ pub fn create_units_metadata<P: AsRef<Path>>(
   ctx: &mut OrchestratorContext<'_>,
   units_dir: P,
   permissions: Option<&PermissionStore>,
-) -> CoreResult<()> {
+) -> CoreResult<Void> {
   let units_dir = units_dir.as_ref();
 
   let mut metadata = Metadata::new(scope)
@@ -119,7 +121,7 @@ pub fn create_units_metadata<P: AsRef<Path>>(
           }
         }
 
-        Ok(())
+        Ok(Void)
       }
     }),
   )?;
@@ -134,10 +136,10 @@ pub fn create_units_metadata<P: AsRef<Path>>(
   ctx.metadata.insert_metadata(metadata);
   build_indexes(ctx, scope)?;
 
-  Ok(())
+  Ok(Void)
 }
 
-pub fn build_indexes(ctx: &mut OrchestratorContext<'_>, scope: &str) -> CoreResult<()> {
+pub fn build_indexes(ctx: &mut OrchestratorContext<'_>, scope: &str) -> CoreResult<Void> {
   ctx.metadata.ensure_index_for_type::<Service>(scope)?;
   ctx.metadata.ensure_index_for_type::<Mount>(scope)?;
   ctx.metadata.ensure_index_for_type::<Socket>(scope)?;
@@ -152,7 +154,7 @@ pub fn build_indexes(ctx: &mut OrchestratorContext<'_>, scope: &str) -> CoreResu
       .act("create_index", ctx.metadata)
   })?;
 
-  Ok(())
+  Ok(Void)
 }
 
 pub fn create_dynamic_scope<P: AsRef<Path>>(
@@ -161,27 +163,27 @@ pub fn create_dynamic_scope<P: AsRef<Path>>(
   attributes: HashMap<Ustr, String>,
   ctx: &mut OrchestratorContext<'_>,
   units_dir: P,
-) -> CoreResult<()> {
+) -> CoreResult<Void> {
   let scope = scope.into();
   create_units_metadata(scope.as_str(), ctx, units_dir, None)?;
   ScopeStore::upsert_global(scope, attributes, lifetime_state);
-  Ok(())
+  Ok(Void)
 }
 
-pub fn destroy_dynamic_scope(scope: &str, ctx: &mut OrchestratorContext<'_>) -> CoreResult<()> {
+pub fn destroy_dynamic_scope(scope: &str, ctx: &mut OrchestratorContext<'_>) -> CoreResult<Void> {
   if scope == "static" {
-    return Ok(());
+    return Ok(Void);
   }
   ctx.metadata.remove_metadata(scope);
   let _ = ScopeStore::remove_scope_global(scope);
-  Ok(())
+  Ok(Void)
 }
 
 pub fn create_scope_metadata_runtime<P: AsRef<Path>>(
   scope: impl Into<Ustr>,
   metadata_registry: &mut MetadataRegistry,
   units_dir: P,
-) -> CoreResult<()> {
+) -> CoreResult<Void> {
   let scope = scope.into();
   let mut metadata = Metadata::new(scope.clone())
     .of::<Service>("service")
@@ -222,5 +224,5 @@ pub fn create_scope_metadata_runtime<P: AsRef<Path>>(
   let _ = metadata_registry.ensure_index_for_type::<Timer>(scope.clone());
   let _ = metadata_registry.ensure_index_for_type::<FlowFacet>(scope.clone());
   let _ = metadata_registry.ensure_index_for_type::<FlowImpulse>(scope);
-  Ok(())
+  Ok(Void)
 }

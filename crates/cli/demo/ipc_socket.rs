@@ -4,6 +4,8 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+use rind_core::types::Void;
+
 fn main() -> std::io::Result<()> {
   let fd = 3;
   let listener = if let Ok(_) = std::env::var("TSOCK_PATH") {
@@ -47,7 +49,7 @@ fn main() -> std::io::Result<()> {
   }
 
   println!("[ipc_socket] shutting down");
-  Ok(())
+  Ok(Void)
 }
 
 fn handle_connection(stream: &mut UnixStream) -> std::io::Result<()> {
@@ -76,5 +78,5 @@ fn handle_connection(stream: &mut UnixStream) -> std::io::Result<()> {
     }
   }
 
-  Ok(())
+  Ok(Void)
 }

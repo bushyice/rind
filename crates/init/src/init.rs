@@ -33,7 +33,7 @@ impl Orchestrator for BootOrchestrator {
     }
   }
 
-  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
+  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
     ctx.dispatch("mounts", "mount_all", Default::default())?;
 
     ctx.dispatch("user", "create_sessions", Default::default())?;
@@ -55,7 +55,7 @@ impl Orchestrator for BootOrchestrator {
         .insert("payload", serde_json::Value::String("".into())),
     )?;
 
-    Ok(())
+    Ok(Void)
   }
 }
 
@@ -77,12 +77,12 @@ impl Orchestrator for AfterBootOrchestrator {
     }
   }
 
-  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
+  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
     ctx.dispatch("sockets", "setup_all", Default::default())?;
     ctx.dispatch("services", "start_all", Default::default())?;
     ctx.dispatch("events", "evaluate_triggers", Default::default())?;
 
-    Ok(())
+    Ok(Void)
   }
 }
 
@@ -119,8 +119,8 @@ impl Orchestrator for RuntimeProviderOrchestrator {
     ]
   }
 
-  fn run(&mut self, _ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
-    Ok(())
+  fn run(&mut self, _ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
+    Ok(Void)
   }
 }
 
@@ -142,13 +142,13 @@ impl Orchestrator for PumpOrchestrator {
     }
   }
 
-  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<(), CoreError> {
+  fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
     ctx.dispatch("reaper", "reap_once", Default::default())?;
     ctx.dispatch("reaper", "timeout_sweep", Default::default())?;
     ctx.dispatch("events", "drain_events", Default::default())?;
     ctx.dispatch("transport", "drain_incoming", Default::default())?;
     ctx.dispatch("ipc", "drain_requests", Default::default())?;
-    Ok(())
+    Ok(Void)
   }
 }
 
@@ -292,12 +292,12 @@ fn process_lifecycle_action(
   }
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<Void, Box<dyn std::error::Error>> {
   if initramfs::should_run_initramfs() {
     let continue_boot = initramfs::initramfs_init()?;
     if !continue_boot {
       initramfs::exec_real_init_from_env()?;
-      return Ok(());
+      return Ok(Void);
     }
   }
 
@@ -420,7 +420,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &runtime,
         &mut resources,
       ) {
-        return Ok(());
+        return Ok(Void);
       }
     }
 

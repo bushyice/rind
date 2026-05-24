@@ -6,6 +6,7 @@ use nix::sys::eventfd::{EfdFlags, eventfd};
 use nix::unistd::{read, write};
 
 use crate::error::CoreError;
+use crate::types::Void;
 
 #[derive(Clone)]
 pub struct Notifier {
@@ -27,20 +28,20 @@ impl Notifier {
     self.fd.as_raw_fd()
   }
 
-  pub fn notify(&self) -> Result<(), CoreError> {
+  pub fn notify(&self) -> Result<Void, CoreError> {
     let val: u64 = 1;
     let bytes = val.to_ne_bytes();
     write(&*self.fd, &bytes)
       .map_err(|e| CoreError::Custom(format!("failed to write to eventfd: {e}")))?;
-    Ok(())
+    Ok(Void)
   }
 
-  pub fn reset(&self) -> Result<(), CoreError> {
+  pub fn reset(&self) -> Result<Void, CoreError> {
     let mut buf = [0u8; 8];
     // reset
     match read(&*self.fd, &mut buf) {
-      Ok(_) => Ok(()),
-      Err(nix::errno::Errno::EAGAIN) => Ok(()),
+      Ok(_) => Ok(Void),
+      Err(nix::errno::Errno::EAGAIN) => Ok(Void),
       Err(e) => Err(CoreError::Custom(format!(
         "failed to read from eventfd: {e}"
       ))),

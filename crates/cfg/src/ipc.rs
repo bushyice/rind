@@ -40,7 +40,7 @@ type IpcRequest = (Message, Sender<Message>);
 pub struct IpcRuntime {
   incoming_tx: Sender<IpcRequest>,
   incoming_rx: Arc<Mutex<Receiver<IpcRequest>>>,
-  listener_thread: Option<thread::JoinHandle<()>>,
+  listener_thread: Option<thread::JoinHandle<Void>>,
 }
 
 impl Default for IpcRuntime {
@@ -690,108 +690,91 @@ pub fn handle_ipc_shutdown(
   queue_lifecycle_action(msg, ctx, LifecycleAction::Shutdown, "shutdown scheduled")
 }
 
-impl Runtime for IpcRuntime {
-  fn id(&self) -> &str {
-    IPC_RUNTIME_ID
+#[runtime("ipc")]
+impl IpcRuntime {
+  fn init_actions(&mut self) {
+    let ipcsrc = ctx.scope.get::<IpcSourcemap>().cloned().unwrap_or_default();
+    ipcsrc.register("login", handle_ipc_login, PERM_LOGIN);
+    ipcsrc.register("logout", handle_ipc_logout, PermissionExpr::All);
+    ipcsrc.register("run0", handle_ipc_run0, PermissionExpr::All);
+    ipcsrc.register("start_service", handle_ipc_start, PermissionExpr::All);
+    ipcsrc.register("stop_service", handle_ipc_stop, PermissionExpr::All);
+    ipcsrc.register("start_socket", handle_ipc_start_socket, PermissionExpr::All);
+    ipcsrc.register("stop_socket", handle_ipc_stop_socket, PermissionExpr::All);
+    ipcsrc.register("start", handle_ipc_start_unknown, PermissionExpr::All);
+    ipcsrc.register("stop", handle_ipc_stop_unknown, PermissionExpr::All);
+    ipcsrc.register("list", handle_ipc_list, PermissionExpr::All);
+    ipcsrc.register("set_variable", handle_ipc_set, PermissionExpr::All);
+    ipcsrc.register("remove_variable", handle_ipc_remove, PermissionExpr::All);
+    ipcsrc.register("create_scope", handle_ipc_create_scope, PermissionExpr::All);
+    ipcsrc.register(
+      "destroy_scope",
+      handle_ipc_destroy_scope,
+      PermissionExpr::All,
+    );
+    ipcsrc.register(
+      "show_permissions",
+      handle_ipc_show_permission,
+      PermissionExpr::All,
+    );
+    ipcsrc.register(
+      "grant_permission",
+      handle_ipc_grant_permission,
+      PermissionExpr::RootOnly,
+    );
+    ipcsrc.register(
+      "revoke_permission",
+      handle_ipc_revoke_permission,
+      PermissionExpr::RootOnly,
+    );
+    ipcsrc.register("reload_units", handle_ipc_reload_units, PermissionExpr::All);
+    ipcsrc.register("reboot", handle_ipc_reboot, PermissionExpr::All);
+    ipcsrc.register("soft_reboot", handle_ipc_soft_reboot, PermissionExpr::All);
+    ipcsrc.register("shutdown", handle_ipc_shutdown, PermissionExpr::All);
   }
 
-  fn handle(
-    &mut self,
-    action: &str,
-    _payload: RuntimePayload,
-    ctx: &mut RuntimeContext<'_>,
-    dispatch: &RuntimeDispatcher,
-    log: &LogHandle,
-  ) -> Result<Option<RuntimePayload>, CoreError> {
-    match action {
-      // "ipc:list" => {
-      //   let msg = payload_msg(payload)?;
-      //   return Ok(Some(handle_ipc_list(msg, ctx, dispatch, log)?.into()));
-      // }
-      "init_actions" => {
-        let ipcsrc = ctx.scope.get::<IpcSourcemap>().cloned().unwrap_or_default();
-        ipcsrc.register("login", handle_ipc_login, PERM_LOGIN);
-        ipcsrc.register("logout", handle_ipc_logout, PermissionExpr::All);
-        ipcsrc.register("run0", handle_ipc_run0, PermissionExpr::All);
-        ipcsrc.register("start_service", handle_ipc_start, PermissionExpr::All);
-        ipcsrc.register("stop_service", handle_ipc_stop, PermissionExpr::All);
-        ipcsrc.register("start_socket", handle_ipc_start_socket, PermissionExpr::All);
-        ipcsrc.register("stop_socket", handle_ipc_stop_socket, PermissionExpr::All);
-        ipcsrc.register("start", handle_ipc_start_unknown, PermissionExpr::All);
-        ipcsrc.register("stop", handle_ipc_stop_unknown, PermissionExpr::All);
-        ipcsrc.register("list", handle_ipc_list, PermissionExpr::All);
-        ipcsrc.register("set_variable", handle_ipc_set, PermissionExpr::All);
-        ipcsrc.register("remove_variable", handle_ipc_remove, PermissionExpr::All);
-        ipcsrc.register("create_scope", handle_ipc_create_scope, PermissionExpr::All);
-        ipcsrc.register(
-          "destroy_scope",
-          handle_ipc_destroy_scope,
-          PermissionExpr::All,
-        );
-        ipcsrc.register(
-          "show_permissions",
-          handle_ipc_show_permission,
-          PermissionExpr::All,
-        );
-        ipcsrc.register(
-          "grant_permission",
-          handle_ipc_grant_permission,
-          PermissionExpr::RootOnly,
-        );
-        ipcsrc.register(
-          "revoke_permission",
-          handle_ipc_revoke_permission,
-          PermissionExpr::RootOnly,
-        );
-        ipcsrc.register("reload_units", handle_ipc_reload_units, PermissionExpr::All);
-        ipcsrc.register("reboot", handle_ipc_reboot, PermissionExpr::All);
-        ipcsrc.register("soft_reboot", handle_ipc_soft_reboot, PermissionExpr::All);
-        ipcsrc.register("shutdown", handle_ipc_shutdown, PermissionExpr::All);
-      }
-      "start_server" => {
-        if self.listener_thread.is_none() {
-          let tx = self.incoming_tx.clone();
-          let notifier = ctx.notifier.clone();
-          self.listener_thread = Some(thread::spawn(move || {
-            let socket_path = std::env::var("RIND_SOC_PATH")
-              .map(PathBuf::from)
-              .unwrap_or_else(|_| PathBuf::from("/tmp/rind.sock"));
-            let _ = std::fs::remove_file(&socket_path);
-            let listener = match UnixListener::bind(&socket_path) {
-              Ok(l) => l,
-              Err(e) => {
-                // TODO: i'll use log instead
-                eprintln!("[ipc] failed to bind {:?}: {}", socket_path, e);
-                return;
-              }
-            };
+  #[action()]
+  fn start_server(&mut self) {
+    if self.listener_thread.is_none() {
+      let tx = self.incoming_tx.clone();
+      let notifier = ctx.notifier.clone();
+      self.listener_thread = Some(thread::spawn(move || {
+        let socket_path = std::env::var("RIND_SOC_PATH")
+          .map(PathBuf::from)
+          .unwrap_or_else(|_| PathBuf::from("/tmp/rind.sock"));
+        let _ = std::fs::remove_file(&socket_path);
+        let listener = match UnixListener::bind(&socket_path) {
+          Ok(l) => l,
+          Err(e) => {
+            // TODO: i'll use log instead
+            eprintln!("[ipc] failed to bind {:?}: {}", socket_path, e);
+            return;
+          }
+        };
 
-            std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666))
-              .expect("failed to allow permissions");
+        std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o666))
+          .expect("failed to allow permissions");
 
-            for stream in listener.incoming() {
-              if let Ok(stream) = stream {
-                let tx = tx.clone();
-                let notifier = notifier.clone();
-                thread::spawn(move || {
-                  handle_client_connection(stream, tx, notifier);
-                });
-              }
-            }
-          }));
-        }
-      }
-      "drain_requests" => {
-        if let Ok(rx) = self.incoming_rx.lock() {
-          while let Ok((msg, reply_tx)) = rx.try_recv() {
-            let response = handle_ipc_message(msg, ctx, dispatch, log);
-            let _ = reply_tx.send(response);
+        for stream in listener.incoming() {
+          if let Ok(stream) = stream {
+            let tx = tx.clone();
+            let notifier = notifier.clone();
+            thread::spawn(move || {
+              handle_client_connection(stream, tx, notifier);
+            });
           }
         }
-      }
-      _ => {}
+      }));
     }
-    Ok(None)
+  }
+
+  fn drain_requests(&mut self) {
+    if let Ok(rx) = self.incoming_rx.lock() {
+      while let Ok((msg, reply_tx)) = rx.try_recv() {
+        let response = handle_ipc_message(msg, ctx, dispatch, log);
+        let _ = reply_tx.send(response);
+      }
+    }
   }
 }
 

@@ -11,6 +11,7 @@ use std::thread;
 use serde::{Deserialize, Serialize};
 
 use crate::error::CoreError;
+use crate::types::Void;
 
 pub type StateSnapshot = HashMap<String, Vec<StateEntry>>;
 
@@ -76,7 +77,7 @@ impl StatePersistence {
     let _ = self.tx.send(PersistCommand::Save(snapshot));
   }
 
-  pub fn save_sync(&self, snapshot: &StateSnapshot) -> Result<(), CoreError> {
+  pub fn save_sync(&self, snapshot: &StateSnapshot) -> Result<Void, CoreError> {
     write_snapshot(&self.path, snapshot)
   }
 
@@ -85,7 +86,7 @@ impl StatePersistence {
   }
 }
 
-fn write_snapshot(path: &Path, snapshot: &StateSnapshot) -> Result<(), CoreError> {
+fn write_snapshot(path: &Path, snapshot: &StateSnapshot) -> Result<Void, CoreError> {
   let encoded = encode_snapshot(snapshot)?;
 
   if let Some(parent) = path.parent() {
@@ -106,7 +107,7 @@ fn write_snapshot(path: &Path, snapshot: &StateSnapshot) -> Result<(), CoreError
   fs::rename(&tmp, path).map_err(|e| CoreError::PersistenceError(format!("rename failed: {e}")))?;
   sync_parent_dir(path)?;
 
-  Ok(())
+  Ok(Void)
 }
 
 const MAGIC: [u8; 4] = *b"RIND";
@@ -161,9 +162,9 @@ fn decode_snapshot(content: &[u8]) -> Result<StateSnapshot, CoreError> {
   Ok(snapshot)
 }
 
-fn sync_parent_dir(path: &Path) -> Result<(), CoreError> {
+fn sync_parent_dir(path: &Path) -> Result<Void, CoreError> {
   let Some(parent) = path.parent() else {
-    return Ok(());
+    return Ok(Void);
   };
   let dir = fs::File::open(parent)
     .map_err(|e| CoreError::PersistenceError(format!("open parent dir failed: {e}")))?;

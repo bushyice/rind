@@ -209,7 +209,7 @@ impl FacetGraph {
     }
   }
 
-  pub fn load_from_persistence(&mut self) -> Result<(), CoreError> {
+  pub fn load_from_persistence(&mut self) -> Result<Void, CoreError> {
     self.facets = self
       .persistence
       .load()?
@@ -243,7 +243,7 @@ impl FacetGraph {
         }
       }
     }
-    Ok(())
+    Ok(Void)
   }
 
   fn scope_from_state_name(name: &str) -> Ustr {
@@ -273,7 +273,7 @@ impl FacetGraph {
     p
   }
 
-  pub fn load_scope_from_persistence(&mut self, scope: &str) -> Result<(), CoreError> {
+  pub fn load_scope_from_persistence(&mut self, scope: &str) -> Result<Void, CoreError> {
     let persistence = self.persistence_for_scope(scope);
     let snapshot = persistence.load()?;
     for (name, entries) in snapshot {
@@ -285,10 +285,10 @@ impl FacetGraph {
         .collect::<Vec<_>>();
       self.facets.insert(key, vals);
     }
-    Ok(())
+    Ok(Void)
   }
 
-  pub fn drop_scope(&mut self, scope: &str) -> Result<(), CoreError> {
+  pub fn drop_scope(&mut self, scope: &str) -> Result<Void, CoreError> {
     let suffix = format!("@{scope}");
     self.facets.retain(|k, _| {
       scope == "static" && !k.as_str().contains('@') || !k.as_str().ends_with(&suffix)
@@ -302,10 +302,10 @@ impl FacetGraph {
       self.scoped_persistence.remove(&Ustr::from(scope));
     }
 
-    Ok(())
+    Ok(Void)
   }
 
-  pub fn save_all_scopes(&mut self) -> Result<(), CoreError> {
+  pub fn save_all_scopes(&mut self) -> Result<Void, CoreError> {
     let mut per_scope: HashMap<Ustr, StateSnapshot> = HashMap::new();
     for (name, branches) in &self.facets {
       if name.as_str().contains(":_") {
@@ -324,7 +324,7 @@ impl FacetGraph {
       persistence.save_sync(&snapshot)?;
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   pub fn snapshot_for_persistence(&self) -> StateSnapshot {
@@ -380,21 +380,19 @@ impl FlowRuntime {
   ) {
     let id = self.transport_id(subscriber);
     if id == "uds" || id == "shm" {
-      let action = if id == "uds" {
-        "setup_uds"
-      } else {
-        "setup_shm"
-      };
-      let payload = RuntimePayload::default().insert("endpoint", endpoint.to_ustr());
-      let _ = dispatch.dispatch(
-        "transport",
-        action,
+      if id == "uds" {
+        let mut act = crate::transport::TransportRuntime::actions.setup_uds(endpoint.to_ustr());
         if let Some(perms) = subscriber.get_permissions() {
-          payload.insert("permissions", perms)
-        } else {
-          payload
-        },
-      );
+          act = act.permissions(perms);
+        }
+        let _ = act.dispatch(dispatch);
+      } else {
+        let mut act = crate::transport::TransportRuntime::actions.setup_shm(endpoint.to_ustr());
+        if let Some(perms) = subscriber.get_permissions() {
+          act = act.permissions(perms);
+        }
+        let _ = act.dispatch(dispatch);
+      }
     }
   }
 
@@ -416,16 +414,13 @@ impl FlowRuntime {
         FlowAction::Apply => "set",
         FlowAction::Revert => "remove",
       };
-      let _ = dispatch.dispatch(
-        "transport",
-        "send",
-        RuntimePayload::default()
-          .insert("endpoint", endpoint.to_ustr())
-          .insert("type", "facet".to_string())
-          .insert("name", endpoint.to_ustr())
-          .insert("action", action.to_string())
-          .insert("payload", payload.to_json()),
-      );
+      let _ = crate::transport::TransportRuntime::actions
+        .send(endpoint.to_ustr())
+        .r#type("facet".to_string())
+        .name(endpoint.to_ustr())
+        .action(action.to_string())
+        .payload(payload.to_json())
+        .dispatch(dispatch);
     }
   }
 
@@ -446,9 +441,9 @@ impl FlowRuntime {
       .and_then(|d| d.subscribers.clone())
   }
 
-  fn save_facet_graph(&self, sm: &mut FacetGraph) -> Result<(), CoreError> {
+  fn save_facet_graph(&self, sm: &mut FacetGraph) -> Result<Void, CoreError> {
     sm.save_all_scopes()?;
-    Ok(())
+    Ok(Void)
   }
 
   fn payload_type_ok(&self, expected: FlowPayloadType, payload: &FlowPayload) -> bool {
@@ -469,12 +464,12 @@ impl FlowRuntime {
     guard: &mut HashSet<Ustr>,
     event_bus: &EventBus,
     dispatch: &RuntimeDispatcher,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     let name = name.into();
     let branch_sig = payload_signature(&payload);
     let guard_key = Ustr::from(format!("apply::{name}::{branch_sig}"));
     if guard.contains(&guard_key) {
-      return Ok(());
+      return Ok(Void);
     }
     guard.insert(guard_key.clone());
 
@@ -586,7 +581,7 @@ impl FlowRuntime {
     )?;
 
     guard.remove(&guard_key);
-    Ok(())
+    Ok(Void)
   }
 
   fn remove_facet(
@@ -598,7 +593,7 @@ impl FlowRuntime {
     guard: &mut HashSet<Ustr>,
     event_bus: &EventBus,
     dispatch: &RuntimeDispatcher,
-  ) -> CoreResult<()> {
+  ) -> CoreResult<Void> {
     if let Some(branches) = sm.facets.remove(name) {
       let (to_keep, to_remove): (Vec<_>, Vec<_>) = if let Some(filter) = &filter {
         branches
@@ -661,7 +656,7 @@ impl FlowRuntime {
       }
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   fn impulse(
@@ -669,7 +664,7 @@ impl FlowRuntime {
     name: impl Into<Ustr>,
     payload: Option<FlowPayload>,
     event_bus: &EventBus,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     let name = name.into();
     let def = self
       .impulse_defs
@@ -703,7 +698,7 @@ impl FlowRuntime {
       flow_type: FlowEventType::Impulse,
     });
 
-    Ok(())
+    Ok(Void)
   }
 
   fn reconcile_impulse_transcendence(
@@ -755,9 +750,9 @@ impl FlowRuntime {
     guard: &mut HashSet<Ustr>,
     event_bus: &EventBus,
     dispatch: &RuntimeDispatcher,
-  ) -> CoreResult<()> {
+  ) -> CoreResult<Void> {
     let Some(targets) = self.transcendence_index.get(&source.name).cloned() else {
-      return Ok(());
+      return Ok(Void);
     };
 
     for full_name in targets {
@@ -813,7 +808,7 @@ impl FlowRuntime {
       }
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   fn branch_filter_from_payload(
@@ -847,9 +842,9 @@ impl FlowRuntime {
     guard: &mut HashSet<Ustr>,
     event_bus: &EventBus,
     dispatch: &RuntimeDispatcher,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     let Some(targets) = self.inverse_transcendence_index.get(&source.name) else {
-      return Ok(());
+      return Ok(Void);
     };
     let target_names: Vec<Ustr> = targets.iter().cloned().collect();
 
@@ -931,7 +926,7 @@ impl FlowRuntime {
       }
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   fn reconcile_inverse_transcendence_all(
@@ -941,7 +936,7 @@ impl FlowRuntime {
     guard: &mut HashSet<Ustr>,
     event_bus: &EventBus,
     dispatch: &RuntimeDispatcher,
-  ) -> Result<(), CoreError> {
+  ) -> Result<Void, CoreError> {
     let sources: Vec<Ustr> = self.inverse_transcendence_index.keys().cloned().collect();
     for source in sources {
       let source_instance = FlowInstance {
@@ -960,7 +955,7 @@ impl FlowRuntime {
       )?;
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   fn collect_defs(
@@ -1054,174 +1049,161 @@ impl FlowRuntime {
   }
 }
 
-impl Runtime for FlowRuntime {
-  fn id(&self) -> &str {
-    FLOW_RUNTIME_ID
+#[runtime("flow")]
+impl FlowRuntime {
+  fn set_facet(&mut self, name: Ustr, #[optional] payload: serde_json::Value) {
+    let flow_payload = FlowPayload::from_json(payload);
+    ctx
+      .registry
+      .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+        (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
+        |_, (sm, vh)| {
+          let mut guard = HashSet::new();
+          self.set_facet(
+            sm,
+            name.clone(),
+            Some(flow_payload.clone()),
+            Some(vh),
+            &mut guard,
+            ctx.event_bus,
+            dispatch,
+          )?;
+          self.save_facet_graph(sm)
+        },
+      )?;
+
+    let mut fields = HashMap::new();
+    fields.insert("name".to_string(), name.to_string());
+    fields.insert("payload".into(), flow_payload.to_string_payload());
+    log.log(LogLevel::Trace, "flow-runtime", "setting state", fields);
+
+    if let Some(notifier) = &ctx.notifier {
+      notifier.notify()?;
+    }
   }
 
-  fn handle(
+  fn remove_facet(
     &mut self,
-    action: &str,
-    mut payload: RuntimePayload,
-    ctx: &mut RuntimeContext<'_>,
-    dispatch: &RuntimeDispatcher,
-    log: &LogHandle,
-  ) -> Result<Option<RuntimePayload>, CoreError> {
-    match action {
-      "set_facet" => {
-        let name = payload.get::<Ustr>("name")?;
-        let flow_payload = FlowPayload::from_json(payload.get::<serde_json::Value>("payload").ok());
-        ctx
-          .registry
-          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
-            (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
-            |_, (sm, vh)| {
-              let mut guard = HashSet::new();
-              self.set_facet(
-                sm,
-                name.clone(),
-                Some(flow_payload.clone()),
-                Some(vh),
-                &mut guard,
-                ctx.event_bus,
-                dispatch,
-              )?;
-              self.save_facet_graph(sm)
-            },
+    name: Ustr,
+    #[optional] filter: serde_json::Value,
+    #[optional] payload: serde_json::Value,
+  ) {
+    let filter_json = filter.or(payload);
+    let filter = filter_json.and_then(|v| match v {
+      serde_json::Value::Object(b) => Some(FlowMatchOperation::Options {
+        binary: None,
+        contains: None,
+        r#as: Some(b.into()),
+      }),
+      _ => serde_json::from_value(v).ok(),
+    });
+
+    ctx
+      .registry
+      .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+        (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
+        |_, (sm, vh)| {
+          let mut guard = HashSet::new();
+          self.remove_facet(
+            sm,
+            name.as_str(),
+            filter.clone(),
+            Some(vh),
+            &mut guard,
+            ctx.event_bus,
+            dispatch,
           )?;
+          self.save_facet_graph(sm)
+        },
+      )?;
 
-        let mut fields = HashMap::new();
-        fields.insert("name".to_string(), name.to_string());
-        fields.insert("payload".into(), flow_payload.to_string_payload());
-        log.log(LogLevel::Trace, "flow-runtime", "setting state", fields);
+    let mut fields = HashMap::new();
+    fields.insert("name".to_string(), name.to_string());
+    fields.insert("payload".into(), format!("{filter:?}"));
+    log.log(LogLevel::Trace, "flow-runtime", "removing state", fields);
 
-        if let Some(notifier) = &ctx.notifier {
-          notifier.notify()?;
-        }
-      }
-      "remove_facet" => {
-        let name = payload.get::<Ustr>("name")?;
-        let filter_json: Option<serde_json::Value> =
-          payload.get("filter").ok().or(payload.get("payload").ok());
-        let filter = filter_json.and_then(|v| match v {
-          serde_json::Value::Object(b) => Some(FlowMatchOperation::Options {
-            binary: None,
-            contains: None,
-            r#as: Some(b.into()),
-          }),
-          _ => serde_json::from_value(v).ok(),
-        });
-
-        ctx
-          .registry
-          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
-            (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
-            |_, (sm, vh)| {
-              let mut guard = HashSet::new();
-              self.remove_facet(
-                sm,
-                name.as_str(),
-                filter.clone(),
-                Some(vh),
-                &mut guard,
-                ctx.event_bus,
-                dispatch,
-              )?;
-              self.save_facet_graph(sm)
-            },
-          )?;
-
-        let mut fields = HashMap::new();
-        fields.insert("name".to_string(), name.to_string());
-        fields.insert("payload".into(), format!("{filter:?}"));
-        log.log(LogLevel::Trace, "flow-runtime", "removing state", fields);
-
-        if let Some(notifier) = &ctx.notifier {
-          notifier.notify()?;
-        }
-
-        if let Some(sm) = ctx.registry.singleton::<FacetGraph>(FacetGraph::KEY) {
-          let should_drop_scope = sm
-            .facets
-            .get(&name)
-            .map(|branches| branches.is_empty())
-            .unwrap_or(true);
-          if should_drop_scope {
-            let scope_name = GLOBAL_SCOPE_STORE
-              .lock()
-              .ok()
-              .and_then(|s| s.scope_for_state(name.as_str()));
-            if let Some(scope_name) = scope_name {
-              let _ = ScopeStore::remove_scope_global(scope_name.as_str());
-            }
-          }
-        }
-      }
-      "impulse" => {
-        let name = payload.get::<Ustr>("name")?;
-        let flow_payload = FlowPayload::from_json(payload.get("payload").ok());
-        let mut fields = HashMap::new();
-        fields.insert("name".to_string(), name.to_string());
-        fields.insert("payload".into(), format!("{flow_payload:?}"));
-        self.impulse(name.clone(), Some(flow_payload.clone()), ctx.event_bus)?;
-        let source = FlowInstance {
-          name,
-          payload: flow_payload,
-          r#type: FlowType::Impulse,
-        };
-        let mut emitted = HashSet::new();
-        let sm = ctx
-          .registry
-          .singleton_mut::<FacetGraph>(FacetGraph::KEY)
-          .ok_or(CoreError::InvalidState(
-            "state machine store not found".into(),
-          ))?;
-        log.log(LogLevel::Trace, "flow-runtime", "emitting signal", fields);
-        self.reconcile_impulse_transcendence(sm, &source, ctx.event_bus, &mut emitted);
-      }
-      "bootstrap" => {
-        self.refresh_metadata_and_indexes(ctx.registry.metadata);
-        self.setup_all_facet_subscribers(dispatch);
-        ctx
-          .registry
-          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
-            (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
-            |_, (sm, vh)| {
-              let mut guard = HashSet::new();
-
-              let existing_states = sm
-                .facets
-                .values()
-                .flat_map(|branches| branches.iter().cloned())
-                .collect::<Vec<_>>();
-
-              for state in &existing_states {
-                self.reconcile_transcendence(
-                  sm,
-                  state,
-                  FlowAction::Apply,
-                  Some(vh),
-                  &mut guard,
-                  ctx.event_bus,
-                  dispatch,
-                )?;
-              }
-
-              self.reconcile_inverse_transcendence_all(
-                sm,
-                Some(vh),
-                &mut guard,
-                ctx.event_bus,
-                dispatch,
-              )?;
-              self.save_facet_graph(sm)
-            },
-          )?;
-      }
-      _ => {}
+    if let Some(notifier) = &ctx.notifier {
+      notifier.notify()?;
     }
 
-    Ok(None)
+    if let Some(sm) = ctx.registry.singleton::<FacetGraph>(FacetGraph::KEY) {
+      let should_drop_scope = sm
+        .facets
+        .get(&name)
+        .map(|branches| branches.is_empty())
+        .unwrap_or(true);
+      if should_drop_scope {
+        let scope_name = GLOBAL_SCOPE_STORE
+          .lock()
+          .ok()
+          .and_then(|s| s.scope_for_state(name.as_str()));
+        if let Some(scope_name) = scope_name {
+          let _ = ScopeStore::remove_scope_global(scope_name.as_str());
+        }
+      }
+    }
+  }
+
+  fn impulse(&mut self, name: Ustr, #[optional] payload: serde_json::Value) {
+    let flow_payload = FlowPayload::from_json(payload);
+    let mut fields = HashMap::new();
+    fields.insert("name".to_string(), name.to_string());
+    fields.insert("payload".into(), format!("{flow_payload:?}"));
+    self.impulse(name.clone(), Some(flow_payload.clone()), ctx.event_bus)?;
+    let source = FlowInstance {
+      name,
+      payload: flow_payload,
+      r#type: FlowType::Impulse,
+    };
+    let mut emitted = HashSet::new();
+    let sm = ctx
+      .registry
+      .singleton_mut::<FacetGraph>(FacetGraph::KEY)
+      .ok_or(CoreError::InvalidState(
+        "state machine store not found".into(),
+      ))?;
+    log.log(LogLevel::Trace, "flow-runtime", "emitting signal", fields);
+    self.reconcile_impulse_transcendence(sm, &source, ctx.event_bus, &mut emitted);
+  }
+
+  fn bootstrap(&mut self) {
+    self.refresh_metadata_and_indexes(ctx.registry.metadata);
+    self.setup_all_facet_subscribers(dispatch);
+    ctx
+      .registry
+      .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+        (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
+        |_, (sm, vh)| {
+          let mut guard = HashSet::new();
+
+          let existing_states = sm
+            .facets
+            .values()
+            .flat_map(|branches| branches.iter().cloned())
+            .collect::<Vec<_>>();
+
+          for state in &existing_states {
+            self.reconcile_transcendence(
+              sm,
+              state,
+              FlowAction::Apply,
+              Some(vh),
+              &mut guard,
+              ctx.event_bus,
+              dispatch,
+            )?;
+          }
+
+          self.reconcile_inverse_transcendence_all(
+            sm,
+            Some(vh),
+            &mut guard,
+            ctx.event_bus,
+            dispatch,
+          )?;
+          self.save_facet_graph(sm)
+        },
+      )?;
   }
 }
 

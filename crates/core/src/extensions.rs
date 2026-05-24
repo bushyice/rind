@@ -10,6 +10,7 @@ use crate::{
   logging::LogHandle,
   prelude::InstanceRegistry,
   runtime::{RuntimeDispatcher, RuntimePayload},
+  types::Void,
 };
 
 thread_local! {
@@ -18,7 +19,7 @@ thread_local! {
 
 pub type ExtensionEnquire<R> = fn(name: &str) -> CoreResult<R>;
 
-pub type ExtensionAct<T> = fn(name: &str, input: &mut T) -> CoreResult<()>;
+pub type ExtensionAct<T> = fn(name: &str, input: &mut T) -> CoreResult<Void>;
 
 pub type ExtensionResolve<T> = fn(name: &str, input: T) -> CoreResult<T>;
 
@@ -141,9 +142,9 @@ impl ExtensionManager {
     Ok(results)
   }
 
-  pub fn act<T: 'static>(&self, name: &str, v: &mut T) -> CoreResult<()> {
+  pub fn act<T: 'static>(&self, name: &str, v: &mut T) -> CoreResult<Void> {
     let Some(exts) = self.act.get(&TypeId::of::<T>()) else {
-      return Ok(());
+      return Ok(Void);
     };
 
     for ext in exts.iter() {
@@ -152,7 +153,7 @@ impl ExtensionManager {
       }
     }
 
-    Ok(())
+    Ok(Void)
   }
 
   pub fn resolve<T: 'static>(&self, name: &str, v: T) -> CoreResult<T> {
@@ -194,15 +195,17 @@ impl ExtensionManager {
 
 #[cfg(test)]
 mod tests {
+  use crate::types::Void;
+
   use super::{Extension, ExtensionExecutionCtx, ExtensionManager};
 
   fn enquire_len(name: &str) -> crate::error::CoreResult<usize> {
     Ok(name.len())
   }
 
-  fn act_push(_name: &str, input: &mut Vec<String>) -> crate::error::CoreResult<()> {
+  fn act_push(_name: &str, input: &mut Vec<String>) -> crate::error::CoreResult<Void> {
     input.push("acted".to_string());
-    Ok(())
+    Ok(Void)
   }
 
   fn resolve_suffix(_name: &str, input: String) -> crate::error::CoreResult<String> {
