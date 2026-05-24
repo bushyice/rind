@@ -215,29 +215,30 @@ fn inject_networking(name: &str, mut metadata: Metadata) -> CoreResult<Metadata>
     "component" => Ok(metadata.of::<NetworkConfig>("network")),
     "built_in" => {
       metadata
-        .from_toml(
-          r#"
-          [[facet]]
-          name = "interface"
-          payload = "json"
-          branch = ["name"]
-
-          [[facet]]
-          name = "online"
-          payload = "none"
-
-          [[facet]]
-          name = "configured"
-          payload = "json"
-          branch = ["name"]
-
-          [[facet]]
-          name = "dns_ready"
-          payload = "none"
-      "#,
-          "net",
-        )
-        .ok();
+        .group("net")
+        .insert::<FlowFacet>(FlowFacetMetadata {
+          name: "interface".into(),
+          payload: FlowPayloadType::Json,
+          branch: Some(vec!["name".into()]),
+          ..Default::default()
+        })
+        .insert::<FlowFacet>(FlowFacetMetadata {
+          name: "online".into(),
+          payload: FlowPayloadType::None,
+          ..Default::default()
+        })
+        .insert::<FlowFacet>(FlowFacetMetadata {
+          name: "configured".into(),
+          payload: FlowPayloadType::Json,
+          branch: Some(vec!["name".into()]),
+          ..Default::default()
+        })
+        .insert::<FlowFacet>(FlowFacetMetadata {
+          name: "dns_ready".into(),
+          payload: FlowPayloadType::None,
+          ..Default::default()
+        })
+        .close();
       Ok(metadata)
     }
     _ => Ok(metadata),

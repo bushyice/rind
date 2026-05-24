@@ -5,7 +5,8 @@ use std::path::Path;
 
 use rind_core::prelude::*;
 
-use rind_flow::{FlowFacet, FlowImpulse};
+use rind_flow::{FlowFacet, FlowFacetMetadata, FlowImpulse, FlowImpulseMetadata};
+use rind_ipc::FlowPayloadType;
 use rind_primitives::mounts::Mount;
 use rind_primitives::prelude::{Permission, Variable};
 use rind_primitives::scopes::ScopeStore;
@@ -18,57 +19,62 @@ use std::collections::HashMap;
 use crate::loader::load_units_from;
 
 fn add_builtin_defs(metadata: &mut Metadata) {
-  // TODO: Switch from toml into a declarative method.
-  let builtin_toml = r#"
-[[facet]]
-name = "active"
-payload = "string"
-
-[[facet]]
-name = "inactive"
-payload = "string"
-
-[[facet]]
-name = "suspended"
-payload = "string"
-
-[[facet]]
-name = "user_session"
-payload = "json"
-branch = ["session_id"]
-
-[[facet]]
-name = "user_auto_login"
-payload = "json"
-branch = ["tty"]
-
-[[impulse]]
-name = "activate"
-payload = "string"
-
-[[impulse]]
-name = "deactivate"
-payload = "string"
-
-[[impulse]]
-name = "request_login"
-payload = "json"
-
-[[impulse]]
-name = "request_logout"
-payload = "json"
-
-[[impulse]]
-name = "boot"
-payload = "string"
-
-[[impulse]]
-name = "ready"
-payload = "none"
-
-"#;
-
-  let _ = metadata.from_toml(builtin_toml, "rind");
+  metadata
+    .group("rind")
+    // Facets
+    .insert::<FlowFacet>(FlowFacetMetadata {
+      name: "active".into(),
+      payload: FlowPayloadType::String,
+      ..Default::default()
+    })
+    .insert::<FlowFacet>(FlowFacetMetadata {
+      name: "inactive".into(),
+      payload: FlowPayloadType::String,
+      ..Default::default()
+    })
+    .insert::<FlowFacet>(FlowFacetMetadata {
+      name: "suspended".into(),
+      payload: FlowPayloadType::String,
+      ..Default::default()
+    })
+    .insert::<FlowFacet>(FlowFacetMetadata {
+      name: "user_session".into(),
+      payload: FlowPayloadType::Json,
+      branch: Some(vec!["session_id".into()]),
+      ..Default::default()
+    })
+    // Impulses
+    .insert::<FlowImpulse>(FlowImpulseMetadata {
+      name: "activate".into(),
+      payload: FlowPayloadType::String,
+      ..Default::default()
+    })
+    .insert::<FlowImpulse>(FlowImpulseMetadata {
+      name: "deactivate".into(),
+      payload: FlowPayloadType::String,
+      ..Default::default()
+    })
+    .insert::<FlowImpulse>(FlowImpulseMetadata {
+      name: "request_login".into(),
+      payload: FlowPayloadType::Json,
+      ..Default::default()
+    })
+    .insert::<FlowImpulse>(FlowImpulseMetadata {
+      name: "request_logout".into(),
+      payload: FlowPayloadType::Json,
+      ..Default::default()
+    })
+    .insert::<FlowImpulse>(FlowImpulseMetadata {
+      name: "ready".into(),
+      payload: FlowPayloadType::String,
+      ..Default::default()
+    })
+    .insert::<FlowImpulse>(FlowImpulseMetadata {
+      name: "boot".into(),
+      payload: FlowPayloadType::None,
+      ..Default::default()
+    })
+    .close();
 }
 
 pub fn create_units_metadata<P: AsRef<Path>>(

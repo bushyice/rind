@@ -158,7 +158,7 @@ impl InverseBranchingConfig {
   meta_fields(
     name, payload, stop_on, after, branch, auto_payload, subscribers, broadcast, permissions
   ),
-  derive_metadata(Debug, Clone)
+  derive_metadata(Debug, Clone, Default)
 )]
 pub struct FlowFacet {
   pub name: Ustr,
@@ -177,7 +177,7 @@ pub struct FlowFacet {
 #[model(
   meta_name = name,
   meta_fields(name, payload, after, branch, subscribers, broadcast, permissions),
-  derive_metadata(Debug, Clone)
+  derive_metadata(Debug, Clone, Default)
 )]
 pub struct FlowImpulse {
   pub name: Ustr,

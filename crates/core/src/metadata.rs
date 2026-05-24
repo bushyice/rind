@@ -27,6 +27,22 @@ pub struct Metadata {
   values: HashMap<Ustr, HashMap<TypeId, Arc<Box<dyn Any>>>>,
 }
 
+pub struct MetadataGroup<'a> {
+  metadata: &'a mut Metadata,
+  name: Ustr,
+}
+
+impl<'a> MetadataGroup<'a> {
+  pub fn insert<T: Model + 'static>(self, value: T::M) -> Self {
+    self.metadata.insert::<T>(self.name.clone(), value);
+    self
+  }
+
+  pub fn close(self) -> &'a mut Metadata {
+    self.metadata
+  }
+}
+
 impl Metadata {
   pub fn new(name: impl Into<Ustr>) -> Self {
     Self {
@@ -109,6 +125,25 @@ impl Metadata {
       .insert(type_id, Arc::new(parsed));
 
     Ok(Void)
+  }
+
+  pub fn group<'a>(&'a mut self, name: impl Into<Ustr>) -> MetadataGroup<'a> {
+    MetadataGroup {
+      name: name.into(),
+      metadata: self,
+    }
+  }
+
+  pub fn insert<T: Model + 'static>(&mut self, group: impl Into<Ustr>, value: T::M) -> &mut Self {
+    let type_id = TypeId::of::<T::M>();
+
+    self
+      .values
+      .entry(group.into())
+      .or_default()
+      .insert(type_id, Arc::new(Box::new(value)));
+
+    self
   }
 
   pub fn get_in_group<T: Model + 'static>(

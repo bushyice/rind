@@ -46,8 +46,8 @@ impl Orchestrator for TTYOrchestrator {
   }
 
   fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
-    ctx.dispatch("ttys", "bootstrap", Default::default())?;
-    ctx.dispatch("ttys", "watch_events", Default::default())?;
+    TTYRuntime::actions.bootstrap().orchestrate(ctx)?;
+    TTYRuntime::actions.watch_events().orchestrate(ctx)?;
 
     Ok(Void)
   }
@@ -76,8 +76,7 @@ impl Orchestrator for TTYPumpOrchestrator {
   }
 
   fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
-    ctx.dispatch("ttys", "drain_events", Default::default())?;
-
+    TTYRuntime::actions.drain_events().orchestrate(ctx)?;
     Ok(Void)
   }
 }
@@ -142,13 +141,10 @@ impl TTYRuntime {
     last: &str,
   ) -> CoreResult<Void> {
     if tty_name != last && self.has_login_required(sm, &last) {
-      dispatch.dispatch(
-        "flow",
-        "remove_facet",
-        FlowRuntimePayload::new("tty:login_required")
-          .payload(json!({ "tty": last.to_string() }))
-          .into(),
-      )?;
+      FlowRuntime::actions
+        .remove_facet("tty:login_required".into())
+        .payload(json!({ "tty": last.to_string() }))
+        .dispatch(dispatch)?;
     }
 
     if sm.facets.get("tty:taken").map_or(true, |x| {
@@ -161,13 +157,10 @@ impl TTYRuntime {
       })
     }) && !self.has_login_required(sm, &tty_name)
     {
-      dispatch.dispatch(
-        "flow",
-        "set_facet",
-        FlowRuntimePayload::new("tty:login_required")
-          .payload(json!({ "tty": tty_name.to_string() }))
-          .into(),
-      )?;
+      FlowRuntime::actions
+        .set_facet("tty:login_required".into())
+        .payload(json!({ "tty": tty_name.to_string() }))
+        .dispatch(dispatch)?;
     }
 
     Ok(Void)
@@ -179,6 +172,7 @@ impl TTYRuntime {
     tty_name: Ustr,
     take: bool,
   ) -> CoreResult<Void> {
+    // keep
     dispatch.dispatch(
       "flow",
       if take { "set_facet" } else { "remove_facet" },
@@ -189,202 +183,175 @@ impl TTYRuntime {
   }
 }
 
-impl Runtime for TTYRuntime {
-  fn id(&self) -> &str {
-    "ttys"
+#[runtime("ttys")]
+impl TTYRuntime {
+  fn watch_events() {
+    self.event_rx = Some(ctx.event_bus.subscribe::<FlowEvent>());
   }
 
-  fn handle(
-    &mut self,
-    action: &str,
-    mut payload: RuntimePayload,
-    ctx: &mut RuntimeContext<'_>,
-    dispatch: &RuntimeDispatcher,
-    log: &LogHandle,
-  ) -> Result<Option<RuntimePayload>, CoreError> {
-    match action {
-      "watch_events" => {
-        self.event_rx = Some(ctx.event_bus.subscribe::<FlowEvent>());
-
-        // TODO: move it own action
-        // but ig it saves on dispatch overhead
-        let ipcsrc = ctx.scope.get::<IpcSourcemap>().cloned().unwrap_or_default();
-        ipcsrc.register("tty", handle_ipc_tty, PERM_TTY);
-      }
-      "take" => {
-        let tty_name = payload.get::<Ustr>("tty")?;
-
-        log.log(
-          LogLevel::Info,
-          "ttys",
-          &format!("taking tty {tty_name}"),
-          Default::default(),
-        );
-        self.taken_state(dispatch, tty_name, true)?;
-      }
-      "return" => {
-        let tty_name = payload.get::<Ustr>("tty")?;
-
-        log.log(
-          LogLevel::Info,
-          "ttys",
-          &format!("returning tty {tty_name}"),
-          Default::default(),
-        );
-        self.taken_state(dispatch, tty_name, false)?;
-      }
-      "drain_events" => {
-        if let Some(rx) = &self.event_rx {
-          while let Some(w) = rx.try_recv() {
-            if w.name.as_str() == "rind:user_session" {
-              self.reconcile_login(
-                ctx
-                  .registry
-                  .singleton::<FacetGraph>(FacetGraph::KEY)
-                  .ok_or(CoreError::RuntimeStopped)?,
-                dispatch,
-                &self.active,
-                &self.active,
-              )?;
-            }
-          }
-        }
-      }
-      "bootstrap" => {
-        let current_tty = fs::read_to_string("/sys/class/tty/tty0/active")?
-          .trim()
-          .to_string();
-
-        self.active = current_tty.clone();
-
-        if let Some(target_name) = ctx
-          .registry
-          .singleton::<FacetGraph>(FacetGraph::KEY)
-          .and_then(|sm| sm.facets.get("tty:active"))
-          .and_then(|instances| instances.first())
-          .map(|x| x.payload.to_string_payload())
-        {
-          if target_name != current_tty {
-            let tty_num = target_name
-              .strip_prefix("tty")
-              .and_then(|n| n.parse::<u64>().ok())
-              .ok_or_else(|| {
-                CoreError::InvalidState(format!("Invalid TTY name: {:?}", target_name))
-              })?;
-
-            log.log(
-              LogLevel::Info,
-              "tty",
-              "switching tty",
-              [("tty".to_string(), current_tty)].into(),
-            );
-
-            self.switch_tty(tty_num)?;
-          }
-        }
-
-        let file =
-          File::open("/sys/class/tty/tty0/active").map_err(|e| CoreError::Custom(e.to_string()))?;
-
-        let fd = file.as_raw_fd();
-
-        ctx.resources.own(fd, OwnedFd::from(file));
-
-        ctx
-          .resources
-          .flag(fd, EpollFlags::EPOLLPRI | EpollFlags::EPOLLERR);
-
-        ctx.resources.action(fd, ("ttys", "on_switch"));
-
-        let sm = ctx
-          .registry
-          .singleton::<FacetGraph>(FacetGraph::KEY)
-          .ok_or(CoreError::RuntimeStopped)?;
-
-        match EXTENSIONS.with(|extensions| {
-          extensions
-            .get()
-            .expect("extension manager not initialized")
-            .resolve(
-              "boot",
-              TTYPayload::Taken(sm.facets.get("tty:taken").map_or(Default::default(), |x| {
-                x.iter()
-                  .map(|x| x.payload.to_string_payload().to_ustr())
-                  .collect()
-              })),
-            )
-        })? {
-          TTYPayload::Return(tty) => self.taken_state(dispatch, tty, false)?,
-          TTYPayload::Take(tty) => self.taken_state(dispatch, tty, true)?,
-          _ => {}
-        }
-
-        dispatch.dispatch("ttys", "reconcile", Default::default())?;
-      }
-      "reconcile" => {
-        let sm = ctx
-          .registry
-          .singleton::<FacetGraph>(FacetGraph::KEY)
-          .ok_or(CoreError::RuntimeStopped)?;
-        self.reconcile_login(sm, dispatch, &self.active, &self.active)?;
-      }
-      "on_switch" => {
-        let fd = payload.get::<i32>("fd")? as RawFd;
-        let bfd = unsafe { BorrowedFd::borrow_raw(fd) };
-        let _ = lseek(bfd, 0, Whence::SeekSet);
-        let last = self.active.clone();
-
-        let mut buf = [0u8; 32];
-        if let Ok(bytes_read) = read(bfd, &mut buf) {
-          let content = String::from_utf8_lossy(&buf[..bytes_read]);
-          let tty_name = content.trim();
-
-          self.active = tty_name.to_string();
-
-          let sm = ctx
-            .registry
-            .singleton::<FacetGraph>(FacetGraph::KEY)
-            .ok_or(CoreError::RuntimeStopped)?;
-
-          if sm.facets.get("tty:active").map_or(true, |x| {
-            !x.iter().any(|x| x.payload.to_string_payload() == tty_name)
-          }) {
-            dispatch.dispatch(
-              "flow",
-              "remove_facet",
-              FlowRuntimePayload::new("tty:active")
-                .payload(serde_json::Value::String(last.clone()))
-                .into(),
-            )?;
-
-            dispatch.dispatch(
-              "flow",
-              "set_facet",
-              FlowRuntimePayload::new("tty:active")
-                .payload(serde_json::Value::String(tty_name.to_string()))
-                .into(),
-            )?;
-          }
-
-          if tty_name == last {
-            return Ok(None);
-          }
-
-          dispatch.dispatch(
-            "flow",
-            "impulse",
-            FlowRuntimePayload::new("tty:switch")
-              .payload(serde_json::Value::String(tty_name.to_string()))
-              .into(),
+  fn drain_events() {
+    if let Some(rx) = &self.event_rx {
+      while let Some(w) = rx.try_recv() {
+        if w.name.as_str() == "rind:user_session" {
+          self.reconcile_login(
+            ctx
+              .registry
+              .singleton::<FacetGraph>(FacetGraph::KEY)
+              .ok_or(CoreError::RuntimeStopped)?,
+            dispatch,
+            &self.active,
+            &self.active,
           )?;
-
-          self.reconcile_login(sm, dispatch, tty_name, &last)?;
         }
       }
+    }
+  }
+
+  fn bootstrap() {
+    let current_tty = fs::read_to_string("/sys/class/tty/tty0/active")?
+      .trim()
+      .to_string();
+
+    self.active = current_tty.clone();
+
+    if let Some(target_name) = ctx
+      .registry
+      .singleton::<FacetGraph>(FacetGraph::KEY)
+      .and_then(|sm| sm.facets.get("tty:active"))
+      .and_then(|instances| instances.first())
+      .map(|x| x.payload.to_string_payload())
+    {
+      if target_name != current_tty {
+        let tty_num = target_name
+          .strip_prefix("tty")
+          .and_then(|n| n.parse::<u64>().ok())
+          .ok_or_else(|| CoreError::InvalidState(format!("Invalid TTY name: {:?}", target_name)))?;
+
+        log.log(
+          LogLevel::Info,
+          "tty",
+          "switching tty",
+          [("tty".to_string(), current_tty)].into(),
+        );
+
+        self.switch_tty(tty_num)?;
+      }
+    }
+
+    let file =
+      File::open("/sys/class/tty/tty0/active").map_err(|e| CoreError::Custom(e.to_string()))?;
+
+    let fd = file.as_raw_fd();
+
+    ctx.resources.own(fd, OwnedFd::from(file));
+
+    ctx
+      .resources
+      .flag(fd, EpollFlags::EPOLLPRI | EpollFlags::EPOLLERR);
+
+    ctx.resources.action(fd, ("ttys", "on_switch"));
+
+    let sm = ctx
+      .registry
+      .singleton::<FacetGraph>(FacetGraph::KEY)
+      .ok_or(CoreError::RuntimeStopped)?;
+
+    let ipcsrc = ctx.scope.get::<IpcSourcemap>().cloned().unwrap_or_default();
+    ipcsrc.register("tty", handle_ipc_tty, PERM_TTY);
+
+    match EXTENSIONS.with(|extensions| {
+      extensions
+        .get()
+        .expect("extension manager not initialized")
+        .resolve(
+          "boot",
+          TTYPayload::Taken(sm.facets.get("tty:taken").map_or(Default::default(), |x| {
+            x.iter()
+              .map(|x| x.payload.to_string_payload().to_ustr())
+              .collect()
+          })),
+        )
+    })? {
+      TTYPayload::Return(tty) => self.taken_state(dispatch, tty, false)?,
+      TTYPayload::Take(tty) => self.taken_state(dispatch, tty, true)?,
       _ => {}
     }
 
-    Ok(None)
+    self.__runtime_reconcile(payload, ctx, dispatch, log)?;
+  }
+
+  fn reconcile() {
+    let sm = ctx
+      .registry
+      .singleton::<FacetGraph>(FacetGraph::KEY)
+      .ok_or(CoreError::RuntimeStopped)?;
+    self.reconcile_login(sm, dispatch, &self.active, &self.active)?;
+  }
+
+  fn take(tty: Ustr) {
+    log.log(
+      LogLevel::Info,
+      "ttys",
+      &format!("taking tty {tty}"),
+      Default::default(),
+    );
+    self.taken_state(dispatch, tty, true)?;
+  }
+
+  fn return_tty(tty: Ustr) {
+    log.log(
+      LogLevel::Info,
+      "ttys",
+      &format!("returning tty {tty}"),
+      Default::default(),
+    );
+
+    self.taken_state(dispatch, tty, false)?;
+  }
+
+  fn on_switch(fd: i32) {
+    let fd = fd as RawFd;
+    let bfd = unsafe { BorrowedFd::borrow_raw(fd) };
+    let _ = lseek(bfd, 0, Whence::SeekSet);
+    let last = self.active.clone();
+
+    let mut buf = [0u8; 32];
+    if let Ok(bytes_read) = read(bfd, &mut buf) {
+      let content = String::from_utf8_lossy(&buf[..bytes_read]);
+      let tty_name = content.trim();
+
+      self.active = tty_name.to_string();
+
+      let sm = ctx
+        .registry
+        .singleton::<FacetGraph>(FacetGraph::KEY)
+        .ok_or(CoreError::RuntimeStopped)?;
+
+      if sm.facets.get("tty:active").map_or(true, |x| {
+        !x.iter().any(|x| x.payload.to_string_payload() == tty_name)
+      }) {
+        FlowRuntime::actions
+          .remove_facet("tty:active".into())
+          .payload(serde_json::Value::String(last.clone()))
+          .dispatch(dispatch)?;
+
+        FlowRuntime::actions
+          .set_facet("tty:active".into())
+          .payload(serde_json::Value::String(tty_name.to_string()))
+          .dispatch(dispatch)?;
+      }
+
+      if tty_name == last {
+        return Ok(None);
+      }
+
+      FlowRuntime::actions
+        .impulse("tty:switch".into())
+        .payload(serde_json::Value::String(tty_name.to_string()))
+        .dispatch(dispatch)?;
+
+      self.reconcile_login(sm, dispatch, tty_name, &last)?;
+    }
   }
 }
 
@@ -430,36 +397,33 @@ fn inject_builtin(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {
   match name {
     "built_in" => {
       metadata
-        .from_toml(
-          r#"
-          [[variable]]
-          name = "ttys"
-          default = ["/dev/tty1", "/dev/tty2"]
-
-          [[facet]]
-          name = "login_required"
-          payload = "json"
-          branch = ["tty"]
-          stop-on = [{
-            name = "rind:user_session",
-            branch = "tty"
-          }]
-
-          [[impulse]]
-          name = "switch"
-          payload = "string"
-
-          [[facet]]
-          name = "taken"
-          payload = "string"
-
-          [[facet]]
-          name = "active"
-          payload = "string"
-      "#,
-          "tty",
-        )
-        .ok();
+        .group("tty")
+        .insert::<FlowFacet>(FlowFacetMetadata {
+          name: "login_required".into(),
+          payload: FlowPayloadType::Json,
+          branch: Some(vec!["tty".into()]),
+          stop_on: Some(vec![InverseBranchingConfig::Detailed {
+            name: "rind:user_session".into(),
+            branch: Some("tty".into()),
+          }]),
+          ..Default::default()
+        })
+        .insert::<FlowFacet>(FlowFacetMetadata {
+          name: "taken".into(),
+          payload: FlowPayloadType::String,
+          ..Default::default()
+        })
+        .insert::<FlowFacet>(FlowFacetMetadata {
+          name: "active".into(),
+          payload: FlowPayloadType::String,
+          ..Default::default()
+        })
+        .insert::<FlowImpulse>(FlowImpulseMetadata {
+          name: "switch".into(),
+          payload: FlowPayloadType::String,
+          ..Default::default()
+        })
+        .close();
       Ok(metadata)
     }
     _ => Ok(metadata),
