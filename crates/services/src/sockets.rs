@@ -440,8 +440,7 @@ impl SocketRuntime {
       )?;
   }
 
-  fn stop_for_scope(&mut self, scope: String) {
-    let scope_ustr = scope.to_ustr();
+  fn stop_for_scope(&mut self, scope: Ustr) {
     ctx
       .registry
       .singleton_handle::<(&mut SocketRegistry, &mut VariableHeap), _>(
@@ -449,7 +448,7 @@ impl SocketRuntime {
         |registry, (sr, _vh)| {
           for (group, soc) in registry
             .metadata
-            .items::<Socket>(scope_ustr.clone())
+            .items::<Socket>(scope.clone())
             .unwrap_or_default()
           {
             let full_name = rslvns!(u group, soc.name);

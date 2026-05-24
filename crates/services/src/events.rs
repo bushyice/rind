@@ -1,7 +1,7 @@
 use rind_core::prelude::*;
 use rind_flow::{EmitTrigger, FlowType};
 use rind_ipc::FlowPayload;
-use rind_primitives::scopes::ScopeStore;
+use rind_primitives::{mounts::MountRuntime, scopes::ScopeStore};
 
 use crate::{ServiceRuntime, SocketRuntime};
 
@@ -29,6 +29,10 @@ impl EventsRuntime {
       SocketRuntime::actions.setup_all().dispatch(dispatch)?;
 
       for scope in ss.pending_scopes.drain() {
+        MountRuntime::actions
+          .mount_all_for(scope.clone())
+          .dispatch(dispatch)?;
+
         EventsRuntime::actions
           .evaluate_triggers()
           .scope(scope)
@@ -56,14 +60,18 @@ impl EventsRuntime {
     if let Some(rx) = &self.event_rx {
       while let Some(w) = rx.try_recv() {
         if w.name.as_str() == "rind:terminate_scope" {
-          let scope = w.payload.as_str().unwrap_or_default().to_string();
+          let scope = w.payload.as_str().unwrap_or_default().to_ustr();
 
           ServiceRuntime::actions
             .stop_for_scope(scope.clone())
             .dispatch(dispatch)?;
 
           SocketRuntime::actions
-            .stop_for_scope(scope)
+            .stop_for_scope(scope.clone())
+            .dispatch(dispatch)?;
+
+          MountRuntime::actions
+            .unmount_all_for(scope)
             .dispatch(dispatch)?;
         } else {
           trigger = false;

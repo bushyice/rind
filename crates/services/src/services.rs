@@ -2795,8 +2795,7 @@ impl ServiceRuntime {
     }
   }
 
-  fn stop_for_scope(&mut self, scope: String) {
-    let scope_ustr = scope.to_ustr();
+  fn stop_for_scope(&mut self, scope: Ustr) {
     let notifier = ctx.notifier.clone();
 
     ctx
@@ -2806,12 +2805,12 @@ impl ServiceRuntime {
         |registry, (sm, _vh)| {
           for (group, svc) in registry
             .metadata
-            .items::<Service>(scope_ustr.clone())
+            .items::<Service>(scope.clone())
             .unwrap_or_default()
           {
             let full_name = rslvns!(u group, svc.name);
             self.stop_service(
-              registry.as_one_mut::<Service>(scope_ustr.clone(), full_name.clone())?,
+              registry.as_one_mut::<Service>(scope.clone(), full_name.clone())?,
               StopMode::ForceKill,
               log,
               dispatch,

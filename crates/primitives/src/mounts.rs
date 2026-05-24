@@ -12,7 +12,7 @@ use nix::{
 };
 use rind_core::prelude::*;
 
-#[model(meta_name = target, meta_fields(target, source, fstype, flags, data, create, after), derive_metadata(Debug))]
+#[model(meta_name = target, meta_fields(target, source, fstype, flags, data, create, after, rind_broadcast), derive_metadata(Debug))]
 pub struct Mount {
   pub source: Option<Ustr>,
   pub target: Ustr,
@@ -21,6 +21,8 @@ pub struct Mount {
   pub data: Option<String>,
   pub create: Option<bool>,
   pub after: Option<Vec<Ustr>>,
+  #[serde(default)]
+  pub rind_broadcast: bool,
   pub is_mounted: bool,
 }
 
@@ -79,26 +81,31 @@ impl MountRuntime {
       );
     }
 
-    EXTENSIONS
-      .with(|extensions| {
-        extensions
-          .get()
-          .expect("extension manager not initialized")
-          .resolve("mount", ExtensionExecutionCtx::new(target.clone()))
-      })?
-      .dispatch(Some(dispatch), Some(log), Some(registry))?;
+    if target.rind_broadcast
+      || (target.fstype.is_some()
+        && matches!(&target.fstype, Some(fstype) if &**fstype == "devtmpfs" || &**fstype == "sysfs" || &**fstype == "proc"))
+    {
+      EXTENSIONS
+        .with(|extensions| {
+          extensions
+            .get()
+            .expect("extension manager not initialized")
+            .resolve("mount", ExtensionExecutionCtx::new(target.clone()))
+        })?
+        .dispatch(Some(dispatch), Some(log), Some(registry))?;
+    }
 
     Ok(Void)
   }
 
   pub fn mount_units(
     &self,
-    mounts: Vec<(String, Arc<MountMetadata>)>,
+    mounts: Vec<(Ustr, Arc<MountMetadata>)>,
     log: &LogHandle,
     dispatch: &RuntimeDispatcher,
     registry: &mut InstanceRegistry<'_>,
   ) -> CoreResult<Void> {
-    let mut mounted: HashSet<String> = HashSet::new();
+    let mut mounted: HashSet<Ustr> = HashSet::new();
     let mut pending = Vec::new();
 
     for (idx, (unit_name, mnt)) in mounts.iter().enumerate() {
@@ -107,7 +114,7 @@ impl MountRuntime {
         pending.push((format!("{}:{}", unit_name, mnt.target), afters.clone(), idx));
       } else {
         self.mount_target(mnt.clone(), log, dispatch, registry)?;
-        mounted.insert(id.to_string());
+        mounted.insert(id);
       }
     }
 
@@ -118,7 +125,7 @@ impl MountRuntime {
         if afters.iter().all(|a| mounted.contains(a.as_str())) {
           if let Some((_, mnt)) = mounts.get(*idx) {
             let _ = self.mount_target(mnt.clone(), log, dispatch, registry);
-            mounted.insert(mount_name.clone());
+            mounted.insert(mount_name.to_ustr());
             progress = true;
           }
           false
@@ -140,6 +147,76 @@ impl MountRuntime {
         pending
           .iter()
           .map(|x| (x.0.clone(), x.1.join(",")))
+          .collect(),
+      );
+    }
+
+    Ok(Void)
+  }
+
+  pub fn unmount_units(
+    &self,
+    mounts: Vec<(Ustr, Arc<MountMetadata>)>,
+    log: &LogHandle,
+  ) -> CoreResult<Void> {
+    let mut unmounted: HashSet<Ustr> = HashSet::new();
+    let mut pending = Vec::new();
+
+    let mut dependents: HashMap<Ustr, Vec<Ustr>> = HashMap::new();
+
+    for (_, mnt) in mounts.iter() {
+      let target = mnt.target.clone();
+
+      if let Some(afters) = &mnt.after {
+        for after in afters {
+          dependents
+            .entry(after.clone())
+            .or_default()
+            .push(target.clone());
+        }
+      }
+    }
+
+    for (idx, (_, mnt)) in mounts.iter().enumerate() {
+      let target = mnt.target.clone();
+
+      if let Some(deps) = dependents.get(&target) {
+        pending.push((target, deps.clone(), idx));
+      } else {
+        self.umount_target(mnt.clone());
+        unmounted.insert(target);
+      }
+    }
+
+    loop {
+      let mut progress = false;
+
+      pending.retain(|(target, deps, idx)| {
+        if deps.iter().all(|d| unmounted.contains(d.as_str())) {
+          if let Some((_, mnt)) = mounts.get(*idx) {
+            self.umount_target(mnt.clone());
+            unmounted.insert(target.clone());
+            progress = true;
+          }
+          false
+        } else {
+          true
+        }
+      });
+
+      if !progress {
+        break;
+      }
+    }
+
+    if !pending.is_empty() {
+      log.log(
+        LogLevel::Error,
+        "mount-runtime",
+        "unresolved reverse dependencies",
+        pending
+          .iter()
+          .map(|x| (x.0.to_string(), x.1.join(",")))
           .collect(),
       );
     }
@@ -213,7 +290,7 @@ impl MountRuntime {
   }
 
   fn mount_all(&mut self) {
-    let mut all_mounts: Vec<(String, Arc<MountMetadata>)> = Vec::new();
+    let mut all_mounts = Vec::new();
     for meta_name in ctx.registry.metadata.metadata_names() {
       let Some(m) = ctx.registry.metadata.metadata(meta_name.clone()) else {
         continue;
@@ -225,11 +302,35 @@ impl MountRuntime {
           .group_items::<Mount>(meta_name.clone(), group.clone())
         {
           for mnt in mounts {
-            all_mounts.push((group.to_string(), mnt));
+            all_mounts.push((group.clone(), mnt));
           }
         }
       }
     }
     self.mount_units(all_mounts, log, dispatch, &mut ctx.registry)?;
+  }
+
+  fn mount_all_for(&mut self, scope: Ustr) {
+    self.mount_units(
+      ctx
+        .registry
+        .metadata
+        .items::<Mount>(scope)
+        .unwrap_or_default(),
+      log,
+      dispatch,
+      &mut ctx.registry,
+    )?;
+  }
+
+  fn unmount_all_for(&mut self, scope: Ustr) {
+    self.unmount_units(
+      ctx
+        .registry
+        .metadata
+        .items::<Mount>(scope)
+        .unwrap_or_default(),
+      log,
+    )?;
   }
 }
