@@ -136,12 +136,17 @@ impl Metadata {
 
   pub fn insert<T: Model + 'static>(&mut self, group: impl Into<Ustr>, value: T::M) -> &mut Self {
     let type_id = TypeId::of::<T::M>();
+    let group = group.into();
+    let grouped = self.values.entry(group).or_default();
 
-    self
-      .values
-      .entry(group.into())
-      .or_default()
-      .insert(type_id, Arc::new(Box::new(value)));
+    let mut items = grouped
+      .get(&type_id)
+      .and_then(|v| v.downcast_ref::<Vec<Arc<T::M>>>() )
+      .cloned()
+      .unwrap_or_default();
+    items.push(Arc::new(value));
+
+    grouped.insert(type_id, Arc::new(Box::new(items)));
 
     self
   }

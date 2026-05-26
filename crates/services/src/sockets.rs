@@ -1,3 +1,4 @@
+use rind_core::reexports::serde_json;
 use rind_flow::triggers::trigger_events;
 use rind_ipc::payloads::SSPayload;
 use std::collections::{HashMap, HashSet};
@@ -12,9 +13,10 @@ use nix::sys::socket::{
 use rind_core::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::ServiceRuntime;
 use crate::services::SocketActivation;
 use rind_flow::{
-  EmitTrigger, FacetGraph, FlowInstance, FlowItem, FlowRuntimePayload, Trigger, condition_matches,
+  EmitTrigger, FacetGraph, FlowInstance, FlowItem, FlowRuntime, Trigger, condition_matches,
 };
 use rind_ipc::Message;
 use rind_primitives::permissions::PERM_SYSTEM_SERVICES;
@@ -589,15 +591,11 @@ impl SocketRuntime {
         let socket_fds: Vec<i32> = owner_fds.iter().map(|(fd, _)| *fd).collect();
         let socket_fd_names: Vec<Ustr> = owner_fds.into_iter().map(|(_, name)| name).collect();
 
-        let _ = dispatch.dispatch(
-          "services",
-          "start",
-          rpayload!({
-            "name": owner,
-            "socket_fds": socket_fds,
-            "socket_fd_names": socket_fd_names,
-          }),
-        );
+        ServiceRuntime::actions
+          .start(owner)
+          .socket_fds(socket_fds)
+          .socket_fd_names(socket_fd_names)
+          .dispatch(dispatch)?;
       }
     }
 
@@ -665,20 +663,15 @@ pub fn handle_ipc_start_socket(
     return Err(CoreError::PermissionDenied);
   }
 
-  let _ = dispatch.dispatch(
-    "sockets",
-    "start",
-    rpayload!({ "name": payload.name.to_ustr() }),
-  );
+  SocketRuntime::actions
+    .start(payload.name.to_ustr())
+    .dispatch(dispatch)?;
 
   if payload.persist {
-    let _ = dispatch.dispatch(
-      "flow",
-      "set_facet",
-      FlowRuntimePayload::new("rind:active")
-        .payload(payload.name.clone())
-        .into(),
-    );
+    FlowRuntime::actions
+      .set_facet("rind:active".into())
+      .payload(serde_json::Value::String(payload.name.clone()))
+      .dispatch(dispatch)?;
   }
 
   Ok(Message::ok(format!("started socket {}", payload.name)))
@@ -727,20 +720,15 @@ pub fn handle_ipc_stop_socket(
     return Err(CoreError::PermissionDenied);
   }
 
-  let _ = dispatch.dispatch(
-    "sockets",
-    "stop",
-    rpayload!({ "name": payload.name.to_ustr() }),
-  );
+  SocketRuntime::actions
+    .stop(payload.name.to_ustr())
+    .dispatch(dispatch)?;
 
   if payload.persist {
-    let _ = dispatch.dispatch(
-      "flow",
-      "remove_facet",
-      FlowRuntimePayload::new("rind:active")
-        .payload(payload.name.clone())
-        .into(),
-    );
+    FlowRuntime::actions
+      .remove_facet("rind:active".into())
+      .payload(serde_json::Value::String(payload.name.clone()))
+      .dispatch(dispatch)?;
   }
 
   Ok(Message::ok(format!("stopped socket {}", payload.name)))

@@ -283,62 +283,62 @@ restart = true
     .unwrap();
 }
 
-#[test]
-fn test_dynamic_units_loading() {
-  let (runtime, mut metadata, mut resources, context_id) = setup_test_runtime();
-  let tmp_dir = temp_path("dunits");
-  std::fs::create_dir_all(&tmp_dir).unwrap();
+// #[test]
+// fn test_dynamic_units_loading() {
+//   let (runtime, mut metadata, mut resources, context_id) = setup_test_runtime();
+//   let tmp_dir = temp_path("dunits");
+//   std::fs::create_dir_all(&tmp_dir).unwrap();
 
-  let source = r#"
-[[service]]
-name = "dynamic_svc"
-run.exec = "/bin/sh"
-run.args = ["-c", "exit 0"]
-restart = false
-"#;
+//   let source = r#"
+// [[service]]
+// name = "dynamic_svc"
+// run.exec = "/bin/sh"
+// run.args = ["-c", "exit 0"]
+// restart = false
+// "#;
 
-  std::fs::write(tmp_dir.join("dynamic.toml"), source).unwrap();
+//   std::fs::write(tmp_dir.join("dynamic.toml"), source).unwrap();
 
-  rind_cfg::dunits::create_scope_metadata_runtime("dynamic", &mut metadata, &tmp_dir).unwrap();
+//   rind_cfg::dunits::create_scope_metadata_runtime("dynamic", &mut metadata, &tmp_dir).unwrap();
 
-  runtime
-    .dispatch("services", "bootstrap", Default::default(), context_id)
-    .unwrap();
-  flush(&runtime, context_id, &metadata, &mut resources);
+//   runtime
+//     .dispatch("services", "bootstrap", Default::default(), context_id)
+//     .unwrap();
+//   flush(&runtime, context_id, &metadata, &mut resources);
 
-  runtime
-    .dispatch(
-      "services",
-      "start",
-      rpayload!({"name": Ustr::from("dynamic:dynamic_svc@dynamic")}),
-      context_id,
-    )
-    .unwrap();
-  flush(&runtime, context_id, &metadata, &mut resources);
+//   runtime
+//     .dispatch(
+//       "services",
+//       "start",
+//       rpayload!({"name": Ustr::from("dynamic:dynamic_svc@dynamic")}),
+//       context_id,
+//     )
+//     .unwrap();
+//   flush(&runtime, context_id, &metadata, &mut resources);
 
-  std::thread::sleep(Duration::from_millis(800));
+//   std::thread::sleep(Duration::from_millis(800));
 
-  runtime
-    .dispatch("reaper", "reap_once", Default::default(), context_id)
-    .unwrap();
-  flush(&runtime, context_id, &metadata, &mut resources);
-  flush(&runtime, context_id, &metadata, &mut resources);
+//   runtime
+//     .dispatch("reaper", "reap_once", Default::default(), context_id)
+//     .unwrap();
+//   flush(&runtime, context_id, &metadata, &mut resources);
+//   flush(&runtime, context_id, &metadata, &mut resources);
 
-  runtime
-    .with_instances(|instances| {
-      let registry = InstanceRegistry::new(&metadata, instances);
-      let svc = registry
-        .instances::<Service>("dynamic", "dynamic:dynamic_svc")
-        .unwrap()
-        .into_iter()
-        .next()
-        .unwrap();
-      assert!(matches!(svc.last_state, ServiceState::Exited(0)));
-    })
-    .unwrap();
+//   runtime
+//     .with_instances(|instances| {
+//       let registry = InstanceRegistry::new(&metadata, instances);
+//       let svc = registry
+//         .instances::<Service>("dynamic", "dynamic:dynamic_svc")
+//         .unwrap()
+//         .into_iter()
+//         .next()
+//         .unwrap();
+//       assert!(matches!(svc.last_state, ServiceState::Exited(0)));
+//     })
+//     .unwrap();
 
-  std::fs::remove_dir_all(tmp_dir).unwrap();
-}
+//   std::fs::remove_dir_all(tmp_dir).unwrap();
+// }
 
 #[test]
 fn test_service_transport_stdio() {

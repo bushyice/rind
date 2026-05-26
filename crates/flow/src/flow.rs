@@ -6,7 +6,6 @@ use rind_primitives::scopes::GLOBAL_SCOPE_STORE;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use rind_core::prelude::*;
 use rind_core::reexports::*;
@@ -346,8 +345,6 @@ impl FacetGraph {
 }
 
 pub struct FlowRuntime {
-  facet_defs: HashMap<Ustr, Arc<FlowFacetMetadata>>,
-  impulse_defs: HashMap<Ustr, Arc<FlowImpulseMetadata>>,
   inverse_transcendence_index: HashMap<Ustr, HashSet<Ustr>>,
   transcendence_index: HashMap<Ustr, HashSet<Ustr>>,
 }
@@ -355,8 +352,6 @@ pub struct FlowRuntime {
 impl Default for FlowRuntime {
   fn default() -> Self {
     Self {
-      facet_defs: HashMap::new(),
-      impulse_defs: HashMap::new(),
       inverse_transcendence_index: HashMap::new(),
       transcendence_index: HashMap::new(),
     }
@@ -424,8 +419,12 @@ impl FlowRuntime {
     }
   }
 
-  fn setup_all_facet_subscribers(&self, dispatch: &RuntimeDispatcher) {
-    for (name, def) in &self.facet_defs {
+  fn setup_all_facet_subscribers(&self, metadata: &MetadataRegistry, dispatch: &RuntimeDispatcher) {
+    let Some(items) = metadata.items::<FlowFacet>("*") else {
+      return;
+    };
+    for (group, def) in items {
+      let name = Ustr::from(format!("{group}:{}", def.name));
       if let Some(subscribers) = def.subscribers.as_deref() {
         for subscriber in subscribers {
           self.setup_subscriber_endpoint(dispatch, name.as_str(), subscriber);
@@ -434,10 +433,13 @@ impl FlowRuntime {
     }
   }
 
-  fn facet_subscribers_for(&self, name: &Ustr) -> Option<Vec<TransportMethod>> {
-    self
-      .facet_defs
-      .get(name)
+  fn facet_subscribers_for(
+    &self,
+    metadata: &MetadataRegistry,
+    name: &Ustr,
+  ) -> Option<Vec<TransportMethod>> {
+    metadata
+      .find::<FlowFacet>("*", name.as_str())
       .and_then(|d| d.subscribers.clone())
   }
 
@@ -457,6 +459,7 @@ impl FlowRuntime {
 
   fn set_facet(
     &mut self,
+    metadata: &MetadataRegistry,
     sm: &mut FacetGraph,
     name: impl Into<Ustr>,
     payload: Option<FlowPayload>,
@@ -473,22 +476,9 @@ impl FlowRuntime {
     }
     guard.insert(guard_key.clone());
 
-    let def = self
-      .facet_defs
-      .get(&name)
-      .or_else(|| {
-        let item_name = name
-          .as_str()
-          .split_once(':')
-          .map(|(_, n)| n)
-          .unwrap_or(name.as_str());
-        self
-          .facet_defs
-          .iter()
-          .find(|(_, d)| d.name.as_str() == item_name)
-          .map(|(_, d)| d)
-      })
-      .ok_or_else(|| CoreError::InvalidState(format!("state not found: {name}")))?;
+    let def = metadata
+      .find::<FlowFacet>("*", name.as_str())
+      .ok_or_else(|| CoreError::InvalidState(format!("facet not found: {name}")))?;
 
     let flow_payload = payload.unwrap_or(FlowPayload::None(false));
     if !self.payload_type_ok(def.payload, &flow_payload) {
@@ -562,6 +552,7 @@ impl FlowRuntime {
     }
 
     self.reconcile_transcendence(
+      metadata,
       sm,
       &instance,
       FlowAction::Apply,
@@ -571,6 +562,7 @@ impl FlowRuntime {
       dispatch,
     )?;
     self.reconcile_inverse_transcendence_for_source(
+      metadata,
       sm,
       &instance,
       FlowAction::Apply,
@@ -586,6 +578,7 @@ impl FlowRuntime {
 
   fn remove_facet(
     &mut self,
+    metadata: &MetadataRegistry,
     sm: &mut FacetGraph,
     name: &str,
     filter: Option<FlowMatchOperation>,
@@ -621,7 +614,7 @@ impl FlowRuntime {
           action: FlowAction::Revert,
           flow_type: FlowEventType::Facet,
         });
-        let subscribers = self.facet_subscribers_for(&name.to_ustr());
+        let subscribers = self.facet_subscribers_for(metadata, &name.to_ustr());
         self.publish_to_facet_subscribers(
           dispatch,
           branch.name.as_str(),
@@ -631,6 +624,7 @@ impl FlowRuntime {
         );
 
         self.reconcile_transcendence(
+          metadata,
           sm,
           &branch,
           FlowAction::Revert,
@@ -640,6 +634,7 @@ impl FlowRuntime {
           dispatch,
         )?;
         let _ = self.reconcile_inverse_transcendence_for_source(
+          metadata,
           sm,
           &branch,
           FlowAction::Revert,
@@ -661,27 +656,14 @@ impl FlowRuntime {
 
   fn impulse(
     &self,
+    metadata: &MetadataRegistry,
     name: impl Into<Ustr>,
     payload: Option<FlowPayload>,
     event_bus: &EventBus,
   ) -> Result<Void, CoreError> {
     let name = name.into();
-    let def = self
-      .impulse_defs
-      .get(&name)
-      .or_else(|| {
-        let item_name = name
-          .as_str()
-          .split_once(':')
-          .map(|(_, n)| n)
-          .unwrap_or(name.as_str());
-        self
-          .impulse_defs
-          .iter()
-          .find(|(_, d)| d.name.as_str() == item_name)
-          .map(|(_, d)| d)
-      })
-      .map(|d| d.clone())
+    let def = metadata
+      .find::<FlowImpulse>("*", name.as_str())
       .ok_or_else(|| CoreError::InvalidState(format!("signal not found: {name}")))?;
 
     let flow_payload = payload.unwrap_or(FlowPayload::None(false));
@@ -703,15 +685,19 @@ impl FlowRuntime {
 
   fn reconcile_impulse_transcendence(
     &self,
+    metadata: &MetadataRegistry,
     sm: &FacetGraph,
     source: &FlowInstance,
     event_bus: &EventBus,
     emitted: &mut HashSet<Ustr>,
   ) {
-    let dependents: Vec<(Ustr, FlowPayload)> = self
-      .impulse_defs
-      .iter()
-      .filter_map(|(full_name, def)| {
+    let Some(all_impulses) = metadata.items::<FlowImpulse>("*") else {
+      return;
+    };
+    let dependents: Vec<(Ustr, FlowPayload)> = all_impulses
+      .into_iter()
+      .filter_map(|(group, def)| {
+        let full_name = Ustr::from(format!("{group}:{}", def.name));
         let after = def.after.as_ref()?;
         if !after.iter().any(|cond| check_condition(cond, source)) {
           return None;
@@ -727,7 +713,7 @@ impl FlowRuntime {
         } else {
           source.payload.clone()
         };
-        Some((full_name.clone(), payload))
+        Some((full_name, payload))
       })
       .collect();
 
@@ -737,12 +723,13 @@ impl FlowRuntime {
         continue;
       }
       emitted.insert(sig);
-      let _ = self.impulse(signal_name, Some(payload), event_bus);
+      let _ = self.impulse(metadata, signal_name, Some(payload), event_bus);
     }
   }
 
   fn reconcile_transcendence(
     &mut self,
+    metadata: &MetadataRegistry,
     sm: &mut FacetGraph,
     source: &FlowInstance,
     action: FlowAction,
@@ -756,7 +743,7 @@ impl FlowRuntime {
     };
 
     for full_name in targets {
-      let Some(def) = self.facet_defs.get(&full_name) else {
+      let Some(def) = metadata.find::<FlowFacet>("*", full_name.as_str()) else {
         continue;
       };
 
@@ -768,7 +755,7 @@ impl FlowRuntime {
       }
 
       let source_payload = if def.auto_payload.is_some() {
-        let payloads = auto_payloads_for(def, Some(&source.payload), variables);
+        let payloads = auto_payloads_for(&def, Some(&source.payload), variables);
         let Some(first) = payloads.first().cloned() else {
           continue;
         };
@@ -777,7 +764,7 @@ impl FlowRuntime {
         source.payload.clone()
       };
 
-      let Some(payload) = transcendent_payload_for(def, &source_payload) else {
+      let Some(payload) = transcendent_payload_for(&def, &source_payload) else {
         continue;
       };
 
@@ -787,6 +774,7 @@ impl FlowRuntime {
 
       match action {
         FlowAction::Apply => self.set_facet(
+          metadata,
           sm,
           full_name,
           Some(payload),
@@ -796,6 +784,7 @@ impl FlowRuntime {
           dispatch,
         )?,
         FlowAction::Revert => self.remove_facet(
+          metadata,
           sm,
           &full_name,
           payload_to_filter(&payload),
@@ -835,6 +824,7 @@ impl FlowRuntime {
 
   fn reconcile_inverse_transcendence_for_source(
     &mut self,
+    metadata: &MetadataRegistry,
     sm: &mut FacetGraph,
     source: &FlowInstance,
     action: FlowAction,
@@ -849,7 +839,7 @@ impl FlowRuntime {
     let target_names: Vec<Ustr> = targets.iter().cloned().collect();
 
     for full_name in target_names {
-      let Some(def) = self.facet_defs.get(&full_name).cloned() else {
+      let Some(def) = metadata.find::<FlowFacet>("*", full_name.as_str()) else {
         continue;
       };
       let Some(deps): Option<Vec<InverseBranchingConfig>> = def.stop_on.clone() else {
@@ -904,6 +894,7 @@ impl FlowRuntime {
 
         if should_activate && !currently_active {
           self.set_facet(
+            metadata,
             sm,
             full_name.clone(),
             Some(payload.clone()),
@@ -914,6 +905,7 @@ impl FlowRuntime {
           )?;
         } else if !should_activate && currently_active {
           self.remove_facet(
+            metadata,
             sm,
             full_name.as_str(),
             payload_to_filter(&payload),
@@ -931,6 +923,7 @@ impl FlowRuntime {
 
   fn reconcile_inverse_transcendence_all(
     &mut self,
+    metadata: &MetadataRegistry,
     sm: &mut FacetGraph,
     variables: Option<&VariableHeap>,
     guard: &mut HashSet<Ustr>,
@@ -945,6 +938,7 @@ impl FlowRuntime {
         r#type: FlowType::Facet,
       };
       self.reconcile_inverse_transcendence_for_source(
+        metadata,
         sm,
         &source_instance,
         FlowAction::Revert,
@@ -958,53 +952,18 @@ impl FlowRuntime {
     Ok(Void)
   }
 
-  fn collect_defs(
-    &self,
-    metadata: &MetadataRegistry,
-  ) -> (
-    HashMap<Ustr, Arc<FlowFacetMetadata>>,
-    HashMap<Ustr, Arc<FlowImpulseMetadata>>,
-  ) {
-    let mut state_defs = HashMap::new();
-    let mut signal_defs = HashMap::new();
-
-    for meta_name in metadata.metadata_names() {
-      let Some(m) = metadata.metadata(meta_name.clone()) else {
-        continue;
-      };
-      for group in m.groups() {
-        if let Some(states) = metadata.group_items::<FlowFacet>(meta_name.clone(), group.clone()) {
-          for s in states {
-            let key = Ustr::from(format!("{group}:{}@{}", s.name, meta_name));
-            state_defs.insert(key.clone(), s.clone());
-            state_defs.insert(Ustr::from(format!("{group}:{}", s.name)), s);
-          }
-        }
-        if let Some(signals) = metadata.group_items::<FlowImpulse>(meta_name.clone(), group.clone())
-        {
-          for s in signals {
-            let key = Ustr::from(format!("{group}:{}@{}", s.name, meta_name));
-            signal_defs.insert(key.clone(), s.clone());
-            signal_defs.insert(Ustr::from(format!("{group}:{}", s.name)), s);
-          }
-        }
-      }
-    }
-
-    (state_defs, signal_defs)
-  }
-
   fn refresh_metadata_and_indexes(&mut self, metadata: &MetadataRegistry) {
-    let (state_defs, signal_defs) = self.collect_defs(metadata);
-    self.facet_defs = state_defs;
-    self.impulse_defs = signal_defs;
-    self.rebuild_inverse_transcendence_index();
-    self.rebuild_transcendence_index();
+    self.rebuild_inverse_transcendence_index(metadata);
+    self.rebuild_transcendence_index(metadata);
   }
 
-  fn rebuild_inverse_transcendence_index(&mut self) {
+  fn rebuild_inverse_transcendence_index(&mut self, metadata: &MetadataRegistry) {
     self.inverse_transcendence_index.clear();
-    for (full_name, def) in &self.facet_defs {
+    let Some(all_facets) = metadata.items::<FlowFacet>("*") else {
+      return;
+    };
+    for (group, def) in all_facets {
+      let full_name = Ustr::from(format!("{group}:{}", def.name));
       let Some(deps) = &def.stop_on else {
         continue;
       };
@@ -1018,9 +977,13 @@ impl FlowRuntime {
     }
   }
 
-  fn rebuild_transcendence_index(&mut self) {
+  fn rebuild_transcendence_index(&mut self, metadata: &MetadataRegistry) {
     self.transcendence_index.clear();
-    for (full_name, def) in &self.facet_defs {
+    let Some(all_facets) = metadata.items::<FlowFacet>("*") else {
+      return;
+    };
+    for (group, def) in all_facets {
+      let full_name = Ustr::from(format!("{group}:{}", def.name));
       let Some(after) = &def.after else {
         continue;
       };
@@ -1060,10 +1023,11 @@ impl FlowRuntime {
         |_, (sm, vh)| {
           let mut guard = HashSet::new();
           self.set_facet(
+            ctx.registry.metadata,
             sm,
             name.clone(),
             Some(flow_payload.clone()),
-            Some(vh),
+            Some(&*vh),
             &mut guard,
             ctx.event_bus,
             dispatch,
@@ -1105,10 +1069,11 @@ impl FlowRuntime {
         |_, (sm, vh)| {
           let mut guard = HashSet::new();
           self.remove_facet(
+            ctx.registry.metadata,
             sm,
             name.as_str(),
             filter.clone(),
-            Some(vh),
+            Some(&*vh),
             &mut guard,
             ctx.event_bus,
             dispatch,
@@ -1149,13 +1114,19 @@ impl FlowRuntime {
     let mut fields = HashMap::new();
     fields.insert("name".to_string(), name.to_string());
     fields.insert("payload".into(), format!("{flow_payload:?}"));
-    self.impulse(name.clone(), Some(flow_payload.clone()), ctx.event_bus)?;
+    self.impulse(
+      ctx.registry.metadata,
+      name.clone(),
+      Some(flow_payload.clone()),
+      ctx.event_bus,
+    )?;
     let source = FlowInstance {
       name,
       payload: flow_payload,
       r#type: FlowType::Impulse,
     };
     let mut emitted = HashSet::new();
+    let metadata = ctx.registry.metadata;
     let sm = ctx
       .registry
       .singleton_mut::<FacetGraph>(FacetGraph::KEY)
@@ -1163,12 +1134,18 @@ impl FlowRuntime {
         "state machine store not found".into(),
       ))?;
     log.log(LogLevel::Trace, "flow-runtime", "emitting signal", fields);
-    self.reconcile_impulse_transcendence(sm, &source, ctx.event_bus, &mut emitted);
+    self.reconcile_impulse_transcendence(
+      metadata,
+      sm,
+      &source,
+      ctx.event_bus,
+      &mut emitted,
+    );
   }
 
   fn bootstrap(&mut self) {
     self.refresh_metadata_and_indexes(ctx.registry.metadata);
-    self.setup_all_facet_subscribers(dispatch);
+    self.setup_all_facet_subscribers(ctx.registry.metadata, dispatch);
     ctx
       .registry
       .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
@@ -1184,10 +1161,11 @@ impl FlowRuntime {
 
           for state in &existing_states {
             self.reconcile_transcendence(
+              ctx.registry.metadata,
               sm,
               state,
               FlowAction::Apply,
-              Some(vh),
+              Some(&*vh),
               &mut guard,
               ctx.event_bus,
               dispatch,
@@ -1195,8 +1173,9 @@ impl FlowRuntime {
           }
 
           self.reconcile_inverse_transcendence_all(
+            ctx.registry.metadata,
             sm,
-            Some(vh),
+            Some(&*vh),
             &mut guard,
             ctx.event_bus,
             dispatch,

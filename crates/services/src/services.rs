@@ -20,12 +20,13 @@ use rind_core::reexports::*;
 use rind_core::{notifier::Notifier, prelude::*};
 
 use crate::sockets::get_all_sockets;
-use rind_flow::transport::socket_path;
+use crate::{SocketRuntime, TimerRuntime};
 use rind_flow::transport::{TransportMethod, start_stdout_listener};
+use rind_flow::transport::{TransportRuntime, socket_path};
 use rind_flow::triggers::{check_condition, subset_match, trigger_events};
 use rind_flow::{
-  EmitTrigger, FacetGraph, FlowInstance, FlowItem, FlowPayload, FlowRuntimePayload, FlowType,
-  Trigger, condition_is_active, condition_matches,
+  EmitTrigger, FacetGraph, FlowInstance, FlowItem, FlowPayload, FlowRuntime, FlowType, Trigger,
+  condition_is_active, condition_matches,
 };
 use rind_ipc::TransportMessage;
 use rind_primitives::permissions::PERM_SYSTEM_SERVICES;
@@ -748,7 +749,6 @@ impl ServiceRuntime {
     &mut self,
     service: &Service,
     log: &LogHandle,
-    dispatch: &RuntimeDispatcher,
     branch_ctx: Option<&ServiceBranchContext>,
     sockets_map: &HashMap<Ustr, SocketActivation>,
     sm: Option<&FacetGraph>,
@@ -778,7 +778,6 @@ impl ServiceRuntime {
         service,
         run_ref,
         log,
-        dispatch,
         branch_ctx,
         sockets_map,
         sm,
@@ -837,7 +836,6 @@ impl ServiceRuntime {
     &mut self,
     service: &mut Service,
     log: &LogHandle,
-    dispatch: &RuntimeDispatcher,
     sockets_map: &HashMap<Ustr, SocketActivation>,
     sm: Option<&FacetGraph>,
     variable_heap: Option<&VariableHeap>,
@@ -855,7 +853,6 @@ impl ServiceRuntime {
     let instances = self.spawn_all(
       service,
       log,
-      dispatch,
       None,
       sockets_map,
       sm,
@@ -880,7 +877,6 @@ impl ServiceRuntime {
     service: &Service,
     run: &RunOption,
     log: &LogHandle,
-    _dispatch: &RuntimeDispatcher,
     branch_ctx: Option<&ServiceBranchContext>,
     sockets_map: &HashMap<Ustr, SocketActivation>,
     sm: Option<&FacetGraph>,
@@ -1162,7 +1158,6 @@ impl ServiceRuntime {
     match self.spawn_service(
       service,
       log,
-      dispatch,
       sockets_map,
       sm,
       variable_heap,
@@ -1408,7 +1403,7 @@ impl ServiceRuntime {
 
     service.last_state = ServiceState::Exited(code);
 
-    self.maybe_unregister_service_transport(service, dispatch);
+    self.maybe_unregister_service_transport(service, dispatch, Some(&service_key));
 
     let restart_policy = service.metadata.restart.as_ref();
     let action = if manually_stopped {
@@ -1438,17 +1433,14 @@ impl ServiceRuntime {
       });
 
       let full_name = Self::instance_key_name(service_key.as_str());
-      let _ = dispatch.dispatch(
-        "sockets",
-        "clear_for",
-        RuntimePayload::default().insert("name", full_name.clone()),
-      );
 
-      let _ = dispatch.dispatch(
-        "sockets",
-        "resume_fds",
-        RuntimePayload::default().insert("name", full_name),
-      );
+      let _ = SocketRuntime::actions
+        .clear_for(full_name.clone())
+        .dispatch(dispatch);
+      let _ = SocketRuntime::actions
+        .resume_fds(full_name)
+        .dispatch(dispatch)
+        .ok()?;
     }
 
     Some(action)
@@ -1550,7 +1542,12 @@ impl ServiceRuntime {
     }
   }
 
-  fn maybe_unregister_service_transport(&self, service: &Service, dispatch: &RuntimeDispatcher) {
+  fn maybe_unregister_service_transport(
+    &self,
+    service: &Service,
+    dispatch: &RuntimeDispatcher,
+    service_key: Option<&Ustr>,
+  ) {
     let Some(transport) = &service.metadata.transport else {
       return;
     };
@@ -1563,11 +1560,14 @@ impl ServiceRuntime {
     if active {
       return;
     }
-    let _ = dispatch.dispatch(
-      "transport",
-      "unregister_stdio",
-      rpayload!({ "endpoint": service.metadata.name.clone() }),
-    );
+
+    let _ = TransportRuntime::actions
+      .unregister_stdio(
+        service_key
+          .cloned()
+          .unwrap_or(service.metadata.name.clone()),
+      )
+      .dispatch(dispatch);
   }
 
   fn send_stdio_message(&self, endpoint: &str, message: TransportMessage) {
@@ -1638,6 +1638,31 @@ impl ServiceRuntime {
       }
     }
     false
+  }
+
+  fn reconcile(
+    &mut self,
+    ctx: &mut RuntimeContext<'_>,
+    log: &LogHandle,
+    dispatch: &RuntimeDispatcher,
+    name: Ustr,
+    action: ServiceEventKind,
+  ) -> CoreResult<Void> {
+    self.__runtime_reconcile_stacks(
+      rpayload!({
+        "service": name.clone(),
+        "action": action
+      }),
+      ctx,
+      dispatch,
+      log,
+    )?;
+
+    TimerRuntime::actions
+      .reconcile_timers(name, action)
+      .dispatch(dispatch)?;
+
+    Ok(Void)
   }
 }
 
@@ -1803,26 +1828,23 @@ pub fn handle_ipc_start(
     return Err(CoreError::PermissionDenied);
   }
 
-  let only_user = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
-    None
-  } else {
-    caller.map(|u| u.username.clone())
-  };
+  let mut dispatch_payload = ServiceRuntime::actions.start(payload.name.to_ustr());
 
-  let _ = dispatch.dispatch(
-    "services",
-    "start",
-    rpayload!({ "name": payload.name.to_ustr(), "only_user": only_user }),
-  );
+  if let (false, false, Some(username)) = (
+    uid == 0,
+    pm.user_has(uid, PERM_SYSTEM_SERVICES),
+    caller.map(|u| u.username.clone()),
+  ) {
+    dispatch_payload = dispatch_payload.only_user(username.to_string());
+  }
+
+  dispatch_payload.dispatch(dispatch)?;
 
   if payload.persist {
-    let _ = dispatch.dispatch(
-      "flow",
-      "set_facet",
-      FlowRuntimePayload::new("rind:active")
-        .payload(payload.name.clone())
-        .into(),
-    );
+    FlowRuntime::actions
+      .set_facet("rind:active".into())
+      .payload(serde_json::Value::String(payload.name.clone()))
+      .dispatch(dispatch)?;
   }
 
   Ok(Message::ok(format!("started {}", payload.name)))
@@ -1872,26 +1894,25 @@ pub fn handle_ipc_stop(
     return Err(CoreError::PermissionDenied);
   }
 
-  let force = payload.force;
-  let only_user = if uid == 0 || pm.user_has(uid, PERM_SYSTEM_SERVICES) {
-    None
-  } else {
-    caller.map(|u| u.username.clone())
-  };
-  let _ = dispatch.dispatch(
-    "services",
-    "stop",
-    rpayload!({ "name": payload.name.to_ustr(), "force": force, "only_user": only_user }),
-  );
+  let mut dispatch_payload = ServiceRuntime::actions
+    .stop(payload.name.to_ustr())
+    .force(payload.force);
+
+  if let (false, false, Some(username)) = (
+    uid == 0,
+    pm.user_has(uid, PERM_SYSTEM_SERVICES),
+    caller.map(|u| u.username.clone()),
+  ) {
+    dispatch_payload = dispatch_payload.only_user(username);
+  }
+
+  dispatch_payload.dispatch(dispatch)?;
 
   if payload.persist {
-    let _ = dispatch.dispatch(
-      "flow",
-      "remove_facet",
-      FlowRuntimePayload::new("rind:active")
-        .payload(payload.name.clone())
-        .into(),
-    );
+    FlowRuntime::actions
+      .remove_facet("rind:active".into())
+      .payload(serde_json::Value::String(payload.name.clone()))
+      .dispatch(dispatch)?;
   }
 
   Ok(Message::ok(format!("stopped {}", payload.name)))
@@ -1917,7 +1938,7 @@ impl ServiceRuntime {
         if let Some(inst) = service.instances.get(index) {
           inst.user.clone()
         } else {
-          self.maybe_unregister_service_transport(service, dispatch);
+          self.maybe_unregister_service_transport(service, dispatch, Some(&service_name));
           continue;
         }
       } else {
@@ -1938,15 +1959,9 @@ impl ServiceRuntime {
         0
       };
 
-      let _ = dispatch.dispatch(
-        "transport",
-        "ingest",
-        rpayload!({
-          "endpoint": service_name,
-          "message": message,
-          "uid": uid,
-        }),
-      );
+      TransportRuntime::actions
+        .ingest(service_name, uid, message)
+        .dispatch(dispatch)?;
     }
   }
 
@@ -2002,34 +2017,38 @@ impl ServiceRuntime {
         let _ = kill(Pid::from_raw(-(binding.pid as i32)), Signal::SIGABRT);
       }
       WatchdogAction::Stop => {
-        let _ = dispatch.dispatch(
-          "services",
-          "stop",
+        self.__runtime_stop(
           rpayload!({
             "name": Self::instance_key_name(binding.service_key.as_str()),
             "force": true,
             "only_user": binding.user.clone()
           }),
-        );
+          ctx,
+          dispatch,
+          log,
+        )?;
       }
       WatchdogAction::Restart => {
-        let _ = dispatch.dispatch(
-          "services",
-          "stop",
+        self.__runtime_stop(
           rpayload!({
             "name": Self::instance_key_name(binding.service_key.as_str()),
             "force": true,
             "only_user": binding.user.clone()
           }),
-        );
-        let _ = dispatch.dispatch(
-          "services",
-          "start",
+          ctx,
+          dispatch,
+          log,
+        )?;
+
+        self.__runtime_start(
           rpayload!({
             "name": Self::instance_key_name(binding.service_key.as_str()),
             "only_user": binding.user
           }),
-        );
+          ctx,
+          dispatch,
+          log,
+        )?;
       }
     }
   }
@@ -2043,7 +2062,7 @@ impl ServiceRuntime {
 
     ctx
       .registry
-      .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+      .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), Option<Vec<(Ustr, Option<ServiceBranchContext>)>>>(
         (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
         |registry, (sm, vh)| {
           let target_keys = if let Some(event_name) = trigger.name.as_ref() {
@@ -2082,6 +2101,8 @@ impl ServiceRuntime {
             }),
             _ => None,
           };
+
+          let mut to_start = Vec::new();
 
           for service_name in target_keys {
             let mut is_running = false;
@@ -2287,28 +2308,33 @@ impl ServiceRuntime {
                   payload: Some(branch.payload.clone()),
                   forced_user: None,
                 };
-                let _ = dispatch.dispatch(
-                  "services",
-                  "start",
-                  rpayload!({
-                    "name": service_name.clone(),
-                    "branch_ctx": branch_ctx
-                  }),
-                );
+                to_start.push((service_name.clone(), Some(branch_ctx)));
                 started += 1;
               }
               continue;
             }
 
-            let _ = dispatch.dispatch(
-              "services",
-              "start",
-              rpayload!({ "name": service_name.clone() }),
-            );
+            to_start.push((service_name.clone(), None));
           }
-          Ok(Void)
+          Ok(if to_start.is_empty() {
+            None
+          } else {
+            Some(to_start)
+          })
         },
-      )?;
+      )?.map(|to_start| {
+        for (service_name, branch_ctx) in to_start {
+          let mut payload = rpayload!({ "name": service_name });
+
+          if let Some(branch_ctx) = branch_ctx {
+            payload = payload.insert("branch_ctx", branch_ctx);
+          }
+
+          self.__runtime_start(payload, ctx, dispatch, log)?;
+        }
+
+        Ok::<Void, CoreError>(Void)
+      }).transpose()?;
   }
 
   fn start(
@@ -2335,7 +2361,14 @@ impl ServiceRuntime {
 
     ctx
       .registry
-      .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
+      .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), Option<(
+        Ustr,
+        Vec<i32>,
+        Vec<Ustr>,
+        bool,
+        Option<String>,
+        Option<ServiceBranchContext>,
+      )>>(
         (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
         |registry, (sm, vh)| {
           let service_key = Self::ensure_scoped_name(name.as_str());
@@ -2345,36 +2378,42 @@ impl ServiceRuntime {
           if !deferred
             && self.register_service_transport(service, dispatch, Some(service_key.clone()))
           {
-            let mut payload = rpayload!({
-              "name": name,
-              "socket_fds": socket_fds,
-              "socket_fd_names": socket_fd_names,
-              "deferred": true
-            });
-            if let Some(user) = only_user.clone() {
-              payload = payload.insert("only_user", user);
-            }
-            if let Some(bctx) = branch_ctx.clone() {
-              payload = payload.insert("branch_ctx", bctx);
-            }
-            let _ = dispatch.dispatch("services", "start", payload);
-            return Ok(Void);
+            return Ok(Some((
+              name,
+              socket_fds,
+              socket_fd_names,
+              true,
+              only_user,
+              branch_ctx,
+            )));
           }
 
-          if let Some(branch_ctx_val) = branch_ctx {
+          // because async
+          if service
+            .metadata
+            .transport
+            .as_ref()
+            .map(is_stdio_transport)
+            .unwrap_or(false)
+          {
+            TransportRuntime::actions
+              .register_stdio(name)
+              .dispatch(dispatch)?;
+          }
+
+          if let Some(branch_ctx_val) = branch_ctx.clone() {
             if let Some(ref key) = branch_ctx_val.key
               && service.instances.iter().any(|i| {
                 i.key == *key
                   && (i.state == ServiceState::Active || i.state == ServiceState::Starting)
               })
             {
-              return Ok(Void);
+              return Ok(None);
             }
 
             match self.spawn_all(
               service,
               log,
-              dispatch,
               Some(&branch_ctx_val),
               &sockets_map,
               Some(sm),
@@ -2392,25 +2431,15 @@ impl ServiceRuntime {
                   }
                   self.run_triggers(service.metadata.on_start.as_ref(), Some(sm), dispatch);
                 }
-                let _ = dispatch.dispatch(
-                  "services",
-                  "reconcile_stacks",
-                  rpayload!({
-                    "service": service_key.clone(),
-                    "id": service.id.0,
-                    "action": ServiceEventKind::Started
-                  }),
-                );
 
-                let _ = dispatch.dispatch(
-                  "timer",
-                  "reconcile_timers",
-                  rpayload!({
-                    "service": service_key.clone(),
-                    "id": service.id.0,
-                    "action": ServiceEventKind::Started
-                  }),
-                );
+                Ok(Some((
+                  service_key,
+                  socket_fds,
+                  socket_fd_names,
+                  false,
+                  only_user,
+                  branch_ctx,
+                )))
               }
               Err(e) => {
                 let err = format!("Failed to start service \"{}\": {e}", service.metadata.name);
@@ -2427,6 +2456,7 @@ impl ServiceRuntime {
                     inst.state = ServiceState::Error(err.clone());
                   }
                 }
+                Ok(None)
               }
             }
           } else if let Some(user) = only_user.clone() {
@@ -2439,7 +2469,6 @@ impl ServiceRuntime {
             match self.spawn_all(
               service,
               log,
-              dispatch,
               Some(&launch_ctx),
               &sockets_map,
               Some(sm),
@@ -2455,25 +2484,15 @@ impl ServiceRuntime {
                   inst.state = ServiceState::Active;
                   self.run_triggers(service.metadata.on_start.as_ref(), Some(sm), dispatch);
                 }
-                let _ = dispatch.dispatch(
-                  "services",
-                  "reconcile_stacks",
-                  rpayload!({
-                    "service": service_key.clone(),
-                    "id": service.id.0,
-                    "action": ServiceEventKind::Started
-                  }),
-                );
 
-                let _ = dispatch.dispatch(
-                  "timer",
-                  "reconcile_timers",
-                  rpayload!({
-                    "service": service_key.clone(),
-                    "id": service.id.0,
-                    "action": ServiceEventKind::Started
-                  }),
-                );
+                Ok(Some((
+                  service_key,
+                  socket_fds,
+                  socket_fd_names,
+                  false,
+                  only_user,
+                  Some(launch_ctx),
+                )))
               }
               Err(e) => {
                 let err = format!("Failed to start service \"{}\": {e}", service.metadata.name);
@@ -2488,6 +2507,7 @@ impl ServiceRuntime {
                 if let Some(inst) = service.instances.as_one_mut() {
                   inst.state = ServiceState::Error(err);
                 }
+                Ok(None)
               }
             }
           } else {
@@ -2498,27 +2518,47 @@ impl ServiceRuntime {
               Some(sm),
               dispatch,
               Some(vh),
-              service_key.into(),
+              service_key.clone().into(),
               ctx.notifier.clone(),
               ctx.resources,
             );
+
+            Ok(Some((
+              service_key,
+              socket_fds,
+              socket_fd_names,
+              false,
+              only_user,
+              branch_ctx,
+            )))
           }
-          if service
-            .metadata
-            .transport
-            .as_ref()
-            .map(is_stdio_transport)
-            .unwrap_or(false)
-          {
-            let _ = dispatch.dispatch(
-              "transport",
-              "register_stdio",
-              rpayload!({ "endpoint": name }),
-            );
-          }
-          Ok(Void)
         },
-      )?;
+      )?
+      .map(
+        |(name, socket_fds, socket_fd_names, deferred, only_user, branch_ctx)| {
+          if deferred {
+            let mut payload = rpayload!({
+              "name": name,
+              "socket_fds": socket_fds,
+              "socket_fd_names": socket_fd_names,
+              "deferred": true
+            });
+            if let Some(user) = only_user {
+              payload = payload.insert("only_user", user);
+            }
+            if let Some(bctx) = branch_ctx {
+              payload = payload.insert("branch_ctx", bctx);
+            }
+
+            self.__runtime_start(payload, ctx, dispatch, log)?;
+          } else {
+            self.reconcile(ctx, log, dispatch, name, ServiceEventKind::Started)?;
+          }
+
+          Ok::<Void, CoreError>(Void)
+        },
+      )
+      .transpose()?;
   }
 
   fn stop(
@@ -2535,30 +2575,28 @@ impl ServiceRuntime {
     };
     let notifier = ctx.notifier.clone();
 
-    ctx
-      .registry
-      .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
-        (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
-        |registry, (sm, _)| {
-          let service =
-            registry.instantiate_one::<Service>("*", name.clone(), |x| Ok(Service::new(x)))?;
+    ctx.registry.singleton_handle::<(&mut FacetGraph,), _>(
+      (FacetGraph::KEY.into(),),
+      |registry, (sm,)| {
+        let service =
+          registry.instantiate_one::<Service>("*", name.clone(), |x| Ok(Service::new(x)))?;
 
-          self.stop_service(
-            service,
-            mode,
-            log,
-            dispatch,
-            Some(sm),
-            None,
-            only_user,
-            index,
-            Some(&name),
-            notifier,
-            ctx.resources,
-          );
-          Ok(Void)
-        },
-      )?;
+        self.stop_service(
+          service,
+          mode,
+          log,
+          dispatch,
+          Some(sm),
+          None,
+          only_user,
+          index,
+          Some(&name),
+          notifier,
+          ctx.resources,
+        );
+        Ok(Void)
+      },
+    )?;
   }
 
   fn stop_all(&mut self, #[default] force: bool) {
@@ -2569,58 +2607,58 @@ impl ServiceRuntime {
     };
     let notifier = ctx.notifier.clone();
 
-    ctx
-      .registry
-      .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
-        (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
-        |registry, (sm, _)| {
-          let keys: Vec<Ustr> = registry
-            .instances
-            .keys()
-            .filter(|k| k.contains('@'))
-            .cloned()
-            .collect();
+    ctx.registry.singleton_handle::<(&mut FacetGraph,), _>(
+      (FacetGraph::KEY.into(),),
+      |registry, (sm,)| {
+        let keys: Vec<Ustr> = registry
+          .instances
+          .keys()
+          .filter(|k| k.contains('@'))
+          .cloned()
+          .collect();
 
-          for key in keys {
-            if let Some(instances) = registry.instances.get_mut(&key) {
-              for instance in instances.iter_mut() {
-                if let Some(service) = instance.downcast_mut::<Service>() {
-                  self.stop_service(
-                    service,
-                    mode,
-                    log,
-                    dispatch,
-                    Some(sm),
-                    None,
-                    None,
-                    None,
-                    Some(&key),
-                    notifier.clone(),
-                    ctx.resources,
-                  );
-                }
+        for key in keys {
+          if let Some(instances) = registry.instances.get_mut(&key) {
+            for instance in instances.iter_mut() {
+              if let Some(service) = instance.downcast_mut::<Service>() {
+                self.stop_service(
+                  service,
+                  mode,
+                  log,
+                  dispatch,
+                  Some(sm),
+                  None,
+                  None,
+                  None,
+                  Some(&key),
+                  notifier.clone(),
+                  ctx.resources,
+                );
               }
             }
           }
+        }
 
-          Ok(Void)
-        },
-      )?;
+        Ok(Void)
+      },
+    )?;
   }
 
   fn start_all(&mut self) {
     let mut started: HashSet<Ustr> = HashSet::new();
     let mut pending: Vec<(Ustr, Vec<Ustr>, Arc<ServiceMetadata>)> = Vec::new();
-    ctx
+
+    for (full_name, svc_meta) in &ctx
       .registry
-      .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
-        (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
-        |registry, (sm, _vh)| {
+      .singleton_handle::<(&mut FacetGraph,), Vec<(Ustr, Arc<ServiceMetadata>)>>(
+        (FacetGraph::KEY.into(),),
+        |_, (sm,)| {
+          let mut all_services: Vec<(Ustr, Arc<ServiceMetadata>)> = Vec::new();
+
           let Some(active) = sm.facets.get("rind:active") else {
-            return Ok(Void);
+            return Ok(all_services);
           };
 
-          let mut all_services: Vec<(Ustr, Arc<ServiceMetadata>)> = Vec::new();
           for branch in active {
             let name = Ustr::from(branch.payload.to_string_payload());
             if let Some(svc) = ctx.registry.metadata.find::<Service>("*", name.as_str()) {
@@ -2628,67 +2666,62 @@ impl ServiceRuntime {
             }
           }
 
-          for (full_name, svc_meta) in &all_services {
-            if let Some(afters) = &svc_meta.after {
-              pending.push((full_name.clone(), afters.clone(), svc_meta.clone()));
-            } else {
-              let key = Self::ensure_scoped_name(full_name.as_str());
-              let already_running = registry
-                .as_one::<Service>("*", key.clone())
-                .ok()
-                .map(|svc| {
-                  svc.instances.iter().any(|inst| {
-                    inst.state == ServiceState::Active || inst.state == ServiceState::Starting
-                  })
-                })
-                .unwrap_or(false);
-
-              if !already_running {
-                let _ = registry
-                  .instantiate_one::<Service>("*", full_name.as_str(), |x| Ok(Service::new(x)))?;
-                let _ = dispatch.dispatch(
-                  "services",
-                  "start",
-                  rpayload!({ "name": full_name.clone() }),
-                );
-              }
-              started.insert(full_name.clone());
-            }
-          }
-
-          loop {
-            let mut progress = false;
-            pending.retain(|(name, afters, _meta)| {
-              if afters.iter().all(|a| started.contains(a)) {
-                let key = Self::ensure_scoped_name(name.as_str());
-                let already_running = registry
-                  .as_one::<Service>("*", key.clone())
-                  .ok()
-                  .map(|svc| {
-                    svc.instances.iter().any(|inst| {
-                      inst.state == ServiceState::Active || inst.state == ServiceState::Starting
-                    })
-                  })
-                  .unwrap_or(false);
-
-                if !already_running {
-                  let _ =
-                    dispatch.dispatch("services", "start", rpayload!({ "name": name.clone() }));
-                }
-                started.insert(name.clone());
-                progress = true;
-                false
-              } else {
-                true
-              }
-            });
-            if !progress {
-              break;
-            }
-          }
-          Ok(Void)
+          Ok(all_services)
         },
-      )?;
+      )?
+    {
+      if let Some(afters) = &svc_meta.after {
+        pending.push((full_name.clone(), afters.clone(), svc_meta.clone()));
+      } else {
+        let key = Self::ensure_scoped_name(full_name.as_str());
+        let already_running = ctx
+          .registry
+          .as_one::<Service>("*", key.clone())
+          .ok()
+          .map(|svc| {
+            svc.instances.iter().any(|inst| {
+              inst.state == ServiceState::Active || inst.state == ServiceState::Starting
+            })
+          })
+          .unwrap_or(false);
+
+        if !already_running {
+          self.__runtime_start(rpayload!({ "name": full_name.clone() }), ctx, dispatch, log)?;
+        }
+        started.insert(full_name.clone());
+      }
+    }
+
+    loop {
+      let mut progress = false;
+      pending.retain(|(name, afters, _meta)| {
+        if afters.iter().all(|a| started.contains(a)) {
+          let key = Self::ensure_scoped_name(name.as_str());
+          let already_running = ctx
+            .registry
+            .as_one::<Service>("*", key.clone())
+            .ok()
+            .map(|svc| {
+              svc.instances.iter().any(|inst| {
+                inst.state == ServiceState::Active || inst.state == ServiceState::Starting
+              })
+            })
+            .unwrap_or(false);
+
+          if !already_running {
+            let _ = self.__runtime_start(rpayload!({ "name": name.clone() }), ctx, dispatch, log);
+          }
+          started.insert(name.clone());
+          progress = true;
+          false
+        } else {
+          true
+        }
+      });
+      if !progress {
+        break;
+      }
+    }
 
     if !pending.is_empty() {
       let mut fields = HashMap::new();
@@ -2760,37 +2793,25 @@ impl ServiceRuntime {
           )?;
       }
       ServiceEventKind::Started => {
-        ctx
-          .registry
-          .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
-            (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
-            |registry, (_sm, _vh)| {
-              for (dependent, svc) in dependents {
-                let should_start = svc.after.as_ref().unwrap().iter().any(|a| {
-                  if let Ok(ref svc) = registry.as_one::<Service>("*", a.as_str()) {
-                    !svc.instances.is_empty()
-                      && !svc.instances.iter().any(|x| {
-                        x.state == ServiceState::Inactive
-                          || x.state == ServiceState::Stopping
-                          || matches!(x.state, ServiceState::Exited(_))
-                          || matches!(x.state, ServiceState::Error(_))
-                      })
-                  } else {
-                    false
-                  }
-                });
+        for (dependent, svc) in dependents {
+          let should_start = svc.after.as_ref().unwrap().iter().any(|a| {
+            if let Ok(ref svc) = ctx.registry.as_one::<Service>("*", a.as_str()) {
+              !svc.instances.is_empty()
+                && !svc.instances.iter().any(|x| {
+                  x.state == ServiceState::Inactive
+                    || x.state == ServiceState::Stopping
+                    || matches!(x.state, ServiceState::Exited(_))
+                    || matches!(x.state, ServiceState::Error(_))
+                })
+            } else {
+              false
+            }
+          });
 
-                if should_start {
-                  let _ = dispatch.dispatch(
-                    "services",
-                    "start",
-                    rpayload!({ "name": dependent.clone() }),
-                  );
-                }
-              }
-              Ok(Void)
-            },
-          )?;
+          if should_start {
+            self.__runtime_start(rpayload!({ "name": dependent.clone() }), ctx, dispatch, log)?;
+          }
+        }
       }
     }
   }
@@ -2798,47 +2819,45 @@ impl ServiceRuntime {
   fn stop_for_scope(&mut self, scope: Ustr) {
     let notifier = ctx.notifier.clone();
 
-    ctx
-      .registry
-      .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
-        (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
-        |registry, (sm, _vh)| {
-          for (group, svc) in registry
-            .metadata
-            .items::<Service>(scope.clone())
-            .unwrap_or_default()
-          {
-            let full_name = rslvns!(u group, svc.name);
-            self.stop_service(
-              registry.as_one_mut::<Service>(scope.clone(), full_name.clone())?,
-              StopMode::ForceKill,
-              log,
-              dispatch,
-              Some(sm),
-              None,
-              None,
-              None,
-              Some(&full_name),
-              notifier.clone(),
-              ctx.resources,
-            );
-          }
-          Ok(Void)
-        },
-      )?;
+    ctx.registry.singleton_handle::<(&mut FacetGraph,), _>(
+      (FacetGraph::KEY.into(),),
+      |registry, (sm,)| {
+        for (group, svc) in registry
+          .metadata
+          .items::<Service>(scope.clone())
+          .unwrap_or_default()
+        {
+          let full_name = rslvns!(u group, svc.name);
+          self.stop_service(
+            registry.as_one_mut::<Service>(scope.clone(), full_name.clone())?,
+            StopMode::ForceKill,
+            log,
+            dispatch,
+            Some(sm),
+            None,
+            None,
+            None,
+            Some(&full_name),
+            notifier.clone(),
+            ctx.resources,
+          );
+        }
+        Ok(Void)
+      },
+    )?;
   }
 
   fn child_exited(&mut self, pid: i32, code: i32) {
     let pid_u = pid as u32;
     if let Some(service_key) = self.pid_map.remove(&pid_u) {
       self.stopping_map.remove(&pid_u);
-      let sockets_map = get_all_sockets(&ctx.registry);
 
-      ctx
+      match ctx
         .registry
-        .singleton_handle::<(&mut FacetGraph, &mut VariableHeap), _>(
-          (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
-          |registry, (sm, vh)| {
+        .singleton_handle::<(&mut FacetGraph,), Option<(Ustr, ServiceEventKind)>>(
+          (FacetGraph::KEY.into(),),
+          |registry, (sm,)| {
+            let mut action = None;
             if let Some(instances) = registry.instances.get_mut(&service_key) {
               for instance in instances.iter_mut() {
                 if let Some(service) = instance.downcast_mut::<Service>() {
@@ -2854,46 +2873,35 @@ impl ServiceRuntime {
                   ) {
                     match exit_action {
                       ServiceExitAction::Restart => {
-                        self.start_service(
-                          service,
-                          log,
-                          &sockets_map,
-                          Some(sm),
-                          dispatch,
-                          Some(vh),
-                          service_key.clone(),
-                          ctx.notifier.clone(),
-                          ctx.resources,
-                        );
+                        action = Some((service_key.clone(), ServiceEventKind::Started));
                       }
                       ServiceExitAction::StopDependents => {
-                        let _ = dispatch.dispatch(
-                          "services",
-                          "reconcile_stacks",
-                          rpayload!({
-                            "service": service_key.clone(),
-                            "id": service.id.0,
-                            "action": ServiceEventKind::Exited { code }
-                          }),
-                        );
-                        let _ = dispatch.dispatch(
-                          "timer",
-                          "reconcile_timers",
-                          rpayload!({
-                            "service": service_key.clone(),
-                            "id": service.id.0,
-                            "action": ServiceEventKind::Exited { code }
-                          }),
-                        );
+                        action = Some((service_key.clone(), ServiceEventKind::Exited { code }));
                       }
                     }
                   }
                 }
               }
             }
-            Ok(Void)
+            Ok(action)
           },
-        )?;
+        )? {
+        Some((service, action)) => {
+          if action == ServiceEventKind::Started {
+            self.__runtime_start(
+              rpayload!({
+                "name": service
+              }),
+              ctx,
+              dispatch,
+              log,
+            )?;
+          } else {
+            self.reconcile(ctx, log, dispatch, service, action)?;
+          }
+        }
+        None => {}
+      }
     }
   }
 

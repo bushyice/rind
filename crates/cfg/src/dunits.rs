@@ -1,6 +1,5 @@
 // TODO: Reload @static
 
-use std::fs;
 use std::path::Path;
 
 use rind_core::prelude::*;
@@ -71,7 +70,7 @@ fn add_builtin_defs(metadata: &mut Metadata) {
     })
     .insert::<FlowImpulse>(FlowImpulseMetadata {
       name: "boot".into(),
-      payload: FlowPayloadType::None,
+      payload: FlowPayloadType::String,
       ..Default::default()
     })
     .close();
@@ -182,53 +181,5 @@ pub fn destroy_dynamic_scope(scope: &str, ctx: &mut OrchestratorContext<'_>) -> 
   }
   ctx.metadata.remove_metadata(scope);
   let _ = ScopeStore::remove_scope_global(scope);
-  Ok(Void)
-}
-
-pub fn create_scope_metadata_runtime<P: AsRef<Path>>(
-  scope: impl Into<Ustr>,
-  metadata_registry: &mut MetadataRegistry,
-  units_dir: P,
-) -> CoreResult<Void> {
-  let scope = scope.into();
-  let mut metadata = Metadata::new(scope.clone())
-    .of::<Service>("service")
-    .of::<Timer>("timer")
-    .of::<Mount>("mount")
-    .of::<Socket>("socket")
-    .of::<FlowFacet>("facet")
-    .of::<FlowImpulse>("impulse")
-    .of::<Permission>("permission")
-    .of::<Variable>("variable");
-
-  let dir = units_dir.as_ref();
-  if let Ok(entries) = fs::read_dir(dir) {
-    for entry in entries.flatten() {
-      let path = entry.path();
-      if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-        continue;
-      }
-      if path.extension().and_then(|x| x.to_str()) != Some("toml") {
-        continue;
-      }
-      let group = Ustr::from(
-        path
-          .file_stem()
-          .and_then(|s| s.to_str())
-          .unwrap_or("unknown"),
-      );
-      if let Ok(content) = fs::read_to_string(&path) {
-        let _ = metadata.from_toml(&content, group);
-      }
-    }
-  }
-
-  metadata_registry.insert_metadata(metadata);
-  let _ = metadata_registry.ensure_index_for_type::<Service>(scope.clone());
-  let _ = metadata_registry.ensure_index_for_type::<Mount>(scope.clone());
-  let _ = metadata_registry.ensure_index_for_type::<Socket>(scope.clone());
-  let _ = metadata_registry.ensure_index_for_type::<Timer>(scope.clone());
-  let _ = metadata_registry.ensure_index_for_type::<FlowFacet>(scope.clone());
-  let _ = metadata_registry.ensure_index_for_type::<FlowImpulse>(scope);
   Ok(Void)
 }
