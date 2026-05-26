@@ -58,7 +58,7 @@ impl ShmRingBuffer {
     let used = if head >= tail {
       head - tail
     } else {
-      buffer_size - (tail - head)
+      (u32::MAX - tail) + head + 1
     };
 
     if used + total_len >= buffer_size {
@@ -66,19 +66,8 @@ impl ShmRingBuffer {
     }
 
     let mut current_head = head;
-
-    let len_bytes = len.to_ne_bytes();
-    for i in 0..4 {
-      let idx = data_start + (current_head % buffer_size);
-      unsafe { *self.ptr.add(idx as usize) = len_bytes[i] };
-      current_head += 1;
-    }
-
-    for byte in data {
-      let idx = data_start + (current_head % buffer_size);
-      unsafe { *self.ptr.add(idx as usize) = *byte };
-      current_head += 1;
-    }
+    current_head = self.copy_at(current_head, &len.to_ne_bytes(), buffer_size, data_start);
+    current_head = self.copy_at(current_head, data, buffer_size, data_start);
 
     header.head.store(current_head, Ordering::Release);
     true
@@ -98,22 +87,74 @@ impl ShmRingBuffer {
     let buffer_size = capacity - data_start;
 
     let mut len_bytes = [0u8; 4];
-    for i in 0..4 {
-      let idx = data_start + (tail % buffer_size);
-      len_bytes[i] = unsafe { *self.ptr.add(idx as usize) };
-      tail += 1;
-    }
+    tail = self.read_at(tail, &mut len_bytes, buffer_size, data_start);
     let len = u32::from_ne_bytes(len_bytes);
 
     let mut data = vec![0u8; len as usize];
-    for i in 0..len as usize {
-      let idx = data_start + (tail % buffer_size);
-      data[i] = unsafe { *self.ptr.add(idx as usize) };
-      tail += 1;
-    }
+    tail = self.read_at(tail, &mut data, buffer_size, data_start);
 
     header.tail.store(tail, Ordering::Release);
     Some(data)
+  }
+
+  fn copy_at(&self, offset: u32, src: &[u8], buffer_size: u32, data_start: u32) -> u32 {
+    let len = src.len() as u32;
+    let pos = offset % buffer_size;
+    let space_to_end = buffer_size - pos;
+
+    if len <= space_to_end {
+      unsafe {
+        std::ptr::copy_nonoverlapping(
+          src.as_ptr(),
+          self.ptr.add((data_start + pos) as usize),
+          len as usize,
+        );
+      }
+    } else {
+      unsafe {
+        std::ptr::copy_nonoverlapping(
+          src.as_ptr(),
+          self.ptr.add((data_start + pos) as usize),
+          space_to_end as usize,
+        );
+        std::ptr::copy_nonoverlapping(
+          src.as_ptr().add(space_to_end as usize),
+          self.ptr.add(data_start as usize),
+          (len - space_to_end) as usize,
+        );
+      }
+    }
+    offset.wrapping_add(len)
+  }
+
+  fn read_at(&self, offset: u32, dest: &mut [u8], buffer_size: u32, data_start: u32) -> u32 {
+    let len = dest.len() as u32;
+    let pos = offset % buffer_size;
+    let space_to_end = buffer_size - pos;
+
+    if len <= space_to_end {
+      unsafe {
+        std::ptr::copy_nonoverlapping(
+          self.ptr.add((data_start + pos) as usize),
+          dest.as_mut_ptr(),
+          len as usize,
+        );
+      }
+    } else {
+      unsafe {
+        std::ptr::copy_nonoverlapping(
+          self.ptr.add((data_start + pos) as usize),
+          dest.as_mut_ptr(),
+          space_to_end as usize,
+        );
+        std::ptr::copy_nonoverlapping(
+          self.ptr.add(data_start as usize),
+          dest.as_mut_ptr().add(space_to_end as usize),
+          (len - space_to_end) as usize,
+        );
+      }
+    }
+    offset.wrapping_add(len)
   }
 }
 

@@ -21,3 +21,10 @@ serde_json.workspace = true
 default = ["server"]
 
 server = []
+
+[[bench]]
+name = "transports"
+harness = false
+
+[dev-dependencies]
+criterion.workspace = true

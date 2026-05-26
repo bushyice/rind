@@ -33,6 +33,7 @@ crc32fast = "*"
 fxhash = "*"
 bitflags = "*"
 libloading = "*"
+criterion = { version = "0.5", features = ["html_reports"] }
 
 # [profile.release]
 # lto = true

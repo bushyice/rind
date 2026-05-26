@@ -20,3 +20,10 @@ serde_json.workspace = true
 bitflags.workspace = true
 sha-crypt = "0.5.0"
 strumbra.workspace = true
+
+[[bench]]
+name = "dispatch"
+harness = false
+
+[dev-dependencies]
+criterion.workspace = true
