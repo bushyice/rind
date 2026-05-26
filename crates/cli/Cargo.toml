@@ -40,9 +40,9 @@ path = "demo/ipc_socket.rs"
 name = "sif"
 path = "demo/sif.rs"
 
-[[bin]]
-name = "shm"
-path = "demo/shm.rs"
+# [[bin]]
+# name = "shm"
+# path = "demo/shm.c" # or shm.rs
 
 [dependencies]
 clap.workspace = true
@@ -59,3 +59,7 @@ crc32fast.workspace = true
 
 owo-colors = "4.3.0"
 rpassword = "*"
+libloading.workspace = true
+
+[build-dependencies]
+cc = "1.0"

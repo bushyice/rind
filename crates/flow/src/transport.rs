@@ -1,7 +1,7 @@
-// State perms are impl'd partially for UDS connections and states, BUT.
-// - have not been impl'd for stdio
-// - probs more things i didn't think about
-
+// TODO: Fix stuff
+// - Add specific service-only transports
+// - Group transports instead of per subscriber
+// -
 // TODO: Socket cleanups
 
 use std::collections::HashMap;
@@ -487,14 +487,14 @@ impl TransportRuntime {
       },
       branch,
     };
-    // TODO: Add an option for more transport protocols
+
     if self.stdio_endpoints.contains(&endpoint) {
       let _ = dispatch.dispatch(
         "services",
         "send_stdio",
         rpayload!({
           "endpoint": endpoint.to_string(),
-          "message": msg
+          "message": msg.clone()
         }),
       );
     } else {

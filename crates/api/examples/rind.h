@@ -22,94 +22,97 @@
  * SOFTWARE.
  */
 
-#pragma once
-
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 
-typedef enum TransportProtocolMethod {
-  TransportProtocolMethod_STDIO = 0,
-  TransportProtocolMethod_UDS = 1,
-} TransportProtocolMethod;
+typedef enum RIND_TP_METHOD {
+  RIND_TP_METHOD_STDIO = 0,
+  RIND_TP_METHOD_UDS = 1,
+  RIND_TP_METHOD_SHM = 2,
+} RIND_TP_METHOD;
 
-typedef enum MessageType {
-  MessageType_Signal = 0,
-  MessageType_State = 1,
-  MessageType_Enquiry = 2,
-  MessageType_Response = 3,
-  MessageType_Unknown = 4,
-} MessageType;
+typedef enum RIND_MSG_TYPE {
+  RIND_MSG_TYPE_IMPULSE = 0,
+  RIND_MSG_TYPE_FACET = 1,
+  RIND_MSG_TYPE_ENQUIRY = 2,
+  RIND_MSG_TYPE_RESPONSE = 3,
+  RIND_MSG_TYPE_UNKNOWN = 4,
+} RIND_MSG_TYPE;
 
-typedef enum MessageAction {
-  MessageAction_Remove = 0,
-  MessageAction_Set = 1,
-} MessageAction;
+typedef enum RIND_MSG_ACTION {
+  RIND_MSG_ACTION_REMOVE = 0,
+  RIND_MSG_ACTION_SET = 1,
+} RIND_MSG_ACTION;
 
-typedef enum PayloadType {
-  PayloadType_String = 0,
-  PayloadType_Json = 1,
-} PayloadType;
+typedef enum RIND_PAYLOAD_TYPE {
+  RIND_PAYLOAD_TYPE_STRING = 0,
+  RIND_PAYLOAD_TYPE_JSON = 1,
+} RIND_PAYLOAD_TYPE;
 
-typedef enum InvokeType {
-  InvokeType_Valid = 0,
-  InvokeType_Ok = 1,
-  InvokeType_Error = 2,
-  InvokeType_Unknown = 3,
-  InvokeType_RequestInput = 4,
-  InvokeType_Enquire = 5,
-} InvokeType;
+typedef enum RIND_INVOKE_TYPE {
+  RIND_INVOKE_TYPE_VALID = 0,
+  RIND_INVOKE_TYPE_OK = 1,
+  RIND_INVOKE_TYPE_ERROR = 2,
+  RIND_INVOKE_TYPE_UNKNOWN = 3,
+  RIND_INVOKE_TYPE_REQUEST_INPUT = 4,
+  RIND_INVOKE_TYPE_ENQUIRE = 5,
+} RIND_INVOKE_TYPE;
 
-typedef struct TransportProtocol {
-  enum TransportProtocolMethod protocol;
+typedef struct rind_tp {
+  enum RIND_TP_METHOD protocol;
   const char *const *options;
   uintptr_t len;
   uint64_t id;
-} TransportProtocol;
+} rind_tp;
 
-typedef struct PayloadContainer {
-  enum PayloadType type;
+typedef struct rind_payload {
+  enum RIND_PAYLOAD_TYPE type;
   const char *content;
-} PayloadContainer;
+} rind_payload;
 
-typedef struct MessageContainer {
-  enum MessageType type;
-  enum MessageAction action;
-  struct PayloadContainer *payload;
+typedef struct rind_msg {
+  enum RIND_MSG_TYPE type;
+  enum RIND_MSG_ACTION action;
+  struct rind_payload *payload;
   const char *name;
-} MessageContainer;
+} rind_msg;
 
-typedef struct InvokeCommand {
-  enum InvokeType type;
+typedef struct rind_invoke_cmd {
+  enum RIND_INVOKE_TYPE type;
   const char *action;
   const char *payload;
-} InvokeCommand;
+} rind_invoke_cmd;
 
-struct TransportProtocol init_tp(enum TransportProtocolMethod protocol, const char *options);
+struct rind_tp rind_init_tp(enum RIND_TP_METHOD protocol, const char *options);
 
-void listen_tp(struct TransportProtocol *tp, void (*func)(struct MessageContainer));
+void rind_listen_tp(struct rind_tp *tp, void (*func)(struct rind_msg));
 
-struct MessageContainer create_message(enum MessageType type, enum MessageAction action);
+struct rind_msg rind_enquiry_tp(const struct rind_tp *tp, struct rind_msg message);
 
-struct PayloadContainer create_message_payload(enum PayloadType type, const char *inner);
+struct rind_msg rind_create_msg(enum RIND_MSG_TYPE type, enum RIND_MSG_ACTION action);
 
-void set_message_payload(struct MessageContainer *message, struct PayloadContainer payload);
+struct rind_payload rind_create_msg_payload(enum RIND_PAYLOAD_TYPE type, const char *inner);
 
-void set_message_name(struct MessageContainer *message, const char *name);
+void rind_set_message_payload(struct rind_msg *message, struct rind_payload payload);
 
-struct MessageContainer set_state(const char *name, struct PayloadContainer payload);
+void rind_set_message_name(struct rind_msg *message, const char *name);
 
-struct MessageContainer remove_state(const char *name, struct PayloadContainer *payload);
+struct rind_msg rind_set_facet(const char *name, struct rind_payload payload);
 
-struct MessageContainer emit_signal(const char *name, struct PayloadContainer *payload);
+struct rind_msg rind_remove_facet(const char *name, struct rind_payload *payload);
 
-void send_message(const struct TransportProtocol *tp, struct MessageContainer message);
+struct rind_msg rind_impulse(const char *name, struct rind_payload *payload);
 
-struct MessageContainer enquiry_tp(const struct TransportProtocol *tp, struct MessageContainer message);
+struct rind_msg rind_log_msg(const char *log);
 
-struct InvokeCommand create_invoke(enum InvokeType type, const char *action, const char *payload);
+uint8_t rind_send_message(const struct rind_tp *tp, struct rind_msg message);
 
-void set_rind_sock_path(char *path);
+struct rind_invoke_cmd rind_create_invoke(enum RIND_INVOKE_TYPE type,
+                                          const char *action,
+                                          const char *payload);
 
-struct InvokeCommand invoke(struct InvokeCommand command);
+void rind_set_sock_path(char *path);
+
+struct rind_invoke_cmd rind_invoke(struct rind_invoke_cmd command);

@@ -413,7 +413,7 @@ branch = ["session_id"]
 [[service]]
 name = "user_worker"
 space = "user"
-user-source.facet = "test:user_session"
+user-source.facet = "svc:user_session"
 user-source.username-field = "user"
 run.exec = "/bin/sh"
 run.args = ["-c", "exit 0"]
@@ -437,7 +437,7 @@ restart = false
     .dispatch(
       "flow",
       "set_facet",
-      FlowRuntimePayload::new("test:user_session")
+      FlowRuntimePayload::new("svc:user_session")
         .payload(serde_json::json!({"session_id": "s1", "user": "nonexistent_user_xyz"}))
         .into(),
       context_id,

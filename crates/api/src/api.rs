@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::io::stdout;
+use std::io::{Write, stdin, stdout};
 use std::os::raw::c_char;
 use std::os::unix::net::UnixStream;
 use std::ptr::null_mut;
@@ -16,18 +16,26 @@ use once_cell::sync::Lazy;
 use rind_flow::transport::TransportMessage;
 use rind_flow::{FlowJson, FlowPayload};
 use rind_ipc::ser::flexbuf_string;
-use rind_ipc::{Message, TransportMessageAction, TransportMessageType};
+use rind_ipc::shm::{ShmChannel, shm_client_connect};
+use rind_ipc::{Message, TransportMessageAction, TransportMessageType, TransportStream};
+
+const SHM_SIZE: usize = 1024 * 1024;
 
 static UDS_CONNECTIONS: Lazy<RwLock<HashMap<u64, UnixStream>>> =
+  Lazy::new(|| RwLock::new(HashMap::new()));
+static TP_STREAMS: Lazy<RwLock<HashMap<u64, TransportStream>>> =
+  Lazy::new(|| RwLock::new(HashMap::new()));
+static SHM_CONNECTIONS: Lazy<RwLock<HashMap<u64, ShmChannel>>> =
   Lazy::new(|| RwLock::new(HashMap::new()));
 
 static TRANSPORT_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 #[repr(C)]
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum RIND_TP_METHOD {
   STDIO = 0,
   UDS = 1,
+  SHM = 2,
 }
 
 #[repr(C)]
@@ -152,29 +160,42 @@ pub struct rind_tp {
 }
 
 fn init_tp_internal(transport: rind_tp) -> rind_tp {
+  if transport.options.is_null() || transport.len == 0 {
+    return transport;
+  }
+
+  let options: Vec<&str> = unsafe {
+    let slice = std::slice::from_raw_parts(transport.options, transport.len);
+
+    slice
+      .iter()
+      .map(|&ptr| {
+        if ptr.is_null() {
+          ""
+        } else {
+          CStr::from_ptr(ptr).to_str().unwrap()
+        }
+      })
+      .collect()
+  };
+
   if transport.protocol == RIND_TP_METHOD::UDS {
-    if transport.options.is_null() || transport.len == 0 {
-      return transport;
-    }
-
-    let options: Vec<&str> = unsafe {
-      let slice = std::slice::from_raw_parts(transport.options, transport.len);
-
-      slice
-        .iter()
-        .map(|&ptr| {
-          if ptr.is_null() {
-            ""
-          } else {
-            CStr::from_ptr(ptr).to_str().unwrap()
-          }
-        })
-        .collect()
-    };
-
     match UnixStream::connect(options[0]) {
       Ok(stream) => {
         UDS_CONNECTIONS
+          .write()
+          .unwrap()
+          .insert(transport.id, stream);
+      }
+      Err(e) => {
+        eprintln!("{e}");
+        return transport;
+      }
+    }
+  } else if transport.protocol == RIND_TP_METHOD::SHM {
+    match shm_client_connect(SHM_SIZE, options[0]) {
+      Ok(stream) => {
+        SHM_CONNECTIONS
           .write()
           .unwrap()
           .insert(transport.id, stream);
@@ -265,32 +286,35 @@ pub extern "C" fn rind_listen_tp(tp: *mut rind_tp, func: unsafe extern "C" fn(ri
 
   // let func: unsafe extern "C" fn(MessageContainer) -> *const MessageContainer = unsafe { *func };
 
-  thread::spawn(move || {
-    let stream = {
-      let conns = UDS_CONNECTIONS.read().unwrap();
+  let protocol = tp.protocol;
+  thread::spawn(move || match protocol {
+    RIND_TP_METHOD::STDIO => {
+      while let Ok(m) = TransportMessage::read_signed(&stdin()) {
+        let msg = transport_to_container(m);
+        let _ = unsafe { func(msg) };
+      }
+    }
+    RIND_TP_METHOD::UDS | RIND_TP_METHOD::SHM => {
+      let mut stream: TransportStream = if protocol == RIND_TP_METHOD::SHM {
+        let mut conns = SHM_CONNECTIONS.write().unwrap();
 
-      let conn = conns.get(&id).unwrap().try_clone().unwrap();
-      drop(conns);
-      conn
-    };
+        let Some(conn) = conns.get_mut(&id).unwrap().take_ingress() else {
+          return;
+        };
+        drop(conns);
+        TransportStream::Shm(conn)
+      } else {
+        let conns = UDS_CONNECTIONS.read().unwrap();
 
-    while let Ok(m) = TransportMessage::read_signed(&stream) {
-      let msg = transport_to_container(m);
-      let _ = unsafe { func(msg) };
+        let conn = conns.get(&id).unwrap().try_clone().unwrap();
+        drop(conns);
+        TransportStream::Uds(conn)
+      };
 
-      // if !response.is_null() {
-      //   let response = unsafe { &*response };
-      //   let msg: TransportMessage = response.into();
-      //   let resp_str = serde_json::to_string(&msg).unwrap_or_default().into_bytes();
-      //   let resp_len = (resp_str.len() as u32).to_be_bytes();
-
-      //   if stream.write_all(&resp_len).is_err() {
-      //     break;
-      //   }
-      //   if stream.write_all(&resp_str).is_err() {
-      //     break;
-      //   }
-      // }
+      while let Ok(m) = TransportMessage::read_signed(&mut stream) {
+        let msg = transport_to_container(m);
+        let _ = unsafe { func(msg) };
+      }
     }
   });
 }
@@ -308,35 +332,36 @@ pub extern "C" fn rind_enquiry_tp(tp: *const rind_tp, message: rind_msg) -> rind
 
   let tp = unsafe { &*tp };
 
-  let mut stream = match tp.protocol {
-    RIND_TP_METHOD::STDIO => {
-      return rind_msg {
-        r#type: RIND_MSG_TYPE::UNKNOWN,
-        action: RIND_MSG_ACTION::REMOVE,
-        payload: null_mut(),
-        name: null_mut(),
-      };
+  let options: Vec<&str> = if tp.options.is_null() || tp.len == 0 {
+    Vec::new()
+  } else {
+    unsafe {
+      let slice = std::slice::from_raw_parts(tp.options, tp.len);
+      slice
+        .iter()
+        .map(|&ptr| {
+          if ptr.is_null() {
+            ""
+          } else {
+            CStr::from_ptr(ptr).to_str().unwrap()
+          }
+        })
+        .collect()
     }
-    RIND_TP_METHOD::UDS => {
-      let options: Vec<&str> = if tp.options.is_null() || tp.len == 0 {
-        Vec::new()
-      } else {
-        unsafe {
-          let slice = std::slice::from_raw_parts(tp.options, tp.len);
-          slice
-            .iter()
-            .map(|&ptr| {
-              if ptr.is_null() {
-                ""
-              } else {
-                CStr::from_ptr(ptr).to_str().unwrap()
-              }
-            })
-            .collect()
-        }
-      };
+  };
 
-      if options.is_empty() {
+  if options.is_empty() {
+    return rind_msg {
+      r#type: RIND_MSG_TYPE::UNKNOWN,
+      action: RIND_MSG_ACTION::REMOVE,
+      payload: null_mut(),
+      name: null_mut(),
+    };
+  }
+
+  let mut stream: TransportStream =
+    match tp.protocol {
+      RIND_TP_METHOD::STDIO => {
         return rind_msg {
           r#type: RIND_MSG_TYPE::UNKNOWN,
           action: RIND_MSG_ACTION::REMOVE,
@@ -344,20 +369,33 @@ pub extern "C" fn rind_enquiry_tp(tp: *const rind_tp, message: rind_msg) -> rind
           name: null_mut(),
         };
       }
-
-      match UnixStream::connect(options[0]) {
-        Ok(s) => s,
-        Err(_) => {
-          return rind_msg {
-            r#type: RIND_MSG_TYPE::UNKNOWN,
-            action: RIND_MSG_ACTION::REMOVE,
-            payload: null_mut(),
-            name: null_mut(),
-          };
-        }
-      }
-    }
-  };
+      RIND_TP_METHOD::SHM => TP_STREAMS.write().unwrap().remove(&tp.id).unwrap_or(
+        match shm_client_connect(SHM_SIZE, options[0]) {
+          Ok(s) => TransportStream::ShmChan(s),
+          Err(_) => {
+            return rind_msg {
+              r#type: RIND_MSG_TYPE::UNKNOWN,
+              action: RIND_MSG_ACTION::REMOVE,
+              payload: null_mut(),
+              name: null_mut(),
+            };
+          }
+        },
+      ),
+      RIND_TP_METHOD::UDS => TP_STREAMS.write().unwrap().remove(&tp.id).unwrap_or(
+        match UnixStream::connect(options[0]) {
+          Ok(s) => TransportStream::Uds(s),
+          Err(_) => {
+            return rind_msg {
+              r#type: RIND_MSG_TYPE::UNKNOWN,
+              action: RIND_MSG_ACTION::REMOVE,
+              payload: null_mut(),
+              name: null_mut(),
+            };
+          }
+        },
+      ),
+    };
 
   let msg: TransportMessage = { &message }.into();
   if msg.write_signed(&mut stream).is_err() {
@@ -370,7 +408,10 @@ pub extern "C" fn rind_enquiry_tp(tp: *const rind_tp, message: rind_msg) -> rind
   }
 
   match TransportMessage::read_signed(&mut stream) {
-    Ok(m) => transport_to_container(m),
+    Ok(m) => {
+      TP_STREAMS.write().unwrap().insert(tp.id, stream);
+      transport_to_container(m)
+    }
     Err(_) => rind_msg {
       r#type: RIND_MSG_TYPE::UNKNOWN,
       action: RIND_MSG_ACTION::REMOVE,
@@ -469,9 +510,15 @@ pub extern "C" fn rind_impulse(name: *const c_char, payload: *mut rind_payload) 
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn rind_send_message(tp: *const rind_tp, message: rind_msg) {
+pub extern "C" fn rind_log_msg(log: *const c_char) -> rind_msg {
+  let msg = TransportMessage::log(unsafe { CStr::from_ptr(log) }.to_str().unwrap().to_string());
+  transport_to_container(msg)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rind_send_message(tp: *const rind_tp, message: rind_msg) -> u8 {
   if tp.is_null() {
-    return;
+    return 1;
   }
 
   let tp = unsafe { &*tp };
@@ -480,8 +527,14 @@ pub extern "C" fn rind_send_message(tp: *const rind_tp, message: rind_msg) {
 
   match tp.protocol {
     RIND_TP_METHOD::STDIO => {
-      // println!("{}", serde_json::to_string(&msg).unwrap());
       let _ = msg.write_signed(stdout());
+    }
+    RIND_TP_METHOD::SHM => {
+      let mut conns = SHM_CONNECTIONS.write().unwrap();
+      let conn = conns.get_mut(&tp.id).unwrap();
+
+      let data = msg.as_bytes();
+      let _ = conn.write(&data);
     }
     RIND_TP_METHOD::UDS => {
       let stream = {
@@ -495,6 +548,8 @@ pub extern "C" fn rind_send_message(tp: *const rind_tp, message: rind_msg) {
       let _ = msg.write_signed(stream);
     }
   }
+
+  return 0;
 }
 
 #[unsafe(no_mangle)]

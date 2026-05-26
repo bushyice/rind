@@ -5,7 +5,7 @@ pub mod send;
 pub mod ser;
 pub mod shm;
 
-use std::io::stdout;
+use std::{io::stdout, os::unix::net::UnixStream};
 
 use rind_core::prelude::Ustr;
 pub const IPC_MAGIC: [u8; 4] = *b"RIND";
@@ -13,6 +13,8 @@ pub const MAX_IPC_MESSAGE_SIZE: usize = 64 * 1024 * 1024; // 64MB
 
 use serde::{Deserialize, Serialize};
 use serde_json;
+
+use crate::shm::{ShmChannel, ShmStream};
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub enum MessageType {
@@ -359,6 +361,61 @@ impl From<MessageType> for Message {
 impl From<&str> for Message {
   fn from(value: &str) -> Self {
     Self::from_action(value)
+  }
+}
+
+pub enum TransportStream {
+  Uds(UnixStream),
+  Shm(ShmStream),
+  ShmChan(ShmChannel),
+}
+
+impl TransportStream {
+  pub fn as_uds(self) -> Option<UnixStream> {
+    match self {
+      Self::Uds(stream) => Some(stream),
+      _ => None,
+    }
+  }
+  pub fn as_shm_chan(self) -> Option<ShmChannel> {
+    match self {
+      Self::ShmChan(stream) => Some(stream),
+      _ => None,
+    }
+  }
+}
+
+impl std::io::Read for TransportStream {
+  fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    match self {
+      Self::Shm(stream) => stream.read(buf),
+      Self::Uds(stream) => stream.read(buf),
+      Self::ShmChan(stream) => stream.read(buf),
+    }
+  }
+}
+
+impl std::io::Write for TransportStream {
+  fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+    match self {
+      Self::Shm(_) => Err(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!("shm stream can not write"),
+      )),
+      Self::Uds(stream) => stream.write(buf),
+      Self::ShmChan(stream) => stream.write(buf),
+    }
+  }
+
+  fn flush(&mut self) -> std::io::Result<()> {
+    match self {
+      Self::Shm(_) => Err(std::io::Error::new(
+        std::io::ErrorKind::Other,
+        format!("shm stream can not flush"),
+      )),
+      Self::Uds(stream) => stream.flush(),
+      Self::ShmChan(stream) => stream.flush(),
+    }
   }
 }
 

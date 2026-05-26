@@ -367,6 +367,20 @@ impl FlowRuntime {
     }
   }
 
+  fn transport_endpoint<'a>(&self, subscriber: &'a TransportMethod) -> Option<&'a str> {
+    match subscriber {
+      TransportMethod::Options { options, .. } => options.get(0).and_then(|x| {
+        if x.starts_with("addr:") {
+          Some(x.trim_start_matches("addr:"))
+        } else {
+          None
+        }
+      }),
+      TransportMethod::Object { .. } => None,
+      _ => None,
+    }
+  }
+
   fn setup_subscriber_endpoint(
     &self,
     dispatch: &RuntimeDispatcher,
@@ -374,6 +388,8 @@ impl FlowRuntime {
     subscriber: &TransportMethod,
   ) {
     let id = self.transport_id(subscriber);
+    let endpoint = self.transport_endpoint(subscriber).unwrap_or(endpoint);
+
     if id == "uds" || id == "shm" {
       if id == "uds" {
         let mut act = crate::transport::TransportRuntime::actions.setup_uds(endpoint.to_ustr());
@@ -391,7 +407,7 @@ impl FlowRuntime {
     }
   }
 
-  fn publish_to_facet_subscribers(
+  fn publish_to_flow_subscribers(
     &self,
     dispatch: &RuntimeDispatcher,
     endpoint: &str,
@@ -405,10 +421,12 @@ impl FlowRuntime {
 
     for subscriber in subscribers {
       self.setup_subscriber_endpoint(dispatch, endpoint, subscriber);
+
       let action = match action {
         FlowAction::Apply => "set",
         FlowAction::Revert => "remove",
       };
+
       let _ = crate::transport::TransportRuntime::actions
         .send(endpoint.to_ustr())
         .r#type("facet".to_string())
@@ -502,7 +520,7 @@ impl FlowRuntime {
       action: FlowAction::Apply,
       flow_type: FlowEventType::Facet,
     });
-    self.publish_to_facet_subscribers(
+    self.publish_to_flow_subscribers(
       dispatch,
       name.as_str(),
       &instance.payload,
@@ -615,7 +633,7 @@ impl FlowRuntime {
           flow_type: FlowEventType::Facet,
         });
         let subscribers = self.facet_subscribers_for(metadata, &name.to_ustr());
-        self.publish_to_facet_subscribers(
+        self.publish_to_flow_subscribers(
           dispatch,
           branch.name.as_str(),
           &branch.payload,
@@ -660,6 +678,7 @@ impl FlowRuntime {
     name: impl Into<Ustr>,
     payload: Option<FlowPayload>,
     event_bus: &EventBus,
+    dispatch: &RuntimeDispatcher,
   ) -> Result<Void, CoreError> {
     let name = name.into();
     let def = metadata
@@ -680,6 +699,14 @@ impl FlowRuntime {
       flow_type: FlowEventType::Impulse,
     });
 
+    self.publish_to_flow_subscribers(
+      dispatch,
+      name.as_str(),
+      &flow_payload,
+      FlowAction::Apply,
+      def.subscribers.as_deref(),
+    );
+
     Ok(Void)
   }
 
@@ -690,6 +717,7 @@ impl FlowRuntime {
     source: &FlowInstance,
     event_bus: &EventBus,
     emitted: &mut HashSet<Ustr>,
+    dispatch: &RuntimeDispatcher,
   ) {
     let Some(all_impulses) = metadata.items::<FlowImpulse>("*") else {
       return;
@@ -723,7 +751,7 @@ impl FlowRuntime {
         continue;
       }
       emitted.insert(sig);
-      let _ = self.impulse(metadata, signal_name, Some(payload), event_bus);
+      let _ = self.impulse(metadata, signal_name, Some(payload), event_bus, dispatch);
     }
   }
 
@@ -1119,6 +1147,7 @@ impl FlowRuntime {
       name.clone(),
       Some(flow_payload.clone()),
       ctx.event_bus,
+      dispatch,
     )?;
     let source = FlowInstance {
       name,
@@ -1140,6 +1169,7 @@ impl FlowRuntime {
       &source,
       ctx.event_bus,
       &mut emitted,
+      dispatch,
     );
   }
 

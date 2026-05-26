@@ -75,7 +75,7 @@ fn take_tty(name: &str, taken: TTYPayload) -> CoreResult<TTYPayload> {
 plugin!(
   name: "display",
   version: 1,
-  caps: PluginCapability::ORCHESTRATORS | PluginCapability::RUNTIMES | PluginCapability::EXTENSIBLE,
+  caps: PluginCapability::ORCHESTRATORS | PluginCapability::RUNTIMES | PluginCapability::EXTENSIONS,
   deps: &["ttys"],
   create: DisplayPlugin,
   orchestrators: [DisplayOrchestrator::default()],

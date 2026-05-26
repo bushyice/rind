@@ -15,4 +15,5 @@ rind-ipc = { path = "../ipc" }
 rind-flow = { path = "../flow" }
 serde_json.workspace = true
 libc.workspace = true
+nix.workspace = true
 flexbuffers.workspace = true

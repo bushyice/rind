@@ -16,7 +16,10 @@ use rind_core::reexports::{
   nix::unistd::{Whence, lseek, read},
   serde_json::json,
 };
-use rind_flow::*;
+use rind_flow::{
+  transport::{TransportMethod, TransportProtocolId},
+  *,
+};
 use rind_ipc::{Message, recv::IpcSourcemap};
 use rind_plugins::prelude::*;
 use rind_plugins_common::TTYPayload;
@@ -406,21 +409,69 @@ fn inject_builtin(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {
             name: "rind:user_session".into(),
             branch: Some("tty".into()),
           }]),
+          subscribers: Some(vec![
+            TransportMethod::Options {
+              id: TransportProtocolId("uds".into()),
+              options: vec!["addr:rind-uds".into()],
+              permissions: None,
+            },
+            TransportMethod::Options {
+              id: TransportProtocolId("shm".into()),
+              options: vec!["addr:rind-shm".into()],
+              permissions: None,
+            },
+          ]),
           ..Default::default()
         })
         .insert::<FlowFacet>(FlowFacetMetadata {
           name: "taken".into(),
           payload: FlowPayloadType::String,
+          subscribers: Some(vec![
+            TransportMethod::Options {
+              id: TransportProtocolId("uds".into()),
+              options: vec!["addr:rind-uds".into()],
+              permissions: None,
+            },
+            TransportMethod::Options {
+              id: TransportProtocolId("shm".into()),
+              options: vec!["addr:rind-shm".into()],
+              permissions: None,
+            },
+          ]),
           ..Default::default()
         })
         .insert::<FlowFacet>(FlowFacetMetadata {
           name: "active".into(),
           payload: FlowPayloadType::String,
+          subscribers: Some(vec![
+            TransportMethod::Options {
+              id: TransportProtocolId("uds".into()),
+              options: vec!["addr:rind-uds".into()],
+              permissions: None,
+            },
+            TransportMethod::Options {
+              id: TransportProtocolId("shm".into()),
+              options: vec!["addr:rind-shm".into()],
+              permissions: None,
+            },
+          ]),
           ..Default::default()
         })
         .insert::<FlowImpulse>(FlowImpulseMetadata {
           name: "switch".into(),
           payload: FlowPayloadType::String,
+          subscribers: Some(vec![
+            TransportMethod::Options {
+              id: TransportProtocolId("uds".into()),
+              options: vec!["addr:rind-uds".into()],
+              permissions: None,
+            },
+            TransportMethod::Options {
+              id: TransportProtocolId("shm".into()),
+              options: vec!["addr:rind-shm".into()],
+              permissions: None,
+            },
+          ]),
           ..Default::default()
         })
         .close();
@@ -483,7 +534,7 @@ fn trigger_ttyload(
 plugin!(
   name: "myplugin",
   version: 0,
-  caps: PluginCapability::all(),
+  caps: PluginCapability::EXTENSIONS | PluginCapability::EXTENSIBLE | PluginCapability::ORCHESTRATORS | PluginCapability::RUNTIMES | PluginCapability::IPC,
   deps: &[],
   create: MyPlugin,
   orchestrators: [TTYOrchestrator::default(), TTYPumpOrchestrator],

@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use rind_core::prelude::*;
 use rind_core::reexports::serde_json::json;
 use rind_core::reexports::*;
+use rind_flow::transport::{TransportMethod, TransportProtocolId};
 use rind_flow::*;
 use rind_ipc::Message;
 use rind_ipc::payloads::{NetworkPayload, SSPayload};
@@ -208,22 +209,70 @@ fn inject_networking(name: &str, mut metadata: Metadata) -> CoreResult<Metadata>
           name: "interface".into(),
           payload: FlowPayloadType::Json,
           branch: Some(vec!["name".into()]),
+          subscribers: Some(vec![
+            TransportMethod::Options {
+              id: TransportProtocolId("uds".into()),
+              options: vec!["addr:rind-uds".into()],
+              permissions: None,
+            },
+            TransportMethod::Options {
+              id: TransportProtocolId("shm".into()),
+              options: vec!["addr:rind-shm".into()],
+              permissions: None,
+            },
+          ]),
           ..Default::default()
         })
         .insert::<FlowFacet>(FlowFacetMetadata {
           name: "online".into(),
           payload: FlowPayloadType::None,
+          subscribers: Some(vec![
+            TransportMethod::Options {
+              id: TransportProtocolId("uds".into()),
+              options: vec!["addr:rind-uds".into()],
+              permissions: None,
+            },
+            TransportMethod::Options {
+              id: TransportProtocolId("shm".into()),
+              options: vec!["addr:rind-shm".into()],
+              permissions: None,
+            },
+          ]),
           ..Default::default()
         })
         .insert::<FlowFacet>(FlowFacetMetadata {
           name: "configured".into(),
           payload: FlowPayloadType::Json,
           branch: Some(vec!["name".into()]),
+          subscribers: Some(vec![
+            TransportMethod::Options {
+              id: TransportProtocolId("uds".into()),
+              options: vec!["addr:rind-uds".into()],
+              permissions: None,
+            },
+            TransportMethod::Options {
+              id: TransportProtocolId("shm".into()),
+              options: vec!["addr:rind-shm".into()],
+              permissions: None,
+            },
+          ]),
           ..Default::default()
         })
         .insert::<FlowFacet>(FlowFacetMetadata {
           name: "dns_ready".into(),
           payload: FlowPayloadType::None,
+          subscribers: Some(vec![
+            TransportMethod::Options {
+              id: TransportProtocolId("uds".into()),
+              options: vec!["addr:rind-uds".into()],
+              permissions: None,
+            },
+            TransportMethod::Options {
+              id: TransportProtocolId("shm".into()),
+              options: vec!["addr:rind-shm".into()],
+              permissions: None,
+            },
+          ]),
           ..Default::default()
         })
         .close();
