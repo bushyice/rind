@@ -32,12 +32,6 @@ impl UnitSerialized {
   }
 }
 
-impl SerializeSerialized for UnitSerialized {
-  fn serialize(&self) -> Vec<u8> {
-    flexbuffers::to_vec(self).unwrap_or_default()
-  }
-}
-
 pub fn serialize_many<T: Serialize>(items: &Vec<T>) -> Vec<u8> {
   flexbuffers::to_vec(items).unwrap_or_default()
 }
@@ -67,23 +61,11 @@ pub struct SocketSerialized {
   pub active: bool,
 }
 
-impl SerializeSerialized for SocketSerialized {
-  fn serialize(&self) -> Vec<u8> {
-    flexbuffers::to_vec(self).unwrap_or_default()
-  }
-}
-
 #[derive(Serialize, Deserialize)]
 pub struct FacetSerialized {
   pub name: Ustr,
   pub instances: Vec<Vec<u8>>,
   pub keys: Vec<Ustr>,
-}
-
-impl SerializeSerialized for FacetSerialized {
-  fn serialize(&self) -> Vec<u8> {
-    flexbuffers::to_vec(self).unwrap_or_default()
-  }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -108,12 +90,6 @@ pub struct UnitItemsSerialized {
   pub impulses: Vec<ImpulseSerialized>,
 }
 
-impl SerializeSerialized for UnitItemsSerialized {
-  fn serialize(&self) -> Vec<u8> {
-    flexbuffers::to_vec(self).unwrap_or_default()
-  }
-}
-
 #[derive(Serialize, Deserialize)]
 pub struct PermissionSerialized {
   pub name: Ustr,
@@ -121,23 +97,11 @@ pub struct PermissionSerialized {
   pub group: Option<Ustr>,
 }
 
-impl SerializeSerialized for PermissionSerialized {
-  fn serialize(&self) -> Vec<u8> {
-    flexbuffers::to_vec(self).unwrap_or_default()
-  }
-}
-
 pub trait SerializeSerialized {
   fn serialize(&self) -> Vec<u8>;
 }
 
-impl SerializeSerialized for String {
-  fn serialize(&self) -> Vec<u8> {
-    flexbuffers::to_vec(self).unwrap_or_default()
-  }
-}
-
-impl SerializeSerialized for &str {
+impl<T: Serialize> SerializeSerialized for T {
   fn serialize(&self) -> Vec<u8> {
     flexbuffers::to_vec(self).unwrap_or_default()
   }
@@ -157,12 +121,6 @@ pub struct IpcListComponent {
   pub printer: Option<IpcListPrinter>,
 }
 
-impl SerializeSerialized for IpcListComponent {
-  fn serialize(&self) -> Vec<u8> {
-    flexbuffers::to_vec(self).unwrap_or_default()
-  }
-}
-
 impl IpcListComponent {
   pub fn add(&mut self, item: impl SerializeSerialized) {
     self.components.push(item.serialize());
@@ -172,6 +130,13 @@ impl IpcListComponent {
     self.printer = Some(printer);
     self
   }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct VariableSerialized {
+  pub name: Ustr,
+  pub default: String,
+  pub value: String,
 }
 
 pub fn flexbuf_string<V: AsRef<Vec<u8>>>(vec: V) -> String {

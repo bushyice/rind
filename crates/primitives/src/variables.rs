@@ -30,6 +30,18 @@ impl VariableHeap {
     }
   }
 
+  pub fn all(&self) -> impl Iterator<Item = (&Ustr, &toml::Value, toml::Value)> {
+    self
+      .defaults
+      .iter()
+      .map(|(name, def)| (name, def, self.get(name).unwrap_or(def.clone())))
+  }
+
+  pub fn get_full(&self, name: &Ustr) -> Option<(toml::Value, toml::Value)> {
+    let def = self.defaults.get(name).cloned()?;
+    Some((def.clone(), self.get(name).unwrap_or(def)))
+  }
+
   pub fn load(&mut self) -> Result<Void, CoreError> {
     if !self.path.exists() {
       return Ok(Void);

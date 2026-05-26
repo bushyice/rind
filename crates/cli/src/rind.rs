@@ -85,7 +85,8 @@ enum Commands {
     #[arg(long, default_value_t = 500)]
     poll_ms: u64,
   },
-  List {
+
+  Show {
     #[arg(name = "NAME")]
     name: Option<String>,
 
@@ -222,7 +223,6 @@ enum ScopeCommands {
     #[arg(name = "NAME")]
     name: String,
   },
-  List,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -567,7 +567,7 @@ fn main() {
         }
       }
     }
-    Commands::List {
+    Commands::Show {
       unit,
       service,
       mount,
@@ -581,9 +581,10 @@ fn main() {
     } => {
       let name = apply_scope_name(&name.unwrap_or_default(), scope.as_deref());
       let result = send_msg!(
-        "list",
+        "show",
         flexbuffers::to_vec(&ListPayload {
           name: name.clone().into(),
+          scope,
           unit_type: if unit {
             "unit"
           } else if service {
@@ -733,18 +734,6 @@ fn main() {
       }
       ScopeCommands::Destroy { name } => {
         handle_send!("destroy_scope", &ScopeDestroyPayload { scope: name });
-      }
-      ScopeCommands::List => {
-        let result = send_msg!("list_scopes", Vec::new()).expect("Failed to send message");
-
-        if let Ok(list) = result.parse_payload::<rind_ipc::ser::IpcListComponent>() {
-          print::print_ipc_list(&list);
-        } else {
-          println!(
-            "{}",
-            String::from_utf8_lossy(&result.payload.unwrap_or_default())
-          );
-        }
       }
     },
     Commands::Permission { action } => match action {

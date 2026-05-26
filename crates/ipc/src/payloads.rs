@@ -4,6 +4,7 @@ use rind_core::types::Ustr;
 pub struct ListPayload {
   pub name: Ustr,
   pub unit_type: String,
+  pub scope: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]

@@ -2,7 +2,6 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 
 use rind_core::types::Ustr;
-use rind_ipc::ser::SerializeSerialized;
 use serde::Serialize;
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -155,11 +154,5 @@ impl ScopeStore {
       .lock()
       .expect("scope specs lock poisoned");
     specs.values().cloned().collect()
-  }
-}
-
-impl SerializeSerialized for ScopeInfo {
-  fn serialize(&self) -> Vec<u8> {
-    flexbuffers::to_vec(self).unwrap_or_default()
   }
 }

@@ -2,7 +2,7 @@ use rind_ipc::payloads::{ListPayload, SSPayload};
 use rind_ipc::recv::IpcSourcemap;
 use rind_ipc::ser::{
   FacetSerialized, ImpulseSerialized, IpcListComponent, IpcListPrinter, SerializeSerialized,
-  SocketSerialized,
+  SocketSerialized, VariableSerialized,
 };
 use rind_ipc::{Message, MessageType};
 use std::collections::HashMap;
@@ -81,6 +81,7 @@ fn build_ipc_list_response(
     let mut sockets = Vec::new();
     let mut facets = Vec::new();
     let mut impulses = Vec::new();
+
     for (scope, items) in ctx.registry.metadata.all_items::<Service>() {
       for (group, meta) in items {
         if group == target_group {
@@ -324,14 +325,96 @@ fn build_ipc_list_response(
       )
       .unwrap_or_default(),
     )
+  } else if payload.unit_type == "scopes" {
+    let mut list = IpcListComponent::default().with_printer(IpcListPrinter {
+      r#type: "list".to_string(),
+      titles: vec!["Name".to_string(), "Attributes".to_string()],
+      keys: vec!["name".to_string(), "attributes".to_string()],
+      colors: vec!["blue".to_string(), "yellow".to_string()],
+    });
+
+    for s in ScopeStore::list_global() {
+      list.add(s);
+    }
+
+    Message::from_type(MessageType::Ok).with(flexbuffers::to_vec(&list).unwrap_or_default())
+  } else if payload.unit_type == "variables" {
+    let mut list = IpcListComponent::default().with_printer(IpcListPrinter {
+      r#type: "table".to_string(),
+      titles: vec![
+        "Name".to_string(),
+        "Default".to_string(),
+        "Value".to_string(),
+      ],
+      keys: vec![
+        "name".to_string(),
+        "default".to_string(),
+        "value".to_string(),
+      ],
+      colors: vec![
+        "green".to_string(),
+        "yellow".to_string(),
+        "cyan".to_string(),
+      ],
+    });
+
+    for (name, def, value) in ctx
+      .registry
+      .singleton::<VariableHeap>(VariableHeap::KEY)
+      .ok_or(CoreError::InvalidState("variable heap not found".into()))?
+      .all()
+    {
+      list.add(VariableSerialized {
+        name: name.clone(),
+        default: def.to_string(),
+        value: value.to_string(),
+      });
+    }
+
+    Message::from_type(MessageType::Ok).with(flexbuffers::to_vec(&list).unwrap_or_default())
+  } else if payload.unit_type == "variable" {
+    let mut list = IpcListComponent::default().with_printer(IpcListPrinter {
+      r#type: "list".to_string(),
+      titles: vec![
+        "Name".to_string(),
+        "Default".to_string(),
+        "Value".to_string(),
+      ],
+      keys: vec![
+        "name".to_string(),
+        "default".to_string(),
+        "value".to_string(),
+      ],
+      colors: vec![
+        "green".to_string(),
+        "yellow".to_string(),
+        "cyan".to_string(),
+      ],
+    });
+
+    let (def, value) = ctx
+      .registry
+      .singleton::<VariableHeap>(VariableHeap::KEY)
+      .ok_or(CoreError::InvalidState("variable heap not found".into()))?
+      .get_full(&payload.name)
+      .ok_or(CoreError::not_found("variable", payload.name.as_str()))?;
+
+    list.add(VariableSerialized {
+      name: payload.name.clone(),
+      default: def.to_string(),
+      value: value.to_string(),
+    });
+
+    Message::from_type(MessageType::Ok).with(flexbuffers::to_vec(&list).unwrap_or_default())
   } else if payload.unit_type == "unknown"
     || payload.unit_type == "units"
     || payload.unit_type == "all"
     || payload.unit_type.is_empty()
   {
     let mut units_map: HashMap<Ustr, UnitSerialized> = HashMap::new();
+    let scope = payload.scope.as_deref().unwrap_or("static");
 
-    if let Some(groups) = ctx.registry.metadata.groups("*") {
+    if let Some(groups) = ctx.registry.metadata.groups(scope) {
       for group in groups {
         let mut services = Vec::new();
         for (scope, items) in ctx.registry.metadata.all_items::<Service>() {
@@ -610,26 +693,6 @@ pub fn handle_ipc_destroy_scope(
   Ok(Message::ok("scope destroyed"))
 }
 
-pub fn handle_ipc_list_scopes(
-  _msg: Message,
-  _ctx: &mut RuntimeContext<'_>,
-  _dispatch: &RuntimeDispatcher,
-  _log: &LogHandle,
-) -> Result<Message, CoreError> {
-  let mut list = IpcListComponent::default().with_printer(IpcListPrinter {
-    r#type: "list".to_string(),
-    titles: vec!["Name".to_string(), "Attributes".to_string()],
-    keys: vec!["name".to_string(), "attributes".to_string()],
-    colors: vec!["blue".to_string(), "yellow".to_string()],
-  });
-
-  for s in ScopeStore::list_global() {
-    list.add(s);
-  }
-
-  Ok(Message::from_type(MessageType::Ok).with(flexbuffers::to_vec(&list).unwrap_or_default()))
-}
-
 fn queue_lifecycle_action(
   msg: Message,
   ctx: &mut RuntimeContext<'_>,
@@ -703,7 +766,7 @@ impl IpcRuntime {
     ipcsrc.register("stop_socket", handle_ipc_stop_socket, PermissionExpr::All);
     ipcsrc.register("start", handle_ipc_start_unknown, PermissionExpr::All);
     ipcsrc.register("stop", handle_ipc_stop_unknown, PermissionExpr::All);
-    ipcsrc.register("list", handle_ipc_list, PermissionExpr::All);
+    ipcsrc.register("show", handle_ipc_list, PermissionExpr::All);
     ipcsrc.register("set_variable", handle_ipc_set, PermissionExpr::All);
     ipcsrc.register("remove_variable", handle_ipc_remove, PermissionExpr::All);
     ipcsrc.register("create_scope", handle_ipc_create_scope, PermissionExpr::All);
