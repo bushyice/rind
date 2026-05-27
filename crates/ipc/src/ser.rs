@@ -144,8 +144,11 @@ pub fn ser_to_vec<T: Serialize>(item: T, bincode: bool) -> Vec<u8> {
   if bincode {
     bincode_next::serde::encode_to_vec(item, *BINCODE_CONFIG).unwrap_or_default()
   } else {
-    // rmp_serde::to_vec(&item).unwrap_or_default()
-    serde_json::to_vec(&item).unwrap_or_default()
+    // let mut buf = Vec::new();
+    // let _ = ciborium::into_writer(&item, &mut buf);
+    rmp_serde::to_vec_named(&item).unwrap_or_default()
+    // serde_json::to_vec(&item).unwrap_or_default()
+    // buf
   }
 }
 
@@ -155,8 +158,9 @@ pub fn deser_from_vec<T: DeserializeOwned>(item: &[u8], bincode: bool) -> CoreRe
       .map_err(|x| CoreError::custom(x))?
       .0
   } else {
-    // rmp_serde::from_slice(item).map_err(|x| CoreError::custom(x))?
-    serde_json::from_slice(item).map_err(|x| CoreError::custom(x))?
+    rmp_serde::from_slice(item).map_err(|x| CoreError::custom(x))?
+    // serde_json::from_slice(item).map_err(|x| CoreError::custom(x))?
+    // ciborium::from_reader(item).map_err(|x| CoreError::custom(x))?
   })
 }
 

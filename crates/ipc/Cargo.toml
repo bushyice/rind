@@ -17,8 +17,6 @@ rind-core = { path = "../core" }
 serde_bytes = "0.11"
 serde_json.workspace = true
 rmp-serde = "1.3"
-rmpv = "*"
-
 
 
 [features]
