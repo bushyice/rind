@@ -16,8 +16,8 @@ use crate::prelude::PermissionStore;
 use crate::transport::{TransportProtocol, TransportResponder, socket_path};
 use rind_core::notifier::Notifier;
 use rind_core::prelude::*;
-use rind_ipc::TransportMessage;
 use rind_ipc::shm::{ShmHeader, ShmRingBuffer};
+use rind_ipc::{TransportMessage, TransportMessageType};
 
 const SHM_SIZE: usize = 1024 * 1024;
 
@@ -181,7 +181,12 @@ impl ShmTransport {
               Ok(_) => {
                 while let Some(data) = client_rx.ring_to_rind.read() {
                   if let Ok(msg) = deser_from_vec::<TransportMessage>(&data, true) {
-                    let _ = tx.send((ep_for_msg.clone(), msg, uid, None));
+                    let responder = if matches!(msg.r#type, TransportMessageType::Enquiry) {
+                      Some(TransportResponder::Shm(client.clone()))
+                    } else {
+                      None
+                    };
+                    let _ = tx.send((ep_for_msg.clone(), msg, uid, responder));
                     if let Some(n) = &notifier {
                       let _ = n.notify();
                     }

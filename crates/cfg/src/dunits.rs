@@ -4,7 +4,9 @@ use std::path::Path;
 
 use rind_core::prelude::*;
 
-use rind_flow::transport::{TransportMethod, TransportProtocolId};
+use rind_flow::transport::{
+  TransportMethod, TransportProtocolId, TransportRoute, TransportRouteMetadata,
+};
 use rind_flow::{FlowFacet, FlowFacetMetadata, FlowImpulse, FlowImpulseMetadata};
 use rind_ipc::FlowPayloadType;
 use rind_primitives::mounts::Mount;
@@ -21,21 +23,30 @@ use crate::loader::load_units_from;
 fn add_builtin_defs(metadata: &mut Metadata) {
   metadata
     .group("rind")
+    // Transports
+    .insert::<TransportRoute>(TransportRouteMetadata {
+      name: "sys-uds".into(),
+      protocol: TransportMethod::Options {
+        id: TransportProtocolId("uds".into()),
+        options: vec![],
+        permissions: None,
+      },
+    })
+    .insert::<TransportRoute>(TransportRouteMetadata {
+      name: "sys-shm".into(),
+      protocol: TransportMethod::Options {
+        id: TransportProtocolId("shm".into()),
+        options: vec![],
+        permissions: None,
+      },
+    })
     // Facets
     .insert::<FlowFacet>(FlowFacetMetadata {
       name: "active".into(),
       payload: FlowPayloadType::String,
       subscribers: Some(vec![
-        TransportMethod::Options {
-          id: TransportProtocolId("uds".into()),
-          options: vec!["addr:rind-uds".into()],
-          permissions: None,
-        },
-        TransportMethod::Options {
-          id: TransportProtocolId("shm".into()),
-          options: vec!["addr:rind-shm".into()],
-          permissions: None,
-        },
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-shm".into())),
       ]),
       ..Default::default()
     })
@@ -43,16 +54,8 @@ fn add_builtin_defs(metadata: &mut Metadata) {
       name: "inactive".into(),
       payload: FlowPayloadType::String,
       subscribers: Some(vec![
-        TransportMethod::Options {
-          id: TransportProtocolId("uds".into()),
-          options: vec!["addr:rind-uds".into()],
-          permissions: None,
-        },
-        TransportMethod::Options {
-          id: TransportProtocolId("shm".into()),
-          options: vec!["addr:rind-shm".into()],
-          permissions: None,
-        },
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-shm".into())),
       ]),
       ..Default::default()
     })
@@ -60,16 +63,8 @@ fn add_builtin_defs(metadata: &mut Metadata) {
       name: "suspended".into(),
       payload: FlowPayloadType::String,
       subscribers: Some(vec![
-        TransportMethod::Options {
-          id: TransportProtocolId("uds".into()),
-          options: vec!["addr:rind-uds".into()],
-          permissions: None,
-        },
-        TransportMethod::Options {
-          id: TransportProtocolId("shm".into()),
-          options: vec!["addr:rind-shm".into()],
-          permissions: None,
-        },
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-shm".into())),
       ]),
       ..Default::default()
     })
@@ -78,16 +73,8 @@ fn add_builtin_defs(metadata: &mut Metadata) {
       payload: FlowPayloadType::Json,
       branch: Some(vec!["session_id".into()]),
       subscribers: Some(vec![
-        TransportMethod::Options {
-          id: TransportProtocolId("uds".into()),
-          options: vec!["addr:rind-uds".into()],
-          permissions: None,
-        },
-        TransportMethod::Options {
-          id: TransportProtocolId("shm".into()),
-          options: vec!["addr:rind-shm".into()],
-          permissions: None,
-        },
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-shm".into())),
       ]),
       ..Default::default()
     })
@@ -96,16 +83,8 @@ fn add_builtin_defs(metadata: &mut Metadata) {
       name: "activate".into(),
       payload: FlowPayloadType::String,
       subscribers: Some(vec![
-        TransportMethod::Options {
-          id: TransportProtocolId("uds".into()),
-          options: vec!["addr:rind-uds".into()],
-          permissions: None,
-        },
-        TransportMethod::Options {
-          id: TransportProtocolId("shm".into()),
-          options: vec!["addr:rind-shm".into()],
-          permissions: None,
-        },
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-shm".into())),
       ]),
       ..Default::default()
     })
@@ -113,16 +92,8 @@ fn add_builtin_defs(metadata: &mut Metadata) {
       name: "deactivate".into(),
       payload: FlowPayloadType::String,
       subscribers: Some(vec![
-        TransportMethod::Options {
-          id: TransportProtocolId("uds".into()),
-          options: vec!["addr:rind-uds".into()],
-          permissions: None,
-        },
-        TransportMethod::Options {
-          id: TransportProtocolId("shm".into()),
-          options: vec!["addr:rind-shm".into()],
-          permissions: None,
-        },
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-shm".into())),
       ]),
       ..Default::default()
     })
@@ -130,16 +101,8 @@ fn add_builtin_defs(metadata: &mut Metadata) {
       name: "request_login".into(),
       payload: FlowPayloadType::Json,
       subscribers: Some(vec![
-        TransportMethod::Options {
-          id: TransportProtocolId("uds".into()),
-          options: vec!["addr:rind-uds".into()],
-          permissions: None,
-        },
-        TransportMethod::Options {
-          id: TransportProtocolId("shm".into()),
-          options: vec!["addr:rind-shm".into()],
-          permissions: None,
-        },
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-shm".into())),
       ]),
       ..Default::default()
     })
@@ -152,16 +115,8 @@ fn add_builtin_defs(metadata: &mut Metadata) {
       name: "ready".into(),
       payload: FlowPayloadType::String,
       subscribers: Some(vec![
-        TransportMethod::Options {
-          id: TransportProtocolId("uds".into()),
-          options: vec!["addr:rind-uds".into()],
-          permissions: None,
-        },
-        TransportMethod::Options {
-          id: TransportProtocolId("shm".into()),
-          options: vec!["addr:rind-shm".into()],
-          permissions: None,
-        },
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-shm".into())),
       ]),
       ..Default::default()
     })
@@ -169,16 +124,8 @@ fn add_builtin_defs(metadata: &mut Metadata) {
       name: "boot".into(),
       payload: FlowPayloadType::String,
       subscribers: Some(vec![
-        TransportMethod::Options {
-          id: TransportProtocolId("uds".into()),
-          options: vec!["addr:rind-uds".into()],
-          permissions: None,
-        },
-        TransportMethod::Options {
-          id: TransportProtocolId("shm".into()),
-          options: vec!["addr:rind-shm".into()],
-          permissions: None,
-        },
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
+        TransportMethod::Type(TransportProtocolId("route:rind:sys-shm".into())),
       ]),
       ..Default::default()
     })
@@ -201,6 +148,7 @@ pub fn create_units_metadata<P: AsRef<Path>>(
     .of::<FlowFacet>("facet")
     .of::<FlowImpulse>("impulse")
     .of::<Permission>("permission")
+    .of::<TransportRoute>("transport-route")
     .of::<Variable>("variable");
 
   metadata = EXTENSIONS.with(|extensions| {

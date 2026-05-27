@@ -410,16 +410,8 @@ fn inject_builtin(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {
             branch: Some("tty".into()),
           }]),
           subscribers: Some(vec![
-            TransportMethod::Options {
-              id: TransportProtocolId("uds".into()),
-              options: vec!["addr:rind-uds".into()],
-              permissions: None,
-            },
-            TransportMethod::Options {
-              id: TransportProtocolId("shm".into()),
-              options: vec!["addr:rind-shm".into()],
-              permissions: None,
-            },
+            TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
+            TransportMethod::Type(TransportProtocolId("route:rind:sys-shm".into())),
           ]),
           ..Default::default()
         })
@@ -427,16 +419,8 @@ fn inject_builtin(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {
           name: "taken".into(),
           payload: FlowPayloadType::String,
           subscribers: Some(vec![
-            TransportMethod::Options {
-              id: TransportProtocolId("uds".into()),
-              options: vec!["addr:rind-uds".into()],
-              permissions: None,
-            },
-            TransportMethod::Options {
-              id: TransportProtocolId("shm".into()),
-              options: vec!["addr:rind-shm".into()],
-              permissions: None,
-            },
+            TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
+            TransportMethod::Type(TransportProtocolId("route:rind:sys-shm".into())),
           ]),
           ..Default::default()
         })
@@ -444,16 +428,8 @@ fn inject_builtin(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {
           name: "active".into(),
           payload: FlowPayloadType::String,
           subscribers: Some(vec![
-            TransportMethod::Options {
-              id: TransportProtocolId("uds".into()),
-              options: vec!["addr:rind-uds".into()],
-              permissions: None,
-            },
-            TransportMethod::Options {
-              id: TransportProtocolId("shm".into()),
-              options: vec!["addr:rind-shm".into()],
-              permissions: None,
-            },
+            TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
+            TransportMethod::Type(TransportProtocolId("route:rind:sys-shm".into())),
           ]),
           ..Default::default()
         })
@@ -461,16 +437,8 @@ fn inject_builtin(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {
           name: "switch".into(),
           payload: FlowPayloadType::String,
           subscribers: Some(vec![
-            TransportMethod::Options {
-              id: TransportProtocolId("uds".into()),
-              options: vec!["addr:rind-uds".into()],
-              permissions: None,
-            },
-            TransportMethod::Options {
-              id: TransportProtocolId("shm".into()),
-              options: vec!["addr:rind-shm".into()],
-              permissions: None,
-            },
+            TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
+            TransportMethod::Type(TransportProtocolId("route:rind:sys-shm".into())),
           ]),
           ..Default::default()
         })

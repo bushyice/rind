@@ -9,6 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex};
 
+use crate::shm_tp::ShmClient;
 use crate::{FacetGraph, FlowFacet, FlowImpulse};
 use rind_core::notifier::Notifier;
 use rind_core::prelude::*;
@@ -55,6 +56,18 @@ impl TransportMethod {
   }
 }
 
+#[model(
+  meta_name = name,
+  meta_fields(
+    name, protocol
+  ),
+  derive_metadata(Debug, Clone)
+)]
+pub struct TransportRoute {
+  pub name: Ustr,
+  pub protocol: TransportMethod,
+}
+
 pub trait TransportProtocol: Send + Sync {
   fn setup(
     &mut self,
@@ -68,12 +81,24 @@ pub trait TransportProtocol: Send + Sync {
 
 pub enum TransportResponder {
   Uds(UnixStream),
+  Shm(Arc<ShmClient>),
 }
 
 impl TransportResponder {
-  pub fn send(&self, msg: &TransportMessage) -> std::io::Result<Void> {
+  pub fn send(&mut self, msg: &TransportMessage) -> std::io::Result<Void> {
     match self {
       TransportResponder::Uds(stream) => msg.write_signed(stream),
+      TransportResponder::Shm(stream) => stream
+        .evt_to_client
+        .write(1)
+        .and_then(|_| {
+          if stream.ring_to_client.write(&msg.as_bytes()) {
+            Ok(Void)
+          } else {
+            Err(reexports::nix::errno::Errno::EBADF)
+          }
+        })
+        .map_err(|x| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{x}"))),
     }
   }
 }
@@ -335,7 +360,7 @@ impl TransportRuntime {
 
     match msg.r#type {
       TransportMessageType::Enquiry => {
-        if let Some(responder) = responder {
+        if let Some(mut responder) = responder {
           let response = self.handle_enquiry(&msg, uid, pm, ctx)?;
           let _ = responder.send(&response);
         }
@@ -408,6 +433,17 @@ impl TransportRuntime {
 
     Ok(Void)
   }
+
+  fn scope_from_route(name: &str) -> Ustr {
+    let mut parts = name.rsplitn(2, '@');
+    let scope = parts.next().unwrap_or("static");
+    let left = parts.next();
+    if left.is_some() {
+      Ustr::from(scope)
+    } else {
+      Ustr::from("static")
+    }
+  }
 }
 
 impl Default for TransportRuntime {
@@ -422,6 +458,50 @@ impl Default for TransportRuntime {
 
 #[runtime("transport")]
 impl TransportRuntime {
+  fn bootstrap(&mut self) {
+    for (group, tp) in ctx
+      .registry
+      .metadata
+      .items::<TransportRoute>("static")
+      .unwrap_or_default()
+    {
+      let endpoint = rslvns!(group, tp.name);
+      let id = transport_id(&tp.protocol);
+      if id == "uds" || id == "shm" {
+        if id == "uds" {
+          let mut payload = rpayload!({
+            "endpoint": endpoint.to_ustr(),
+          });
+          if let Some(perms) = tp.protocol.get_permissions() {
+            payload = payload.insert("permissions", perms);
+          }
+          self.__runtime_setup_uds(payload, ctx, dispatch, log)?;
+        } else {
+          let mut payload = rpayload!({
+            "endpoint": endpoint.to_ustr(),
+          });
+          if let Some(perms) = tp.protocol.get_permissions() {
+            payload = payload.insert("permissions", perms);
+          }
+          self.__runtime_setup_shm(payload, ctx, dispatch, log)?;
+        }
+      }
+    }
+  }
+
+  fn setup_route(&mut self, endpoint: Ustr) {
+    let endpoint = endpoint.trim_start_matches("route:");
+    let scope = Self::scope_from_route(endpoint);
+
+    let route = ctx
+      .registry
+      .metadata
+      .lookup::<TransportRoute>(scope, endpoint.to_ustr())
+      .ok_or(CoreError::not_found("transport route", endpoint))?;
+
+    setup_transport_endpoint(dispatch, endpoint, &route.protocol);
+  }
+
   fn setup_uds(&mut self, endpoint: Ustr, #[optional] permissions: Vec<Ustr>) {
     let pm = ctx
       .scope
@@ -592,5 +672,56 @@ fn parse_log_level(input: &str) -> LogLevel {
     "error" => LogLevel::Error,
     "fatal" => LogLevel::Fatal,
     _ => LogLevel::Info,
+  }
+}
+
+pub fn transport_id<'a>(transport: &'a TransportMethod) -> &'a str {
+  match transport {
+    TransportMethod::Type(id) => id.0.as_str(),
+    TransportMethod::Options { id, .. } => id.0.as_str(),
+    TransportMethod::Object { id, .. } => id.0.as_str(),
+  }
+}
+
+pub fn transport_endpoint<'a>(transport: &'a TransportMethod) -> Option<&'a str> {
+  match transport {
+    TransportMethod::Options { options, .. } => options.get(0).and_then(|x| {
+      if x.starts_with("addr:") {
+        Some(x.trim_start_matches("addr:"))
+      } else {
+        None
+      }
+    }),
+    TransportMethod::Object { .. } => None,
+    _ => None,
+  }
+}
+
+pub fn setup_transport_endpoint(
+  dispatch: &RuntimeDispatcher,
+  endpoint: &str,
+  transport: &TransportMethod,
+) {
+  let id = transport_id(transport);
+  let endpoint = transport_endpoint(transport).unwrap_or(endpoint);
+
+  if id == "uds" || id == "shm" {
+    if id == "uds" {
+      let mut act = TransportRuntime::actions.setup_uds(endpoint.to_ustr());
+      if let Some(perms) = transport.get_permissions() {
+        act = act.permissions(perms);
+      }
+      let _ = act.dispatch(dispatch);
+    } else {
+      let mut act = TransportRuntime::actions.setup_shm(endpoint.to_ustr());
+      if let Some(perms) = transport.get_permissions() {
+        act = act.permissions(perms);
+      }
+      let _ = act.dispatch(dispatch);
+    }
+  } else if id.starts_with("route:") {
+    let _ = TransportRuntime::actions
+      .setup_route(id.to_ustr())
+      .dispatch(dispatch);
   }
 }

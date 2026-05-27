@@ -59,6 +59,6 @@ watchdog = { interval-ms = 1000, grace-ms = 5000, action = "restart" }
 [[service]]
 name = "shm"
 run.exec = "/bin/shm"
-transport = "shm"
+transport = "route:rind:sys-shm" # or shm
 start-on = [{ impulse = "rind:boot" }]
 restart = false

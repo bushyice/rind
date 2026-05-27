@@ -15,7 +15,7 @@ use std::{ptr, thread};
 use once_cell::sync::Lazy;
 use rind_flow::transport::TransportMessage;
 use rind_flow::{FlowJson, FlowPayload};
-use rind_ipc::ser::{deser_string, ser_to_vec};
+use rind_ipc::ser::{deser_from_vec, deser_string, ser_to_vec};
 use rind_ipc::shm::{ShmChannel, shm_client_connect};
 use rind_ipc::{Message, TransportMessageAction, TransportMessageType, TransportStream};
 
@@ -311,9 +311,29 @@ pub extern "C" fn rind_listen_tp(tp: *mut rind_tp, func: unsafe extern "C" fn(ri
         TransportStream::Uds(conn)
       };
 
-      while let Ok(m) = TransportMessage::read_signed(&mut stream) {
-        let msg = transport_to_container(m);
-        let _ = unsafe { func(msg) };
+      if protocol == RIND_TP_METHOD::UDS {
+        while let Ok(m) = TransportMessage::read_signed(&mut stream) {
+          let msg = transport_to_container(m);
+          let _ = unsafe { func(msg) };
+        }
+      } else {
+        let stream = stream.as_shm().unwrap();
+        loop {
+          match stream.evt.read() {
+            Ok(_) => {
+              while let Some(data) = stream.ring.read() {
+                if let Ok(msg) = deser_from_vec::<TransportMessage>(&data, true) {
+                  let msg = transport_to_container(msg);
+                  let _ = unsafe { func(msg) };
+                }
+              }
+            }
+            Err(e) => {
+              eprintln!("EventFd read error: {e}");
+              break;
+            }
+          }
+        }
       }
     }
   });
@@ -407,7 +427,26 @@ pub extern "C" fn rind_enquiry_tp(tp: *const rind_tp, message: rind_msg) -> rind
     };
   }
 
-  match TransportMessage::read_signed(&mut stream) {
+  match if tp.protocol == RIND_TP_METHOD::SHM {
+    let stream = stream.as_shm_chan_ref().unwrap();
+    let ingress = stream.ingress.as_ref().unwrap();
+    match ingress.evt.read() {
+      Ok(_) => {
+        let mut data = Vec::new();
+        while let Some(d) = ingress.ring.read() {
+          data = d;
+        }
+        deser_from_vec::<TransportMessage>(&data, true)
+          .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{e}")))
+      }
+      Err(e) => Err::<TransportMessage, std::io::Error>(std::io::Error::new(
+        std::io::ErrorKind::BrokenPipe,
+        format!("{e}"),
+      )),
+    }
+  } else {
+    TransportMessage::read_signed(&mut stream)
+  } {
     Ok(m) => {
       TP_STREAMS.write().unwrap().insert(tp.id, stream);
       transport_to_container(m)
@@ -479,6 +518,19 @@ pub extern "C" fn rind_set_message_payload(message: *mut rind_msg, payload: rind
 pub extern "C" fn rind_set_message_name(message: *mut rind_msg, name: *const c_char) {
   let msg = unsafe { &mut *message };
   msg.name = name;
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn rind_msg_enquire(name: *const c_char, payload: *const c_char) -> rind_msg {
+  let mut msg = rind_create_msg(RIND_MSG_TYPE::ENQUIRY, RIND_MSG_ACTION::SET);
+  msg.name = name;
+  if !payload.is_null() {
+    msg.payload = Box::into_raw(Box::new(rind_create_msg_payload(
+      RIND_PAYLOAD_TYPE::STRING,
+      payload,
+    )));
+  }
+  msg
 }
 
 #[unsafe(no_mangle)]

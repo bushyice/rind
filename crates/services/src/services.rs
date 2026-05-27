@@ -22,7 +22,7 @@ use rind_core::{notifier::Notifier, prelude::*};
 
 use crate::sockets::get_all_sockets;
 use crate::{SocketRuntime, TimerRuntime};
-use rind_flow::transport::{TransportMethod, start_stdout_listener};
+use rind_flow::transport::{TransportMethod, start_stdout_listener, transport_id};
 use rind_flow::transport::{TransportRuntime, socket_path};
 use rind_flow::triggers::{check_condition, subset_match, trigger_events};
 use rind_flow::{
@@ -989,15 +989,21 @@ impl ServiceRuntime {
               }
             }
           }
-          TransportMethod::Type(id)
-          | TransportMethod::Options {
-            id,
-            options: _,
-            permissions: _,
-          } if id.0.as_str() == "uds" || id.0.as_str() == "shm" => {
+          TransportMethod::Type(id) | TransportMethod::Options { id, .. }
+            if id.0.as_str() == "uds" || id.0.as_str() == "shm" =>
+          {
             envs.insert(
               Ustr::from("RIND_TP_SOCK"),
               socket_path(&registry_key).to_str().unwrap().to_ustr(),
+            );
+          }
+          TransportMethod::Type(id) if id.0.starts_with("route:") => {
+            envs.insert(
+              Ustr::from("RIND_TP_SOCK"),
+              socket_path(id.0.trim_start_matches("route:"))
+                .to_str()
+                .unwrap()
+                .to_ustr(),
             );
           }
           _ => {}
@@ -1514,11 +1520,7 @@ impl ServiceRuntime {
       );
       false
     } else {
-      let id = match transport {
-        TransportMethod::Type(id) => id.0.as_str(),
-        TransportMethod::Options { id, .. } => id.0.as_str(),
-        TransportMethod::Object { id, .. } => id.0.as_str(),
-      };
+      let id = transport_id(transport);
 
       if id == "uds" || id == "shm" {
         let action = if id == "uds" {
@@ -1536,6 +1538,11 @@ impl ServiceRuntime {
             payload
           },
         );
+        true
+      } else if id.starts_with("route:") {
+        let _ = TransportRuntime::actions
+          .setup_route(id.to_ustr())
+          .dispatch(dispatch);
         true
       } else {
         false

@@ -28,6 +28,8 @@ typedef void (*rind_callback)(rind_msg);
 typedef rind_tp (*fn_rind_init_tp)(uint8_t, const char*);
 typedef void (*fn_rind_listen_tp)(rind_tp*, rind_callback);
 typedef rind_msg (*fn_rind_log_msg)(const char*);
+typedef rind_msg (*fn_rind_msg_enquire)(const char*, const char*);
+typedef rind_msg (*fn_rind_enquiry_tp)(rind_tp*, rind_msg);
 typedef uint8_t (*fn_rind_send_message)(const rind_tp*, rind_msg);
 
 void print_output(rind_msg msg) {
@@ -36,9 +38,14 @@ void print_output(rind_msg msg) {
   } else {
     printf("Received message with null name!\n");
   }
+
+  if (msg.payload != NULL) {
+    printf("  Payload: %s\n", msg.payload->content);
+  }
 }
 
 int main() {
+  setvbuf(stdout, NULL, _IONBF, 0);
   printf("connecting to shm tp...\n");
 
   void* lib = dlopen("/lib/librind_api.so", RTLD_LAZY);
@@ -51,6 +58,8 @@ int main() {
   fn_rind_listen_tp rind_listen_tp = (fn_rind_listen_tp)dlsym(lib, "rind_listen_tp");
   fn_rind_log_msg rind_log_msg = (fn_rind_log_msg)dlsym(lib, "rind_log_msg");
   fn_rind_send_message rind_send_message = (fn_rind_send_message)dlsym(lib, "rind_send_message");
+  fn_rind_msg_enquire rind_msg_enquire = (fn_rind_msg_enquire)dlsym(lib, "rind_msg_enquire");
+  fn_rind_enquiry_tp rind_enquiry_tp = (fn_rind_enquiry_tp)dlsym(lib, "rind_enquiry_tp");
 
   if (!rind_init_tp || !rind_listen_tp || !rind_log_msg || !rind_send_message) {
     fprintf(stderr, "failed to find symbols: %s\n", dlerror());
@@ -72,6 +81,10 @@ int main() {
   printf("sending message to rind...\n");
   rind_msg msg = rind_log_msg("hello from shm client!");
   rind_send_message(tp, msg);
+
+  rind_msg enq = rind_msg_enquire("has_state", "net:online");
+  rind_msg resp = rind_enquiry_tp(tp, enq);
+  print_output(resp);
 
   while (1) {
     sleep(1);

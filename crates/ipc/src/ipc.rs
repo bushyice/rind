@@ -386,6 +386,18 @@ impl TransportStream {
       _ => None,
     }
   }
+  pub fn as_shm_chan_ref(&self) -> Option<&ShmChannel> {
+    match self {
+      Self::ShmChan(stream) => Some(stream),
+      _ => None,
+    }
+  }
+  pub fn as_shm(self) -> Option<ShmStream> {
+    match self {
+      Self::Shm(stream) => Some(stream),
+      _ => None,
+    }
+  }
 }
 
 impl std::io::Read for TransportStream {

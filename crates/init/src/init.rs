@@ -44,6 +44,7 @@ impl Orchestrator for BootOrchestrator {
     ctx.dispatch("ipc", "start_server", Default::default())?;
 
     ctx.dispatch("flow", "bootstrap", Default::default())?;
+    ctx.dispatch("transport", "bootstrap", Default::default())?;
     ctx.dispatch("sockets", "bootstrap", Default::default())?;
     ctx.dispatch("services", "bootstrap", Default::default())?;
 

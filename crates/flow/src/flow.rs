@@ -11,7 +11,7 @@ use rind_core::prelude::*;
 use rind_core::reexports::*;
 pub use rind_ipc::{FlowJson, FlowMatchOperation, FlowPayload, FlowPayloadType};
 
-use crate::transport::TransportMethod;
+use crate::transport::{TransportMethod, setup_transport_endpoint, transport_id};
 use crate::triggers::{
   branch_target_key, check_condition, default_payload_for_type, json_branch_key, map_json_payload,
   merge_json, payload_compatible, payload_signature, payload_to_filter,
@@ -359,58 +359,20 @@ impl Default for FlowRuntime {
 }
 
 impl FlowRuntime {
-  fn transport_id<'a>(&self, subscriber: &'a TransportMethod) -> &'a str {
-    match subscriber {
-      TransportMethod::Type(id) => id.0.as_str(),
-      TransportMethod::Options { id, .. } => id.0.as_str(),
-      TransportMethod::Object { id, .. } => id.0.as_str(),
-    }
-  }
-
-  fn transport_endpoint<'a>(&self, subscriber: &'a TransportMethod) -> Option<&'a str> {
-    match subscriber {
-      TransportMethod::Options { options, .. } => options.get(0).and_then(|x| {
-        if x.starts_with("addr:") {
-          Some(x.trim_start_matches("addr:"))
-        } else {
-          None
-        }
-      }),
-      TransportMethod::Object { .. } => None,
-      _ => None,
-    }
-  }
-
   fn setup_subscriber_endpoint(
     &self,
     dispatch: &RuntimeDispatcher,
     endpoint: &str,
     subscriber: &TransportMethod,
   ) {
-    let id = self.transport_id(subscriber);
-    let endpoint = self.transport_endpoint(subscriber).unwrap_or(endpoint);
-
-    if id == "uds" || id == "shm" {
-      if id == "uds" {
-        let mut act = crate::transport::TransportRuntime::actions.setup_uds(endpoint.to_ustr());
-        if let Some(perms) = subscriber.get_permissions() {
-          act = act.permissions(perms);
-        }
-        let _ = act.dispatch(dispatch);
-      } else {
-        let mut act = crate::transport::TransportRuntime::actions.setup_shm(endpoint.to_ustr());
-        if let Some(perms) = subscriber.get_permissions() {
-          act = act.permissions(perms);
-        }
-        let _ = act.dispatch(dispatch);
-      }
-    }
+    setup_transport_endpoint(dispatch, endpoint, subscriber);
   }
 
   fn publish_to_flow_subscribers(
     &self,
     dispatch: &RuntimeDispatcher,
     endpoint: &str,
+    r#type: &str,
     payload: &FlowPayload,
     action: FlowAction,
     subscribers: Option<&[TransportMethod]>,
@@ -420,7 +382,13 @@ impl FlowRuntime {
     };
 
     for subscriber in subscribers {
-      self.setup_subscriber_endpoint(dispatch, endpoint, subscriber);
+      // self.setup_subscriber_endpoint(dispatch, endpoint, subscriber);
+      let id = transport_id(subscriber);
+      let endpoint = if id.starts_with("route:") || (id != "uds" && id != "shm") {
+        id.trim_start_matches("route:")
+      } else {
+        endpoint
+      };
 
       let action = match action {
         FlowAction::Apply => "set",
@@ -429,7 +397,7 @@ impl FlowRuntime {
 
       let _ = crate::transport::TransportRuntime::actions
         .send(endpoint.to_ustr())
-        .r#type("facet".to_string())
+        .r#type(r#type.to_string())
         .name(endpoint.to_ustr())
         .action(action.to_string())
         .payload(payload.to_json())
@@ -523,6 +491,7 @@ impl FlowRuntime {
     self.publish_to_flow_subscribers(
       dispatch,
       name.as_str(),
+      "facet",
       &instance.payload,
       FlowAction::Apply,
       def.subscribers.as_deref(),
@@ -636,6 +605,7 @@ impl FlowRuntime {
         self.publish_to_flow_subscribers(
           dispatch,
           branch.name.as_str(),
+          "facet",
           &branch.payload,
           FlowAction::Revert,
           subscribers.as_deref(),
@@ -702,6 +672,7 @@ impl FlowRuntime {
     self.publish_to_flow_subscribers(
       dispatch,
       name.as_str(),
+      "impulse",
       &flow_payload,
       FlowAction::Apply,
       def.subscribers.as_deref(),
