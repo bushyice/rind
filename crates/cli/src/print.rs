@@ -1,7 +1,7 @@
 use owo_colors::OwoColorize;
 use rind_ipc::ser::{
   FacetSerialized, IpcListComponent, IpcListPrinter, ServiceSerialized, SocketSerialized,
-  UnitItemsSerialized, UnitSerialized,
+  UnitItemsSerialized, UnitSerialized, deser_from_vec,
 };
 
 pub fn print_ipc_list(list: &IpcListComponent) {
@@ -55,8 +55,7 @@ fn print_as_table(list: &IpcListComponent, printer: &IpcListPrinter) {
   );
 
   for component in &list.components {
-    if let Ok(obj) =
-      flexbuffers::from_slice::<serde_json::Map<String, serde_json::Value>>(component)
+    if let Ok(obj) = deser_from_vec::<serde_json::Map<String, serde_json::Value>>(component, false)
     {
       let mut row = Vec::new();
       for (i, key) in printer.keys.iter().enumerate() {
@@ -84,8 +83,7 @@ fn print_as_table(list: &IpcListComponent, printer: &IpcListPrinter) {
 
 fn print_as_list(list: &IpcListComponent, printer: &IpcListPrinter) {
   for component in &list.components {
-    if let Ok(obj) =
-      flexbuffers::from_slice::<serde_json::Map<String, serde_json::Value>>(component)
+    if let Ok(obj) = deser_from_vec::<serde_json::Map<String, serde_json::Value>>(component, false)
     {
       for (i, key) in printer.keys.iter().enumerate() {
         let title = printer.titles.get(i).cloned().unwrap_or(key.clone());
@@ -267,8 +265,7 @@ pub fn print_state(st: &FacetSerialized) {
       BTreeMap::new();
 
     for inst_raw in &st.instances {
-      if let Ok(obj) =
-        flexbuffers::from_slice::<serde_json::Map<String, serde_json::Value>>(inst_raw)
+      if let Ok(obj) = deser_from_vec::<serde_json::Map<String, serde_json::Value>>(inst_raw, false)
       {
         let key = obj
           .get(&pk)

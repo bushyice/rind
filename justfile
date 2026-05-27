@@ -22,3 +22,6 @@ run:
 
 test:
   cargo nextest r
+
+bench stuff:
+  cargo bench --bench {{stuff}} -- --quiet

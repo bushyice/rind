@@ -13,7 +13,7 @@ rind-primitives = { path = "../primitives" }
 rind-services = { path = "../services" }
 rind-flow = { path = "../flow" }
 rind-ipc = { path = "../ipc", features = ["server"] }
-flexbuffers.workspace = true
+
 
 
 [dev-dependencies]

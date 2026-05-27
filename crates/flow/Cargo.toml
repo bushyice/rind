@@ -13,5 +13,5 @@ rind-ipc = { path = "../ipc", features = ["server"] }
 rind-primitives = { path = "../primitives" }
 serde.workspace = true
 serde_json.workspace = true
-flexbuffers.workspace = true
+
 toml.workspace = true

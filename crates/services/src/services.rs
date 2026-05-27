@@ -3,6 +3,7 @@ use nix::sys::time::TimeSpec;
 use nix::sys::timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags};
 use nix::unistd::Pid;
 use rind_ipc::payloads::SSPayload;
+use rind_ipc::ser::ser_to_vec;
 use rind_ipc::{Message, TransportMessageAction, TransportMessageType};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -1733,9 +1734,7 @@ fn start_stdin_writer(
 
   std::thread::spawn(move || {
     while let Ok(msg) = rx.recv() {
-      let Ok(payload) = flexbuffers::to_vec(&msg) else {
-        continue;
-      };
+      let payload = ser_to_vec(&msg, true);
       let len = (payload.len() as u32).to_be_bytes();
 
       if std::io::Write::write_all(&mut stdin, &len).is_err()

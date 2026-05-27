@@ -15,7 +15,7 @@ use std::{ptr, thread};
 use once_cell::sync::Lazy;
 use rind_flow::transport::TransportMessage;
 use rind_flow::{FlowJson, FlowPayload};
-use rind_ipc::ser::flexbuf_string;
+use rind_ipc::ser::{deser_string, ser_to_vec};
 use rind_ipc::shm::{ShmChannel, shm_client_connect};
 use rind_ipc::{Message, TransportMessageAction, TransportMessageType, TransportStream};
 
@@ -105,7 +105,7 @@ impl Into<Message> for rind_invoke_cmd {
           .to_str()
           .unwrap()
           .to_string();
-        flexbuffers::to_vec(&s).ok()
+        Some(ser_to_vec(&s, false))
       } else {
         None
       },
@@ -608,7 +608,7 @@ pub extern "C" fn rind_invoke(command: rind_invoke_cmd) -> rind_invoke_cmd {
       str.into_raw()
     },
     payload: if let Some(p) = msg.payload {
-      let str = CString::new(flexbuf_string(p)).unwrap();
+      let str = CString::new(deser_string(p)).unwrap();
       str.into_raw()
     } else {
       null_mut()

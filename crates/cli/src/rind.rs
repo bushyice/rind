@@ -24,11 +24,10 @@ use rind_ipc::{
   send::send_message,
   ser::{
     FacetSerialized, ServiceSerialized, SocketSerialized, UnitItemsSerialized, UnitSerialized,
-    flexbuf_string,
+    deser_string, ser_to_vec,
   },
 };
 
-use flexbuffers;
 mod macros;
 mod print;
 
@@ -384,7 +383,7 @@ pub fn handle_run0_message(args: Vec<String>, message: Message) {
       };
       handle_run0_message(
         args,
-        match send_message(Message::from("run0").with(flexbuffers::to_vec(&payload).unwrap())) {
+        match send_message(Message::from("run0").with(ser_to_vec(&payload, false))) {
           Ok(m) => m,
           Err(e) => {
             report_error("run0 request failed", e);
@@ -424,7 +423,7 @@ pub fn handle_message(message: Message) {
         message
           .payload
           .as_ref()
-          .map(|p| flexbuf_string(p))
+          .map(|p| deser_string(p))
           .unwrap_or_else(|| "ok".to_string())
       );
     }
@@ -435,7 +434,7 @@ pub fn handle_message(message: Message) {
         message
           .payload
           .as_ref()
-          .map(|p| flexbuf_string(p))
+          .map(|p| deser_string(p))
           .unwrap_or_else(|| "unknown error".to_string())
       )
     }
@@ -582,31 +581,33 @@ fn main() {
       let name = apply_scope_name(&name.unwrap_or_default(), scope.as_deref());
       let result = send_msg!(
         "show",
-        flexbuffers::to_vec(&ListPayload {
-          name: name.clone().into(),
-          scope,
-          unit_type: if unit {
-            "unit"
-          } else if service {
-            "service"
-          } else if mount {
-            "mount"
-          } else if state {
-            "state"
-          } else if socket {
-            "socket"
-          } else if port && network {
-            "netport"
-          } else if network {
-            "netiface"
-          } else if r#type.is_some() {
-            r#type.as_ref().unwrap()
-          } else {
-            "unknown"
-          }
-          .into(),
-        })
-        .unwrap()
+        ser_to_vec(
+          &ListPayload {
+            name: name.clone().into(),
+            scope,
+            unit_type: if unit {
+              "unit"
+            } else if service {
+              "service"
+            } else if mount {
+              "mount"
+            } else if state {
+              "state"
+            } else if socket {
+              "socket"
+            } else if port && network {
+              "netport"
+            } else if network {
+              "netiface"
+            } else if r#type.is_some() {
+              r#type.as_ref().unwrap()
+            } else {
+              "unknown"
+            }
+            .into(),
+          },
+          false
+        )
       )
       .expect("Failed to send message");
 
@@ -704,7 +705,7 @@ fn main() {
         }
       }
 
-      handle_send_raw!(name.as_str(), flexbuffers::to_vec(&v).unwrap());
+      handle_send_raw!(name.as_str(), ser_to_vec(&v, false));
     }
     Commands::Scope { action } => match action {
       ScopeCommands::Create {
@@ -769,19 +770,23 @@ fn main() {
         let result = send_msg!(
           "show_permissions",
           if let Some(user) = user {
-            flexbuffers::to_vec(PermissionPayload {
-              subject: user,
-              group: false,
-              permission: String::new(),
-            })
-            .unwrap()
+            ser_to_vec(
+              PermissionPayload {
+                subject: user,
+                group: false,
+                permission: String::new(),
+              },
+              false,
+            )
           } else if let Some(group) = group {
-            flexbuffers::to_vec(PermissionPayload {
-              subject: group,
-              group: true,
-              permission: String::new(),
-            })
-            .unwrap()
+            ser_to_vec(
+              PermissionPayload {
+                subject: group,
+                group: true,
+                permission: String::new(),
+              },
+              false,
+            )
           } else {
             Vec::new()
           }

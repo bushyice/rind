@@ -1,5 +1,7 @@
 use rind_core::prelude::{CoreError, LogHandle, PermissionExpr, RuntimeContext, RuntimeDispatcher};
 
+use crate::ser::deser_from_vec;
+
 use super::Message;
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -27,7 +29,7 @@ pub fn recv_message(mut stream: UnixStream, handle_client: ClientHandler) {
       break;
     }
 
-    let msg: Message = match flexbuffers::from_slice(&buf) {
+    let msg: Message = match deser_from_vec(&buf, false) {
       Ok(m) => m,
       Err(e) => {
         eprintln!("flexbuffers parse error: {e}");

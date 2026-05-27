@@ -2,7 +2,7 @@ use rind_ipc::payloads::{ListPayload, SSPayload};
 use rind_ipc::recv::IpcSourcemap;
 use rind_ipc::ser::{
   FacetSerialized, ImpulseSerialized, IpcListComponent, IpcListPrinter, SerializeSerialized,
-  SocketSerialized, VariableSerialized,
+  SocketSerialized, VariableSerialized, ser_to_vec,
 };
 use rind_ipc::{Message, MessageType};
 use std::collections::HashMap;
@@ -189,7 +189,7 @@ fn build_ipc_list_response(
               })
               .map_or(Default::default(), |x| {
                 x.iter()
-                  .map(|x| flexbuffers::to_vec(&x.payload.to_json()).unwrap_or_default())
+                  .map(|x| ser_to_vec(&x.payload.to_json(), false))
                   .collect()
               }),
             keys: st.branch.clone().unwrap_or_default(),
@@ -288,7 +288,7 @@ fn build_ipc_list_response(
         name: payload.name,
         instances: instances.map_or(Default::default(), |x| {
           x.iter()
-            .map(|x| flexbuffers::to_vec(&x.payload.to_json()).unwrap_or_default())
+            .map(|x| ser_to_vec(&x.payload.to_json(), false))
             .collect()
         }),
         keys: if let Some(branches) = branches {
@@ -302,29 +302,27 @@ fn build_ipc_list_response(
   } else if payload.unit_type == "facet" {
     let facets = &sm.facets;
 
-    Message::from_type(MessageType::Ok).with(
-      flexbuffers::to_vec(
-        &facets
-          .iter()
-          .filter_map(|(name, inst)| {
-            let def = ctx
-              .registry
-              .metadata
-              .find::<FlowFacet>("*", name.as_str())?;
-            let branches = def.branch.as_ref()?;
-            Some(FacetSerialized {
-              name: name.clone(),
-              instances: inst
-                .iter()
-                .map(|x| flexbuffers::to_vec(&x.payload.to_json()).unwrap_or_default())
-                .collect(),
-              keys: branches.clone(),
-            })
+    Message::from_type(MessageType::Ok).with(ser_to_vec(
+      &facets
+        .iter()
+        .filter_map(|(name, inst)| {
+          let def = ctx
+            .registry
+            .metadata
+            .find::<FlowFacet>("*", name.as_str())?;
+          let branches = def.branch.as_ref()?;
+          Some(FacetSerialized {
+            name: name.clone(),
+            instances: inst
+              .iter()
+              .map(|x| ser_to_vec(&x.payload.to_json(), false))
+              .collect(),
+            keys: branches.clone(),
           })
-          .collect::<Vec<FacetSerialized>>(),
-      )
-      .unwrap_or_default(),
-    )
+        })
+        .collect::<Vec<FacetSerialized>>(),
+      false,
+    ))
   } else if payload.unit_type == "scopes" {
     let mut list = IpcListComponent::default().with_printer(IpcListPrinter {
       r#type: "list".to_string(),
@@ -337,7 +335,7 @@ fn build_ipc_list_response(
       list.add(s);
     }
 
-    Message::from_type(MessageType::Ok).with(flexbuffers::to_vec(&list).unwrap_or_default())
+    Message::from_type(MessageType::Ok).with(ser_to_vec(&list, false))
   } else if payload.unit_type == "variables" {
     let mut list = IpcListComponent::default().with_printer(IpcListPrinter {
       r#type: "table".to_string(),
@@ -371,7 +369,7 @@ fn build_ipc_list_response(
       });
     }
 
-    Message::from_type(MessageType::Ok).with(flexbuffers::to_vec(&list).unwrap_or_default())
+    Message::from_type(MessageType::Ok).with(ser_to_vec(&list, false))
   } else if payload.unit_type == "variable" {
     let mut list = IpcListComponent::default().with_printer(IpcListPrinter {
       r#type: "list".to_string(),
@@ -405,7 +403,7 @@ fn build_ipc_list_response(
       value: value.to_string(),
     });
 
-    Message::from_type(MessageType::Ok).with(flexbuffers::to_vec(&list).unwrap_or_default())
+    Message::from_type(MessageType::Ok).with(ser_to_vec(&list, false))
   } else if payload.unit_type == "unknown"
     || payload.unit_type == "units"
     || payload.unit_type == "all"

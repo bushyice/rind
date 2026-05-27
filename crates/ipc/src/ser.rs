@@ -1,5 +1,9 @@
-use rind_core::types::Ustr;
-use serde::{Deserialize, Serialize};
+use rind_core::{
+  error::{CoreError, CoreResult},
+  reexports::{bincode_next, once_cell::sync::Lazy},
+  types::Ustr,
+};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct UnitSerialized {
@@ -17,14 +21,14 @@ pub struct UnitSerialized {
 
 impl UnitSerialized {
   pub fn from_bytes(data: &[u8]) -> Self {
-    flexbuffers::from_slice(data).unwrap_or(Self {
+    deser_from_vec(data, false).unwrap_or(Self {
       name: String::new().into(),
       ..Default::default()
     })
   }
 
   pub fn many_from_bytes(data: &[u8]) -> Vec<Self> {
-    flexbuffers::from_slice(data).unwrap_or_default()
+    deser_from_vec(data, false).unwrap_or_default()
   }
 
   pub fn as_some(self) -> Option<Self> {
@@ -33,7 +37,7 @@ impl UnitSerialized {
 }
 
 pub fn serialize_many<T: Serialize>(items: &Vec<T>) -> Vec<u8> {
-  flexbuffers::to_vec(items).unwrap_or_default()
+  ser_to_vec(items, false)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -44,12 +48,6 @@ pub struct ServiceSerialized {
   pub restart: bool,
   pub run: Vec<Ustr>,
   pub pid: Option<u32>,
-}
-
-impl ServiceSerialized {
-  pub fn serialize(&self) -> Vec<u8> {
-    flexbuffers::to_vec(self).unwrap_or_default()
-  }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -103,7 +101,7 @@ pub trait SerializeSerialized {
 
 impl<T: Serialize> SerializeSerialized for T {
   fn serialize(&self) -> Vec<u8> {
-    flexbuffers::to_vec(self).unwrap_or_default()
+    ser_to_vec(self, false)
   }
 }
 
@@ -139,11 +137,31 @@ pub struct VariableSerialized {
   pub value: String,
 }
 
-pub fn flexbuf_string<V: AsRef<Vec<u8>>>(vec: V) -> String {
-  flexbuffers::Reader::get_root(vec.as_ref().as_slice())
-    .unwrap()
-    .as_str()
-    .to_string()
+static BINCODE_CONFIG: Lazy<bincode_next::config::Configuration> =
+  Lazy::new(|| bincode_next::config::standard());
+
+pub fn ser_to_vec<T: Serialize>(item: T, bincode: bool) -> Vec<u8> {
+  if bincode {
+    bincode_next::serde::encode_to_vec(item, *BINCODE_CONFIG).unwrap_or_default()
+  } else {
+    // rmp_serde::to_vec(&item).unwrap_or_default()
+    serde_json::to_vec(&item).unwrap_or_default()
+  }
+}
+
+pub fn deser_from_vec<T: DeserializeOwned>(item: &[u8], bincode: bool) -> CoreResult<T> {
+  Ok(if bincode {
+    bincode_next::serde::decode_from_slice(item, *BINCODE_CONFIG)
+      .map_err(|x| CoreError::custom(x))?
+      .0
+  } else {
+    // rmp_serde::from_slice(item).map_err(|x| CoreError::custom(x))?
+    serde_json::from_slice(item).map_err(|x| CoreError::custom(x))?
+  })
+}
+
+pub fn deser_string<V: AsRef<Vec<u8>>>(vec: V) -> String {
+  deser_from_vec(vec.as_ref(), false).unwrap()
 }
 
 #[cfg(test)]

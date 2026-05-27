@@ -26,7 +26,6 @@ libc = "*"
 serde = { version = "*", features = ["derive"] }
 clap = { version = "*", features = ["derive"] }
 strumbra = { version = "*", features = ["serde"] }
-flexbuffers = "2"
 serde_json = "1"
 bincode-next = { version = "*", features = ["serde"] }
 crc32fast = "*"

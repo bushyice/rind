@@ -3,7 +3,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::thread;
 use std::time::Duration;
 
-use flexbuffers;
+use rind_ipc::ser::ser_to_vec;
 use rind_ipc::{Message, payloads::LoginPayload, send::send_message};
 
 fn tty_path() -> String {
@@ -61,7 +61,7 @@ fn send_login_state(user: &str, pass: Option<String>, tty: &str, writer: &mut Fi
     tty: tty.to_string(),
   };
 
-  let msg = Message::from("login").with(flexbuffers::to_vec(&payload).unwrap());
+  let msg = Message::from("login").with(ser_to_vec(&payload, false));
 
   match send_message(msg) {
     Err(e) => {

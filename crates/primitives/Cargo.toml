@@ -8,6 +8,6 @@ license.workspace = true
 rind-core = { path = "../core" }
 rind-ipc = { path = "../ipc", features = ["server"] }
 serde.workspace = true
-flexbuffers.workspace = true
+
 toml.workspace = true
 nix.workspace = true

@@ -13,7 +13,7 @@ use rind_core::{
 use rind_ipc::{
   Message, MessageType,
   payloads::PermissionPayload,
-  ser::{IpcListComponent, IpcListPrinter, PermissionSerialized},
+  ser::{IpcListComponent, IpcListPrinter, PermissionSerialized, ser_to_vec},
 };
 
 pub static PERM_SYSTEM_SERVICES: PermissionId = PermissionId(1000);
@@ -138,5 +138,5 @@ pub fn handle_ipc_show_permission(
     list.add(PermissionSerialized { group, name, id });
   }
 
-  Ok(Message::from_type(MessageType::Ok).with(flexbuffers::to_vec(&list).unwrap_or_default()))
+  Ok(Message::from_type(MessageType::Ok).with(ser_to_vec(&list, false)))
 }

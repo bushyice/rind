@@ -14,4 +14,3 @@ rind-plugins = { path = "../plugins" }
 rind-ipc = { path = "../ipc" }
 rind-flow = { path = "../flow" }
 serde.workspace = true
-flexbuffers.workspace = true

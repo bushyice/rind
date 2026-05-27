@@ -1,7 +1,7 @@
 #[macro_export]
 macro_rules! handle_send {
   ($action:expr,$payload:expr) => {
-    handle_send_raw!($action, flexbuffers::to_vec($payload).unwrap());
+    handle_send_raw!($action, ser_to_vec($payload, false));
   };
 }
 

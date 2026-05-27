@@ -9,6 +9,7 @@ use nix::sys::mman::{MapFlags, ProtFlags, mmap};
 use nix::sys::socket::{ControlMessage, MsgFlags, sendmsg};
 use nix::unistd::ftruncate;
 use rind_core::reexports::*;
+use rind_ipc::ser::deser_from_vec;
 use std::os::fd::AsRawFd;
 
 use crate::prelude::PermissionStore;
@@ -179,7 +180,7 @@ impl ShmTransport {
             match client_rx.evt_to_rind.read() {
               Ok(_) => {
                 while let Some(data) = client_rx.ring_to_rind.read() {
-                  if let Ok(msg) = flexbuffers::from_slice::<TransportMessage>(&data) {
+                  if let Ok(msg) = deser_from_vec::<TransportMessage>(&data, true) {
                     let _ = tx.send((ep_for_msg.clone(), msg, uid, None));
                     if let Some(n) = &notifier {
                       let _ = n.notify();

@@ -3,6 +3,7 @@ use std::os::unix::net::UnixListener;
 use std::sync::{Mutex, OnceLock};
 
 use rind_ipc::IPC_MAGIC;
+use rind_ipc::ser::{deser_from_vec, deser_string, ser_to_vec};
 use rind_ipc::{Message, send::send_message};
 
 fn socket_lock() -> &'static Mutex<()> {
@@ -41,10 +42,10 @@ fn send_message_roundtrip_with_real_unix_socket() {
     stream
       .read_exact(&mut buf)
       .expect("payload should be readable");
-    let msg: Message = flexbuffers::from_slice(&buf).expect("request message should parse");
+    let msg: Message = deser_from_vec(&buf, false).expect("request message should parse");
 
     let response = Message::ok(format!("ack:{}", msg.action));
-    let out = flexbuffers::to_vec(&response).expect("response should serialize");
+    let out = ser_to_vec(&response, false);
     stream.write_all(&IPC_MAGIC).expect("magic should write");
     stream
       .write_all(&(out.len() as u32).to_be_bytes())
@@ -56,10 +57,7 @@ fn send_message_roundtrip_with_real_unix_socket() {
 
   let response =
     send_message(Message::from_action("health.check")).expect("send_message should complete");
-  let root =
-    flexbuffers::Reader::get_root(Box::leak(Box::new(response.payload.unwrap())).as_slice())
-      .unwrap()
-      .as_str();
+  let root = deser_string(response.payload.unwrap());
 
   assert_eq!(root, "ack:health.check");
 

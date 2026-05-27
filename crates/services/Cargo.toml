@@ -12,4 +12,3 @@ rind-ipc = { path = "../ipc", features = ["server"] }
 nix.workspace = true
 libc.workspace = true
 serde.workspace = true
-flexbuffers.workspace = true

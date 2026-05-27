@@ -13,9 +13,13 @@ serde.workspace = true
 nix.workspace = true
 toml.workspace = true
 rind-core = { path = "../core" }
-flexbuffers.workspace = true
+
 serde_bytes = "0.11"
 serde_json.workspace = true
+rmp-serde = "1.3"
+rmpv = "*"
+
+
 
 [features]
 default = ["server"]

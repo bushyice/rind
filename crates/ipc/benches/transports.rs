@@ -1,5 +1,6 @@
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use rind_ipc::TransportMessage;
+use rind_ipc::ser::deser_from_vec;
 use rind_ipc::shm::{ShmHeader, ShmRingBuffer};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::Ordering;
@@ -16,7 +17,41 @@ fn bench_serialization(c: &mut Criterion) {
   let bytes = msg.as_bytes();
   c.bench_function("deserialize_transport_message", |b| {
     b.iter(|| {
-      let _: TransportMessage = flexbuffers::from_slice(black_box(&bytes)).unwrap();
+      let _: TransportMessage = deser_from_vec(black_box(&bytes), true).unwrap();
+    })
+  });
+}
+
+fn bench_serialization_rmp(c: &mut Criterion) {
+  let msg = TransportMessage::log("a");
+
+  c.bench_function("serialize_transport_message_rmp", |b| {
+    b.iter(|| {
+      let _ = rmp_serde::to_vec(black_box(&msg)).unwrap();
+    })
+  });
+
+  let bytes = rmp_serde::to_vec(&msg).unwrap();
+  c.bench_function("deserialize_transport_message_rmp", |b| {
+    b.iter(|| {
+      let _: TransportMessage = rmp_serde::from_slice(black_box(&bytes)).unwrap();
+    })
+  });
+}
+
+fn bench_serialization_json(c: &mut Criterion) {
+  let msg = TransportMessage::log("a");
+
+  c.bench_function("serialize_transport_message_json", |b| {
+    b.iter(|| {
+      let _ = serde_json::to_vec(black_box(&msg)).unwrap();
+    })
+  });
+
+  let bytes = serde_json::to_vec(&msg).unwrap();
+  c.bench_function("deserialize_transport_message_json", |b| {
+    b.iter(|| {
+      let _: TransportMessage = serde_json::from_slice(black_box(&bytes)).unwrap();
     })
   });
 }
@@ -73,6 +108,8 @@ fn bench_shm_transport(c: &mut Criterion) {
 criterion_group!(
   benches,
   bench_serialization,
+  bench_serialization_rmp,
+  bench_serialization_json,
   bench_uds_transport,
   bench_stdio_sim,
   bench_shm_transport

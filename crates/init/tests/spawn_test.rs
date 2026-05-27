@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use rind_ipc::Message;
 use rind_ipc::payloads::SSPayload;
 use rind_ipc::send::send_message;
+use rind_ipc::ser::ser_to_vec;
 
 fn temp_dir(tag: &str) -> PathBuf {
   let now = std::time::SystemTime::now()
@@ -107,11 +108,8 @@ restart = false
     std::env::set_var("RIND_SOC_PATH", &sock_path);
   }
 
-  let response = send_message(
-    Message::from_action("start")
-      .with(flexbuffers::to_vec(payload).expect("couldn't serialize payload")),
-  )
-  .expect("ipc start message should succeed");
+  let response = send_message(Message::from_action("start").with(ser_to_vec(payload, false)))
+    .expect("ipc start message should succeed");
 
   assert!(
     !matches!(response.r#type, rind_ipc::MessageType::Error),
