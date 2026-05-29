@@ -1199,7 +1199,7 @@ fn run(profile: &Profile) {
   cmd.status().ok();
 }
 
-fn handle_command(c: &str, profile: &Profile, fs_ext4: &mut Option<Ext4Fs>, no_overwrite: bool) {
+fn handle_command(c: &str, profile: &Profile, fs_ext4: &mut Option<Ext4Fs>, _no_overwrite: bool) {
   match c {
     "b" => {
       if let Some(cmd) = &profile.build_command {
@@ -1223,7 +1223,7 @@ fn handle_command(c: &str, profile: &Profile, fs_ext4: &mut Option<Ext4Fs>, no_o
     _ => {
       if fs_ext4.is_none() {
         let output = artifact_path().join("rootfs.img");
-        if !no_overwrite || !output.exists() {
+        if !output.exists() {
           println!("[*] Creating new ext4 disk image...");
           fs::create_dir_all(artifact_path()).ok();
           FileBlockDevice::create(&output, 1024 * 1024 * profile.disk_size.unwrap_or(1024))
