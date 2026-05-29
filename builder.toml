@@ -122,7 +122,7 @@ files = [
 # - "https://..."
 # - "alias:https://..."
 install = [
-  "glibc:https://mirror.moson.org/arch/core/os/x86_64/glibc-2.43+r5+g856c426a7534-1-x86_64.pkg.tar.zst",
+  "glibc:https://mirror.moson.org/arch/core/os/x86_64/glibc-2.43+r22+g8362e8ce10b2-2-x86_64.pkg.tar.zst",
 
   # libs
   "libasan:https://archlinux.org/packages/core/x86_64/libasan/download",

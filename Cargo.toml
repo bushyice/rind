@@ -7,7 +7,7 @@ members = [
   "crates/init", "crates/macros",
   "crates/ipc","crates/plugins", "crates/tty-plugin", "crates/networking", "crates/display", "crates/common", "crates/initramfs", "crates/services", "crates/primitives", "crates/flow", "crates/cfg",
   "crates/cli",
-
+  "crates/xtask",
 ]
 resolver = "3"
 

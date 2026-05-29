@@ -696,359 +696,356 @@ fn builder_i(profile: &Profile, fs_ext4: &mut Ext4Fs) {
     }
     for app in profile.busybox_applets.clone().unwrap_or_else(|| {
       vec![
-        "[",
-        "[[",
-        "]]",
-        "]",
-        "acpid",
-        "add-shell",
-        "addgroup",
-        "adduser",
-        "adjtimex",
-        "arp",
-        "arping",
-        "ash",
-        "awk",
-        "base64",
-        "basename",
-        "beep",
-        "blkid",
-        "blockdev",
-        "bootchartd",
-        "brctl",
-        "bunzip2",
-        "bzcat",
-        "bzip2",
-        "cal",
-        "cat",
-        "catv",
-        "chat",
-        "chattr",
-        "chgrp",
-        "chmod",
-        "chown",
-        "chpasswd",
-        "chpst",
-        "chroot",
-        "chrt",
-        "chvt",
-        "cksum",
-        "clear",
-        "cmp",
-        "comm",
-        "cp",
-        "cpio",
-        "crond",
-        "crontab",
-        "cryptpw",
-        "cttyhack",
-        "cut",
-        "date",
-        "dc",
-        "dd",
-        "deallocvt",
-        "delgroup",
-        "deluser",
-        "depmod",
-        "devmem",
-        "df",
-        "dhcprelay",
-        "diff",
-        "dirname",
-        "dmesg",
-        "dnsd",
-        "dnsdomainname",
-        "dos2unix",
-        "du",
-        "dumpkmap",
-        "dumpleases",
-        "echo",
-        "ed",
-        "egrep",
-        "eject",
-        "env",
-        "envdir",
-        "envuidgid",
-        "ether-wake",
-        "expand",
-        "expr",
-        "fakeidentd",
-        "false",
-        "fbset",
-        "fbsplash",
-        "fdflush",
-        "fdformat",
-        "fdisk",
-        "fgconsole",
-        "fgrep",
-        "find",
-        "findfs",
-        "flock",
-        "fold",
-        "free",
-        "freeramdisk",
-        "fsck",
-        "fsck.minix",
-        "fsync",
-        "ftpd",
-        "ftpget",
-        "ftpput",
-        "fuser",
-        "getopt",
-        "getty",
-        "grep",
-        "groups",
-        "gunzip",
-        "gzip",
-        "halt",
-        "hd",
-        "hdparm",
-        "head",
-        "hexdump",
-        "hostid",
-        "hostname",
-        "httpd",
-        "hush",
-        "hwclock",
-        "id",
-        "ifconfig",
-        "ifdown",
-        "ifenslave",
-        "ifplugd",
-        "ifup",
-        "inetd",
-        "insmod",
-        "install",
-        "ionice",
-        "iostat",
-        "ip",
-        "ipaddr",
-        "ipcalc",
-        "ipcrm",
-        "ipcs",
-        "iplink",
-        "iproute",
-        "iprule",
-        "iptunnel",
-        "kbd_mode",
-        "kill",
-        "killall",
-        "killall5",
-        "klogd",
-        "last",
-        "less",
-        "linux32",
-        "linux64",
-        "linuxrc",
-        "ln",
-        "loadfont",
-        "loadkmap",
-        "logger",
-        "login",
-        "logname",
-        "logread",
-        "losetup",
-        "lpd",
-        "lpq",
-        "lpr",
-        "ls",
-        "lsattr",
-        "lsmod",
-        "lspci",
-        "lsusb",
-        "lzcat",
-        "lzma",
-        "lzop",
-        "lzopcat",
-        "makedevs",
-        "makemime",
-        "man",
-        "md5sum",
-        "mdev",
-        "mesg",
-        "microcom",
-        "mkdir",
-        "mkdosfs",
-        "mke2fs",
-        "mkfifo",
-        "mkfs.ext2",
-        "mkfs.minix",
-        "mkfs.vfat",
-        "mknod",
-        "mkpasswd",
-        "mkswap",
-        "mktemp",
-        "modinfo",
-        "modprobe",
-        "more",
-        "mount",
-        "mountpoint",
-        "mpstat",
-        "mt",
-        "mv",
-        "nameif",
-        "nbd-client",
-        "nc",
-        "netstat",
-        "nice",
-        "nmeter",
-        "nohup",
-        "nslookup",
-        "ntpd",
-        "od",
-        "openvt",
-        "passwd",
-        "patch",
-        "pgrep",
-        "pidof",
-        "ping",
-        "ping6",
-        "pipe_progress",
-        "pivot_root",
-        "pkill",
-        "pmap",
-        "popmaildir",
-        "poweroff",
-        "powertop",
-        "printenv",
-        "printf",
-        "ps",
-        "pscan",
-        "pstree",
-        "pwd",
-        "pwdx",
-        "raidautorun",
-        "rdate",
-        "rdev",
-        "readahead",
-        "readlink",
-        "readprofile",
-        "realpath",
-        "reboot",
-        "reformime",
-        "remove-shell",
-        "renice",
-        "reset",
-        "resize",
-        "rev",
-        "rm",
-        "rmdir",
-        "rmmod",
-        "route",
-        "rpm",
-        "rpm2cpio",
-        "rtcwake",
-        "run-parts",
-        "runlevel",
-        "runsv",
-        "runsvdir",
-        "rx",
-        "script",
-        "scriptreplay",
-        "sed",
-        "sendmail",
-        "seq",
-        "setarch",
-        "setconsole",
-        "setfont",
-        "setkeycodes",
-        "setlogcons",
-        "setserial",
-        "setsid",
-        "setuidgid",
-        "sh",
-        "sha1sum",
-        "sha256sum",
-        "sha512sum",
-        "showkey",
-        "slattach",
-        "sleep",
-        "smemcap",
-        "softlimit",
-        "sort",
-        "split",
-        "start-stop-daemon",
-        "stat",
-        "strings",
-        "stty",
-        "su",
-        "sulogin",
-        "sum",
-        "sv",
-        "svlogd",
-        "swapoff",
-        "swapon",
-        "switch_root",
-        "sync",
-        "sysctl",
-        "syslogd",
-        "tac",
-        "tail",
-        "tar",
-        "tcpsvd",
-        "tee",
-        "telnet",
-        "telnetd",
-        "test",
-        "tftp",
-        "tftpd",
-        "time",
-        "timeout",
-        "top",
-        "touch",
-        "tr",
-        "traceroute",
-        "traceroute6",
-        "true",
-        "tty",
-        "ttysize",
-        "tunctl",
-        "ubiattach",
-        "ubidetach",
-        "ubimkvol",
-        "ubirmvol",
-        "ubirsvol",
-        "ubiupdatevol",
-        "udhcpc",
-        "udhcpd",
-        "udpsvd",
-        "umount",
-        "uname",
-        "unexpand",
-        "uniq",
-        "unix2dos",
-        "unlzma",
-        "unlzop",
-        "unxz",
-        "unzip",
-        "uptime",
-        "users",
-        "usleep",
-        "uudecode",
-        "uuencode",
-        "vconfig",
-        "vi",
-        "vlock",
-        "volname",
-        "wall",
-        "watch",
-        "watchdog",
-        "wc",
-        "wget",
-        "which",
-        "who",
-        "whoami",
-        "whois",
-        "xargs",
-        "xz",
-        "xzcat",
-        "yes",
-        "zcat",
-        "zcip",
+        "[".to_string(),
+        "[[".to_string(),
+        "]]".to_string(),
+        "]".to_string(),
+        "acpid".to_string(),
+        "add-shell".to_string(),
+        "addgroup".to_string(),
+        "adduser".to_string(),
+        "adjtimex".to_string(),
+        "arp".to_string(),
+        "arping".to_string(),
+        "ash".to_string(),
+        "awk".to_string(),
+        "base64".to_string(),
+        "basename".to_string(),
+        "beep".to_string(),
+        "blkid".to_string(),
+        "blockdev".to_string(),
+        "bootchartd".to_string(),
+        "brctl".to_string(),
+        "bunzip2".to_string(),
+        "bzcat".to_string(),
+        "bzip2".to_string(),
+        "cal".to_string(),
+        "cat".to_string(),
+        "catv".to_string(),
+        "chat".to_string(),
+        "chattr".to_string(),
+        "chgrp".to_string(),
+        "chmod".to_string(),
+        "chown".to_string(),
+        "chpasswd".to_string(),
+        "chpst".to_string(),
+        "chroot".to_string(),
+        "chrt".to_string(),
+        "chvt".to_string(),
+        "cksum".to_string(),
+        "clear".to_string(),
+        "cmp".to_string(),
+        "comm".to_string(),
+        "cp".to_string(),
+        "cpio".to_string(),
+        "crond".to_string(),
+        "crontab".to_string(),
+        "cryptpw".to_string(),
+        "cttyhack".to_string(),
+        "cut".to_string(),
+        "date".to_string(),
+        "dc".to_string(),
+        "dd".to_string(),
+        "deallocvt".to_string(),
+        "delgroup".to_string(),
+        "deluser".to_string(),
+        "depmod".to_string(),
+        "devmem".to_string(),
+        "df".to_string(),
+        "dhcprelay".to_string(),
+        "diff".to_string(),
+        "dirname".to_string(),
+        "dmesg".to_string(),
+        "dnsd".to_string(),
+        "dnsdomainname".to_string(),
+        "dos2unix".to_string(),
+        "du".to_string(),
+        "dumpkmap".to_string(),
+        "dumpleases".to_string(),
+        "echo".to_string(),
+        "ed".to_string(),
+        "egrep".to_string(),
+        "eject".to_string(),
+        "env".to_string(),
+        "envdir".to_string(),
+        "envuidgid".to_string(),
+        "ether-wake".to_string(),
+        "expand".to_string(),
+        "expr".to_string(),
+        "fakeidentd".to_string(),
+        "false".to_string(),
+        "fbset".to_string(),
+        "fbsplash".to_string(),
+        "fdflush".to_string(),
+        "fdformat".to_string(),
+        "fdisk".to_string(),
+        "fgconsole".to_string(),
+        "fgrep".to_string(),
+        "find".to_string(),
+        "findfs".to_string(),
+        "flock".to_string(),
+        "fold".to_string(),
+        "free".to_string(),
+        "freeramdisk".to_string(),
+        "fsck".to_string(),
+        "fsck.minix".to_string(),
+        "fsync".to_string(),
+        "ftpd".to_string(),
+        "ftpget".to_string(),
+        "ftpput".to_string(),
+        "fuser".to_string(),
+        "getopt".to_string(),
+        "getty".to_string(),
+        "grep".to_string(),
+        "groups".to_string(),
+        "gunzip".to_string(),
+        "gzip".to_string(),
+        "halt".to_string(),
+        "hd".to_string(),
+        "hdparm".to_string(),
+        "head".to_string(),
+        "hexdump".to_string(),
+        "hostid".to_string(),
+        "hostname".to_string(),
+        "httpd".to_string(),
+        "hush".to_string(),
+        "hwclock".to_string(),
+        "id".to_string(),
+        "ifconfig".to_string(),
+        "ifdown".to_string(),
+        "ifenslave".to_string(),
+        "ifplugd".to_string(),
+        "ifup".to_string(),
+        "inetd".to_string(),
+        "insmod".to_string(),
+        "install".to_string(),
+        "ionice".to_string(),
+        "iostat".to_string(),
+        "ip".to_string(),
+        "ipaddr".to_string(),
+        "ipcalc".to_string(),
+        "ipcrm".to_string(),
+        "ipcs".to_string(),
+        "iplink".to_string(),
+        "iproute".to_string(),
+        "iprule".to_string(),
+        "iptunnel".to_string(),
+        "kbd_mode".to_string(),
+        "kill".to_string(),
+        "killall".to_string(),
+        "killall5".to_string(),
+        "klogd".to_string(),
+        "last".to_string(),
+        "less".to_string(),
+        "linux32".to_string(),
+        "linux64".to_string(),
+        "linuxrc".to_string(),
+        "ln".to_string(),
+        "loadfont".to_string(),
+        "loadkmap".to_string(),
+        "logger".to_string(),
+        "login".to_string(),
+        "logname".to_string(),
+        "logread".to_string(),
+        "losetup".to_string(),
+        "lpd".to_string(),
+        "lpq".to_string(),
+        "lpr".to_string(),
+        "ls".to_string(),
+        "lsattr".to_string(),
+        "lsmod".to_string(),
+        "lspci".to_string(),
+        "lsusb".to_string(),
+        "lzcat".to_string(),
+        "lzma".to_string(),
+        "lzop".to_string(),
+        "lzopcat".to_string(),
+        "makedevs".to_string(),
+        "makemime".to_string(),
+        "man".to_string(),
+        "md5sum".to_string(),
+        "mdev".to_string(),
+        "mesg".to_string(),
+        "microcom".to_string(),
+        "mkdir".to_string(),
+        "mkdosfs".to_string(),
+        "mke2fs".to_string(),
+        "mkfifo".to_string(),
+        "mkfs.ext2".to_string(),
+        "mkfs.minix".to_string(),
+        "mkfs.vfat".to_string(),
+        "mknod".to_string(),
+        "mkpasswd".to_string(),
+        "mkswap".to_string(),
+        "mktemp".to_string(),
+        "modinfo".to_string(),
+        "modprobe".to_string(),
+        "more".to_string(),
+        "mount".to_string(),
+        "mountpoint".to_string(),
+        "mpstat".to_string(),
+        "mt".to_string(),
+        "mv".to_string(),
+        "nameif".to_string(),
+        "nbd-client".to_string(),
+        "nc".to_string(),
+        "netstat".to_string(),
+        "nice".to_string(),
+        "nmeter".to_string(),
+        "nohup".to_string(),
+        "nslookup".to_string(),
+        "ntpd".to_string(),
+        "od".to_string(),
+        "openvt".to_string(),
+        "passwd".to_string(),
+        "patch".to_string(),
+        "pgrep".to_string(),
+        "pidof".to_string(),
+        "ping".to_string(),
+        "ping6".to_string(),
+        "pipe_progress".to_string(),
+        "pivot_root".to_string(),
+        "pkill".to_string(),
+        "pmap".to_string(),
+        "popmaildir".to_string(),
+        "poweroff".to_string(),
+        "powertop".to_string(),
+        "printenv".to_string(),
+        "printf".to_string(),
+        "ps".to_string(),
+        "pscan".to_string(),
+        "pstree".to_string(),
+        "pwd".to_string(),
+        "pwdx".to_string(),
+        "raidautorun".to_string(),
+        "rdate".to_string(),
+        "rdev".to_string(),
+        "readahead".to_string(),
+        "readlink".to_string(),
+        "readprofile".to_string(),
+        "realpath".to_string(),
+        "reboot".to_string(),
+        "reformime".to_string(),
+        "remove-shell".to_string(),
+        "renice".to_string(),
+        "reset".to_string(),
+        "resize".to_string(),
+        "rev".to_string(),
+        "rm".to_string(),
+        "rmdir".to_string(),
+        "rmmod".to_string(),
+        "route".to_string(),
+        "rpm".to_string(),
+        "rpm2cpio".to_string(),
+        "rtcwake".to_string(),
+        "run-parts".to_string(),
+        "runlevel".to_string(),
+        "runsv".to_string(),
+        "runsvdir".to_string(),
+        "rx".to_string(),
+        "script".to_string(),
+        "scriptreplay".to_string(),
+        "sed".to_string(),
+        "sendmail".to_string(),
+        "seq".to_string(),
+        "setarch".to_string(),
+        "setconsole".to_string(),
+        "setfont".to_string(),
+        "setkeycodes".to_string(),
+        "setlogcons".to_string(),
+        "setserial".to_string(),
+        "setsid".to_string(),
+        "setuidgid".to_string(),
+        "sh".to_string(),
+        "sha1sum".to_string(),
+        "sha256sum".to_string(),
+        "sha512sum".to_string(),
+        "showkey".to_string(),
+        "slattach".to_string(),
+        "sleep".to_string(),
+        "smemcap".to_string(),
+        "softlimit".to_string(),
+        "sort".to_string(),
+        "split".to_string(),
+        "start-stop-daemon".to_string(),
+        "stat".to_string(),
+        "strings".to_string(),
+        "stty".to_string(),
+        "su".to_string(),
+        "sulogin".to_string(),
+        "sum".to_string(),
+        "sv".to_string(),
+        "svlogd".to_string(),
+        "swapoff".to_string(),
+        "swapon".to_string(),
+        "switch_root".to_string(),
+        "sync".to_string(),
+        "sysctl".to_string(),
+        "syslogd".to_string(),
+        "tac".to_string(),
+        "tail".to_string(),
+        "tar".to_string(),
+        "tcpsvd".to_string(),
+        "tee".to_string(),
+        "telnet".to_string(),
+        "telnetd".to_string(),
+        "test".to_string(),
+        "tftp".to_string(),
+        "tftpd".to_string(),
+        "time".to_string(),
+        "timeout".to_string(),
+        "top".to_string(),
+        "touch".to_string(),
+        "tr".to_string(),
+        "traceroute".to_string(),
+        "traceroute6".to_string(),
+        "true".to_string(),
+        "tty".to_string(),
+        "ttysize".to_string(),
+        "tunctl".to_string(),
+        "ubiattach".to_string(),
+        "ubidetach".to_string(),
+        "ubimkvol".to_string(),
+        "ubirmvol".to_string(),
+        "ubirsvol".to_string(),
+        "ubiupdatevol".to_string(),
+        "udhcpc".to_string(),
+        "udhcpd".to_string(),
+        "udpsvd".to_string(),
+        "umount".to_string(),
+        "uname".to_string(),
+        "unexpand".to_string(),
+        "uniq".to_string(),
+        "unix2dos".to_string(),
+        "unlzma".to_string(),
+        "unlzop".to_string(),
+        "unxz".to_string(),
+        "unzip".to_string(),
+        "uptime".to_string(),
+        "users".to_string(),
+        "usleep".to_string(),
+        "uudecode".to_string(),
+        "uuencode".to_string(),
+        "vconfig".to_string(),
+        "vi".to_string(),
+        "vlock".to_string(),
+        "volname".to_string(),
+        "wall".to_string(),
+        "watch".to_string(),
+        "watchdog".to_string(),
+        "wc".to_string(),
+        "wget".to_string(),
+        "which".to_string(),
+        "who".to_string(),
+        "whoami".to_string(),
+        "whois".to_string(),
+        "xargs".to_string(),
+        "xz".to_string(),
+        "xzcat".to_string(),
+        "yes".to_string(),
+        "zcat".to_string(),
+        "zcip".to_string(),
       ]
-      .iter()
-      .map(|x| x.to_string())
-      .collect()
     }) {
       fs_ext4
         .symlink("busybox", &format!("{}/{}", bins_dir, app))
@@ -1224,6 +1221,7 @@ fn handle_command(c: &str, profile: &Profile, fs_ext4: &mut Option<Ext4Fs>, no_o
         let output = artifact_path().join("rootfs.img");
         if !no_overwrite || !output.exists() {
           println!("[*] Creating new ext4 disk image...");
+          fs::create_dir_all(artifact_path()).ok();
           FileBlockDevice::create(&output, 1024 * 1024 * profile.disk_size.unwrap_or(1024))
             .expect("Failed to create image file");
           let status = Command::new("mkfs.ext4")
@@ -1284,36 +1282,154 @@ fn handle_command(c: &str, profile: &Profile, fs_ext4: &mut Option<Ext4Fs>, no_o
   }
 }
 
+fn print_usage() {
+  eprintln!("Usage: cargo xtask <command> [args]");
+  eprintln!("\nUnified Subcommands:");
+  eprintln!("  mount / mr           Mount loopback device to .artifacts/mnt");
+  eprintln!("  umount / umr         Unmount .artifacts/mnt");
+  eprintln!("  clean-state          Mount, delete .artifacts/mnt/var/lib/system-state, and unmount");
+  eprintln!("  test                 Run nextest or cargo test");
+  eprintln!("  bench [bench_name]   Run cargo bench quiet");
+  eprintln!("\nLegacy Builder Commands:");
+  eprintln!("  a                    Build all");
+  eprintln!("  b                    Run cargo build");
+  eprintln!("  n                    Create nodes");
+  eprintln!("  i                    Install urls (extract archives/download kernel)");
+  eprintln!("  p                    Prepare rootfs");
+  eprintln!("  r                    Run QEMU");
+  eprintln!("  u                    Make users");
+  eprintln!("  x                    Use existing disk (no overwrite)");
+  eprintln!("\nLegacy Combination Example:");
+  eprintln!("  cargo xtask xbpr     Builds cargo, prepares rootfs, and runs QEMU on existing disk");
+}
+
+fn mount_rootfs() {
+  println!("[*] Creating mount directory .artifacts/mnt");
+  fs::create_dir_all(".artifacts/mnt").unwrap();
+  println!("[*] Mounting .artifacts/rootfs.img to .artifacts/mnt");
+  let status = Command::new("sudo")
+    .args(&["mount", "-o", "loop", ".artifacts/rootfs.img", ".artifacts/mnt"])
+    .status()
+    .expect("Failed to execute sudo mount");
+  if !status.success() {
+    eprintln!("[!] Failed to mount rootfs.img");
+    exit(1);
+  }
+  println!("[*] Mounted successfully.");
+}
+
+fn umount_rootfs() {
+  println!("[*] Unmounting .artifacts/mnt");
+  let status = Command::new("sudo")
+    .args(&["umount", ".artifacts/mnt"])
+    .status()
+    .expect("Failed to execute sudo umount");
+  if !status.success() {
+    eprintln!("[!] Failed to unmount .artifacts/mnt");
+    exit(1);
+  }
+  println!("[*] Unmounted successfully.");
+}
+
+fn clean_state() {
+  mount_rootfs();
+  println!("[*] Cleaning state in .artifacts/mnt/var/lib/system-state");
+  let status = Command::new("sudo")
+    .args(&["rm", "-rf", ".artifacts/mnt/var/lib/system-state"])
+    .status()
+    .expect("Failed to delete system-state");
+  if !status.success() {
+    eprintln!("[!] Failed to clean system-state");
+  }
+  umount_rootfs();
+}
+
+fn run_tests() {
+  println!("[*] Running tests...");
+  let nextest_check = Command::new("cargo")
+    .args(&["nextest", "--version"])
+    .output();
+  let status = if nextest_check.is_ok() && nextest_check.unwrap().status.success() {
+    Command::new("cargo")
+      .args(&["nextest", "run"])
+      .status()
+  } else {
+    println!("[*] nextest not found, falling back to cargo test");
+    Command::new("cargo")
+      .args(&["test"])
+      .status()
+  };
+  
+  match status {
+    Ok(s) if s.success() => println!("[*] Tests passed successfully."),
+    _ => {
+      eprintln!("[!] Tests failed.");
+      exit(1);
+    }
+  }
+}
+
+fn run_bench(bench_name: &str) {
+  println!("[*] Running bench: {}", bench_name);
+  let mut cmd = Command::new("cargo");
+  cmd.arg("bench");
+  if !bench_name.is_empty() {
+    cmd.args(&["--bench", bench_name]);
+  }
+  cmd.arg("--");
+  cmd.arg("--quiet");
+  
+  let status = cmd.status().expect("Failed to run cargo bench");
+  if !status.success() {
+    eprintln!("[!] Benchmark failed.");
+    exit(1);
+  }
+}
+
 fn main() {
   let args: Vec<String> = std::env::args().collect();
   if args.len() < 2 {
-    eprintln!("Usage: builder <builder_command>");
-    eprintln!("Commands: a, b, n, i, p, r, u");
-    eprintln!("Examples:");
-    eprintln!("build all: a");
-    eprintln!("build cargo: b");
-    eprintln!("create nodes: n");
-    eprintln!("prepare rootfs: p");
-    eprintln!("install urls: i");
-    eprintln!("build disk: d");
-    eprintln!("make users: u");
-    eprintln!("run: r");
-    eprintln!("use existing disk: x");
-    eprintln!(
-      "you can use multiple commands, for example this builds cargo, prepares disk and runs: bpr"
-    );
+    print_usage();
     exit(1);
   }
-  let config: RinbConfig = toml::from_str(&fs::read_to_string("builder.toml").unwrap()).unwrap();
-  let profile = config.profile.get("main").unwrap();
-  let mut fs_ext4: Option<Ext4Fs> = None;
-  for c in args[1].chars() {
-    if c == 'x' {
-      continue;
+
+  let command = &args[1];
+  match command.as_str() {
+    "mount" | "mr" => {
+      mount_rootfs();
     }
-    handle_command(&c.to_string(), profile, &mut fs_ext4, args[1].contains('x'));
-  }
-  if let Some(fs) = fs_ext4 {
-    let _ = fs.umount();
+    "umount" | "umr" => {
+      umount_rootfs();
+    }
+    "clean-state" => {
+      clean_state();
+    }
+    "test" => {
+      run_tests();
+    }
+    "bench" => {
+      let bench_name = args.get(2).map(|s| s.as_str()).unwrap_or("");
+      run_bench(bench_name);
+    }
+    _ => {
+      if !command.chars().all(|c| "abniprux".contains(c)) {
+        eprintln!("[!] Unknown command or invalid command characters: {}", command);
+        print_usage();
+        exit(1);
+      }
+      
+      let config: RinbConfig = toml::from_str(&fs::read_to_string("builder.toml").unwrap()).unwrap();
+      let profile = config.profile.get("main").unwrap();
+      let mut fs_ext4: Option<Ext4Fs> = None;
+      for c in command.chars() {
+        if c == 'x' {
+          continue;
+        }
+        handle_command(&c.to_string(), profile, &mut fs_ext4, command.contains('x'));
+      }
+      if let Some(fs) = fs_ext4 {
+        let _ = fs.umount();
+      }
+    }
   }
 }
