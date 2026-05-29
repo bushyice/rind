@@ -12,7 +12,6 @@ use std::os::unix::fs::MetadataExt;
 
 use ext4_lwext4::{Ext4Fs, FileBlockDevice, OpenFlags};
 use flate2::read::GzDecoder;
-use reqwest::blocking::get;
 use serde::Deserialize;
 use xz2::read::XzDecoder;
 
@@ -153,8 +152,13 @@ fn cached_download(url: &str, name: Option<&str>) -> PathBuf {
   }
   fs::create_dir_all(artifact_path()).unwrap();
   println!("[*] Downloading {url} -> {}", path.display());
-  let resp = get(url).unwrap().bytes().unwrap();
-  fs::write(&path, &resp).unwrap();
+  let status = Command::new("curl")
+    .args(&["-L", "-o", path.to_str().unwrap(), url])
+    .status()
+    .expect("Failed to execute curl. Is curl installed?");
+  if !status.success() {
+    panic!("Failed to download URL: {}", url);
+  }
   path
 }
 

@@ -7,7 +7,6 @@ license.workspace = true
 [dependencies]
 toml = { workspace = true }
 serde = { workspace = true }
-reqwest = { version = "0.11", features = ["blocking", "rustls-tls"] }
 tar = "0.4"
 zstd = "0.12"
 ext4-lwext4 = "0.1.2"
