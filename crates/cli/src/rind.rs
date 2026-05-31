@@ -102,7 +102,7 @@ enum Commands {
     mount: bool,
 
     #[arg(short = 'c', long)]
-    state: bool,
+    facet: bool,
 
     #[arg(short = 'n', long)]
     network: bool,
@@ -570,7 +570,7 @@ fn main() {
       unit,
       service,
       mount,
-      state,
+      facet,
       socket,
       network,
       port,
@@ -591,8 +591,8 @@ fn main() {
               "service"
             } else if mount {
               "mount"
-            } else if state {
-              "state"
+            } else if facet {
+              "facet"
             } else if socket {
               "socket"
             } else if port && network {
@@ -653,7 +653,7 @@ fn main() {
             return;
           }
         }
-      } else if state {
+      } else if facet {
         print::print_state(
           &result
             .parse_payload::<FacetSerialized>()

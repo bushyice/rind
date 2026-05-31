@@ -7,7 +7,6 @@ kanban-plugin: board
 ## Todos
 
 - [ ] **eBPF Loader**: (maybe?) Loading eBPF at system startup.
-- [ ] [Trivial] **Name fixes**: Rename concepts accordingly for better understanding.
 - [ ] **Shell entry**: A unified shell environment orchestrator that manages shell environment (e.g `devshell`).
 	- **Fragments**: The units that hold data such as `env`, `bins`, `libs`.
 	- **Resolvers**: Programs that translate configurations and inputs into sources.
@@ -48,69 +47,80 @@ kanban-plugin: board
 	- [ ] Namespace-local init/PID1 behavior (child reaping + sigfwd)
 	- [ ] Capability bounding/drop pipeline
 	- [ ] Seccomp profile (pre-exec)
-- [ ] [CLEANUP] **Anyhow**: Remove all `anyhow` errors and results and move them to `CoreError` and `CoreResult`.
 - [ ] **Sophisticated timers**
 - [ ] **Json Optimizations**
-- [ ] **Memory Transport**
 - [ ] **KDL Configs**: Replace `TOML` with `KDL`.
 - [ ] **Piping**: Piping and payloads into other states/signals.
 	- [x] Simple circumstantial piping
 	- [ ] General piping
 	- [ ] Signal-to-state merging
-- [ ] **Transport Protocols**: Transport protocols.
-	- [x] `stdio`.
-	- [x] `uds`.
-	- [x] `env`.
-	- [x] `args`.
-	- [ ] `memory`
-- [ ] **Daemon & CLI**: The cli.
-	- [x] Listing stuff.
-	- [x] Start/Stop.
-	- [ ] States and Signal control(maybe with permissions if those happen).
-	- [x] Run0
-	- [x] Logger
-	- [ ] Permissions
-	- [x] Invoke-IPC
-	- [ ] State-tree diagram
 - [ ] **Plugins**: Cycle-based internal programs with access to `rind`'s internal state.
 	- [x] Plugin loader
 	- [x] Plugin base
 	- [ ] Plugin regisry
 	- [ ] Plugin index
 	- [ ] Plugin caps
-- [ ] [BUG] **Notifier Inconsistency**: There's an inconsistency with notifiers where sometimes they do not notify. (e.g: When logging in and logging out).
-- [ ] [BUG] **Session error**: 
+
+
+## Testing
+
+- [ ] **cgroups**: Using linux cgroups for service resource management.
+- [ ] **Advanced Triggering**: More complex state based service triggers.
+
+
+## Finished
+
+**Complete**
+- [x] **Payloads**: Typed support for JSON, String, and Binary data.
+- [x] **Watchdog**: Service requirement to ping rind in order not to be terminated.
+- [x] **Memory Transport**
+- [x] **Transport Protocols**: Transport protocols.
+	- [x] `stdio`.
+	- [x] `uds`.
+	- [x] `env`.
+	- [x] `args`.
+	- [x] `memory`
+- [x] [CLEANUP] **Anyhow**: Remove all `anyhow` errors and results and move them to `CoreError` and `CoreResult`.
+- [x] **Dyn Units**: Units under the metadata `dyn-[XXXX]` that live isolated from the system units.
+	- [x] Dyn unit services/states/signals/...
+	- [x] Dyn unit registry.
+	- [ ] Dyn plugins.
+	- [x] Dyn unit configs(isolation and options).
+	- [ ] Dyn unit states and lifetime.
+- [x] **Signal Branching**
+- [x] [FIX] **State transcendence**: Check and fix state transcendence if it doesn't work.
+- [x] **Reaper**: Zombie process terminator.
+- [x] **Userspace Services**: Isolate services for user and system.
+- [x] **Daemon & CLI**: The cli.
+	- [x] Listing stuff.
+	- [x] Start/Stop.
+	- [ ] States and Signal control(maybe with permissions if those happen).
+	- [x] Run0
+	- [x] Logger
+	- [x] Permissions
+	- [x] Invoke-IPC
+	- [ ] State-tree diagram
+- [x] **State Transcendence**: Auto-activation of states based on dependencies (e.g. `SwayActive` on `UserLoggedIn`).
+- [x] [BUG] **Notifier Inconsistency**: There's an inconsistency with notifiers where sometimes they do not notify. (e.g: When logging in and logging out).
+- [x] [BUG] **Session error**: 
 	
 	- [ ] There's an error where services stop when any user logs out, despite being logged in via other ttys.
 	
 	- [ ] There's an issue where logging out in any tty doesn't set the states (potential match operation issue)
 	
 	- [ ] There's an issue where login/logout have a race condition. and also sometimes user_login service starts and stops on-boot despite it seeing the login_required state alive and no remove_state requests.
+- [x] **State Branching**: Many state payloads at once.
+- [x] **Daemon Optimizations**: Replace loop with `epoll` to save wasted CPU cycles.
+- [x] **Variables**: Dynamic definition values.
+	- [x] As service run options
+	- [x] As service pipes
 - [x] [ISSUE] **Tachyon**: Removed tachyon.
-
-
-## Testing
-
-- [ ] **Dyn Units**: Units under the metadata `dyn-[XXXX]` that live isolated from the system units.
-	- [x] Dyn unit services/states/signals/...
-	- [x] Dyn unit registry.
-	- [ ] Dyn plugins.
-	- [x] Dyn unit configs(isolation and options).
-	- [ ] Dyn unit states and lifetime.
-- [ ] **Service TP state piping address name for `branch_ctx`**
-- [ ] **cgroups**: Using linux cgroups for service resource management.
-- [ ] **Watchdog**: Service requirement to ping rind in order not to be terminated.
-- [ ] **Inverse Transcendence**: Branched and unbranched inverse transcendence (`activate_on_none`).
-	- [x] Branched transcendence
-	- [x] Unbranched transcendence
-	- [ ] Auto Payload
-	  - [x] With variables
-	  - [ ] With commands
-- [ ] **TImers**: Timers to trigger events after a preset duration.
-- [ ] **Little Tasks 1**:
-	- [x] Fix the persistent socket issue
-	- [x] Test sockets <-> services <-> timers.
-- [ ] **Sockets, FDs and timers**: 
+- [x] **Service Branching**: Service per state branching.
+- [x] **Detached Transports/Subscribers**: Independent messaging access for external programs.
+- [x] **TImers**: Timers to trigger events after a preset duration.
+- [x] **String Optimizations**: Use something like `strumbra` for strings.
+- [x] **Permission Inheritance**: If user has PermissionA and PermissionB inherits PermissionA, then user has PermissionB.
+- [x] **Sockets, FDs and timers**: 
 	- [x] Socket-trigger-services
 	- [x] FD resource manager
 	- [x] Service timers
@@ -118,28 +128,18 @@ kanban-plugin: board
 	- [x] Socket branching
 	- [x] Socket piping
 	- [x] Socket state triggers
-- [ ] **Permission Inheritance**: If user has PermissionA and PermissionB inherits PermissionA, then user has PermissionB.
-- [ ] **Reaper**: Zombie process terminator.
-- [ ] **String Optimizations**: Use something like `strumbra` for strings.
-- [ ] **Userspace Services**: Isolate services for user and system.
-- [ ] **Advanced Triggering**: More complex state based service triggers.
-- [x] **State Transcendence**: Auto-activation of states based on dependencies (e.g. `SwayActive` on `UserLoggedIn`).
-- [x] **Detached Transports/Subscribers**: Independent messaging access for external programs.
-- [x] **Service Branching**: Service per state branching.
-- [x] **State Branching**: Many state payloads at once.
-- [ ] **Daemon Optimizations**: Replace loop with `epoll` to save wasted CPU cycles.
-- [x] **Payloads**: Typed support for JSON, String, and Binary data.
-- [ ] **Variables**: Dynamic definition values.
-	- [x] As service run options
-	- [x] As service pipes
-
-
-## Finished
-
-**Complete**
-- [x] **Signal Branching**
-- [x] [FIX] **State transcendence**: Check and fix state transcendence if it doesn't work.
+- [x] **Little Tasks 1**:
+	- [x] Fix the persistent socket issue
+	- [x] Test sockets <-> services <-> timers.
+- [x] **Inverse Transcendence**: Branched and unbranched inverse transcendence (`activate_on_none`).
+	- [x] Branched transcendence
+	- [x] Unbranched transcendence
+	- [ ] Auto Payload
+	  - [x] With variables
+	  - [ ] With commands
 - [x] **Networking as a plugin**: Move networking into a plugin to have more flexibility for a potentially optional(or replaceable) feature.
+- [x] **Service TP state piping address name for `branch_ctx`**
+- [x] [Trivial] **Name fixes**: Rename concepts accordingly for better understanding.
 - [ ] **Permissions**: Entity-based(users, groups) access control for internal actions.
 - [x] **Loaders**
 - [x] **TTY Manager Plugin**: A tty management plugin.

@@ -587,6 +587,7 @@ impl ServiceRuntime {
 
   fn resolve_user_from_source(
     &self,
+    service: &Service,
     source: &ServiceUserSource,
     branch_ctx: Option<&ServiceBranchContext>,
     sm: Option<&FacetGraph>,
@@ -611,7 +612,14 @@ impl ServiceRuntime {
           continue;
         }
         if let Some(user) = Self::payload_field_as_key(&branch.payload, &source.username_field) {
-          matches.insert(user);
+          if service
+            .instances
+            .iter()
+            .any(|x| x.user != Some(user.clone()))
+          {
+            matches.insert(user);
+            break;
+          }
         }
       }
       if matches.is_empty() {
@@ -635,7 +643,14 @@ impl ServiceRuntime {
     let mut users = HashSet::new();
     for branch in branches {
       if let Some(user) = Self::payload_field_as_key(&branch.payload, &source.username_field) {
-        users.insert(user);
+        if service
+          .instances
+          .iter()
+          .any(|x| x.user != Some(user.clone()))
+        {
+          users.insert(user);
+          break;
+        }
       }
     }
     if users.is_empty() {
@@ -672,7 +687,7 @@ impl ServiceRuntime {
         }
 
         if let Some(source) = &service.metadata.user_source {
-          let user = self.resolve_user_from_source(source, branch_ctx, sm)?;
+          let user = self.resolve_user_from_source(service, source, branch_ctx, sm)?;
           if let Some(user) = user {
             return Ok(Some(user));
           }
@@ -688,7 +703,14 @@ impl ServiceRuntime {
           let mut users = HashSet::new();
           for sess in sessions {
             if let Some(user) = Self::payload_field_as_key(&sess.payload, "username") {
-              users.insert(user);
+              if service
+                .instances
+                .iter()
+                .any(|x| x.user != Some(user.clone()))
+              {
+                users.insert(user);
+                break;
+              }
             }
           }
           if users.len() == 1 {
@@ -897,9 +919,11 @@ impl ServiceRuntime {
     let mut args = run.args.clone();
     let mut envs = run.env.clone().unwrap_or_default();
     let branch_key = branch_ctx.and_then(|ctx| ctx.key.as_ref());
-    let resolved_user = self
-      .resolve_service_user(service, branch_ctx, sm, scope_name)?
-      .or_else(|| self.resolve_scope_default_user(service, scope_name));
+    let resolved_user = if let Some(u) = self.resolve_scope_default_user(service, scope_name) {
+      Some(u)
+    } else {
+      self.resolve_service_user(service, branch_ctx, sm, scope_name)?
+    };
     let watchdog_cfg = service.metadata.watchdog.clone();
 
     if let Some(transport) = &service.metadata.transport {

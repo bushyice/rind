@@ -29,7 +29,7 @@ fn add_builtin_defs(metadata: &mut Metadata) {
       protocol: TransportMethod::Options {
         id: TransportProtocolId("uds".into()),
         options: vec![],
-        permissions: None,
+        permissions: Some(vec!["SystemServices".into()]),
       },
     })
     .insert::<TransportRoute>(TransportRouteMetadata {
@@ -37,7 +37,7 @@ fn add_builtin_defs(metadata: &mut Metadata) {
       protocol: TransportMethod::Options {
         id: TransportProtocolId("shm".into()),
         options: vec![],
-        permissions: None,
+        permissions: Some(vec!["SystemServices".into()]),
       },
     })
     // Facets

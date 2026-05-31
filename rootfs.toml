@@ -237,8 +237,8 @@ env = [
 [[profile.main.user]]
 username = "codebam"
 password = "z"
-uid = 1000
-gid = 1000
+uid = 1001
+gid = 1001
 home = "/home/codebam"
 shell = "/usr/bin/sh"
 groups = ["wheel"]

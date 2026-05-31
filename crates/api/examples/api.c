@@ -23,6 +23,13 @@ int main(void) {
   rind_listen_tp(&tp, &on_message);
   rind_send_message(&tp, msg);
 
+
+  rind_msg msg2 = rind_create_msg(RIND_MSG_TYPE_IMPULSE, RIND_MSG_ACTION_SET);
+  rind_payload payload2 = rind_create_msg_payload(RIND_PAYLOAD_TYPE_STRING, "hello");
+  rind_set_message_payload(&msg, payload);
+  rind_set_message_name(&msg, "tp_demo:transport_state");
+
+
   for (;;) {
     sleep(1);
   }

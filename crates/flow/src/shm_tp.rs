@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -76,6 +77,11 @@ impl ShmTransport {
         return;
       }
     };
+
+    if permissions.is_some() {
+      std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o666))
+        .expect("failed to allow permissions");
+    }
 
     let clients = self.clients.clone();
     let tx = self.incoming_tx.clone();

@@ -174,6 +174,8 @@ impl UdsTransport {
           };
           uid = cred.uid;
 
+          println!("User {uid} trying to connect");
+
           if !permissions
             .iter()
             .any(|x| pm.from_name(x).map_or(false, |x| pm.user_has(cred.uid, x)))

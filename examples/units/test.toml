@@ -7,18 +7,18 @@ user-source = { facet = "rind:user_session", username-field = "username" }
 start-on = [{ facet = "rind:user_session" }]
 
 [[service]]
+name = "many"
+run.variable = "someservice"
+space = "user"
+start-on = [{ facet = "rind:user_session" }, { facet = "net:configured" }]
+user-source = { facet = "rind:user_session", username-field = "username" }
+
+[[service]]
 name = "something"
 run.exec = "/bin/tcp"
 run.args = ["makano-test"]
 run.env = { PORT = "4433" }
 space = "user"
-user-source = { facet = "rind:user_session", username-field = "username" }
-
-[[service]]
-name = "many"
-run.variable = "someservice"
-space = "user"
-start-on = [{ facet = "rind:user_session" }, { facet = "rind:net-configured" }]
 user-source = { facet = "rind:user_session", username-field = "username" }
 
 [[variable]]
@@ -59,6 +59,6 @@ watchdog = { interval-ms = 1000, grace-ms = 5000, action = "restart" }
 [[service]]
 name = "shm"
 run.exec = "/bin/shm"
-transport = "route:rind:sys-shm" # or shm
+transport = "shm"
 start-on = [{ impulse = "rind:boot" }]
 restart = false
