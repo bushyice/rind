@@ -6,6 +6,7 @@ on:
       - "docs/**"
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -31,7 +32,10 @@ jobs:
           node-version: 22
 
       - name: Clone Quartz
-        run: git clone https://github.com/jackyzha0/quartz.git quartz-repo
+        run: |
+          git clone https://github.com/jackyzha0/quartz quartz-repo
+          cd quartz-repo
+          git reset --hard 59b58076016c5e5f09f16ab0395fed02e2ebb72e
 
       - name: Install dependencies
         run: |
