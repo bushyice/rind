@@ -230,7 +230,9 @@ fn default_username_field() -> String {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ServiceUserSource {
-  pub facet: Ustr,
+  pub facet: Option<Ustr>,
+  #[serde(default)]
+  pub branch: bool,
   #[serde(rename = "username-field", default = "default_username_field")]
   pub username_field: String,
   #[serde(rename = "match-branch-key")]
@@ -595,7 +597,18 @@ impl ServiceRuntime {
     let Some(sm) = sm else {
       return Ok(None);
     };
-    let Some(branches) = sm.facets.get(&source.facet) else {
+    if let Some(payload) = branch_ctx.and_then(|ctx| ctx.payload.as_ref())
+      && let Some(user) = Self::payload_field_as_key(payload, &source.username_field)
+      && source.branch
+    {
+      return Ok(Some(user));
+    }
+
+    let Some(facet) = &source.facet else {
+      return Ok(None);
+    };
+
+    let Some(branches) = sm.facets.get(facet) else {
       return Ok(None);
     };
 
@@ -628,16 +641,10 @@ impl ServiceRuntime {
       if matches.len() > 1 {
         return Err(CoreError::InvalidState(format!(
           "ambiguous users for state '{}' using match key '{}'",
-          source.facet, field
+          facet, field
         )));
       }
       return Ok(matches.into_iter().next());
-    }
-
-    if let Some(payload) = branch_ctx.and_then(|ctx| ctx.payload.as_ref())
-      && let Some(user) = Self::payload_field_as_key(payload, &source.username_field)
-    {
-      return Ok(Some(user));
     }
 
     let mut users = HashSet::new();
@@ -659,7 +666,7 @@ impl ServiceRuntime {
     if users.len() > 1 {
       return Err(CoreError::InvalidState(format!(
         "ambiguous users in state '{}' (set user-source.match-branch-key)",
-        source.facet
+        facet
       )));
     }
     Ok(users.into_iter().next())

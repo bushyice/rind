@@ -22,9 +22,17 @@ fn handle_client(mut stream: TcpStream) {
   }
 }
 
+fn parse_user_port(user: String) -> String {
+  if user == "makano" { "8080" } else { "9000" }.to_string()
+}
+
 fn main() {
   let host = std::env::var("HOST").unwrap_or("0.0.0.0".to_string());
-  let port = std::env::var("PORT").unwrap_or("8080".to_string());
+  let port = std::env::var("PORT").unwrap_or(
+    std::env::var("USER")
+      .map(parse_user_port)
+      .unwrap_or("8080".to_string()),
+  );
   let listener = TcpListener::bind(format!("{host}:{port}")).unwrap();
   println!("Server listening on port {port}...");
 
