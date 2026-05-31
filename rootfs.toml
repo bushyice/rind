@@ -235,6 +235,15 @@ env = [
 ]
 
 [[profile.main.user]]
+username = "codebam"
+password = "z"
+uid = 1000
+gid = 1000
+home = "/home/codebam"
+shell = "/usr/bin/sh"
+groups = ["wheel"]
+
+[[profile.main.user]]
 username = "root"
 uid = 0
 gid = 0

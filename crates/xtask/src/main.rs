@@ -5,7 +5,7 @@ use std::{
   fs,
   io::{Read, Seek, SeekFrom},
   path::{Path, PathBuf},
-  process::{exit, Command},
+  process::{Command, exit},
 };
 
 use std::os::unix::fs::MetadataExt;
@@ -1288,12 +1288,6 @@ fn handle_command(c: &str, profile: &Profile, fs_ext4: &mut Option<Ext4Fs>, _no_
 
 fn print_usage() {
   eprintln!("Usage: cargo xtask <command> [args]");
-  eprintln!("\nUnified Subcommands:");
-  eprintln!("  mount / mr           Mount loopback device to .artifacts/mnt");
-  eprintln!("  umount / umr         Unmount .artifacts/mnt");
-  eprintln!("  clean-state          Mount, delete .artifacts/mnt/var/lib/system-state, and unmount");
-  eprintln!("  test                 Run nextest or cargo test");
-  eprintln!("  bench [bench_name]   Run cargo bench quiet");
   eprintln!("\nLegacy Builder Commands:");
   eprintln!("  a                    Build all");
   eprintln!("  b                    Run cargo build");
@@ -1307,89 +1301,6 @@ fn print_usage() {
   eprintln!("  cargo xtask xbpr     Builds cargo, prepares rootfs, and runs QEMU on existing disk");
 }
 
-fn mount_rootfs() {
-  println!("[*] Creating mount directory .artifacts/mnt");
-  fs::create_dir_all(".artifacts/mnt").unwrap();
-  println!("[*] Mounting .artifacts/rootfs.img to .artifacts/mnt");
-  let status = Command::new("sudo")
-    .args(&["mount", "-o", "loop", ".artifacts/rootfs.img", ".artifacts/mnt"])
-    .status()
-    .expect("Failed to execute sudo mount");
-  if !status.success() {
-    eprintln!("[!] Failed to mount rootfs.img");
-    exit(1);
-  }
-  println!("[*] Mounted successfully.");
-}
-
-fn umount_rootfs() {
-  println!("[*] Unmounting .artifacts/mnt");
-  let status = Command::new("sudo")
-    .args(&["umount", ".artifacts/mnt"])
-    .status()
-    .expect("Failed to execute sudo umount");
-  if !status.success() {
-    eprintln!("[!] Failed to unmount .artifacts/mnt");
-    exit(1);
-  }
-  println!("[*] Unmounted successfully.");
-}
-
-fn clean_state() {
-  mount_rootfs();
-  println!("[*] Cleaning state in .artifacts/mnt/var/lib/system-state");
-  let status = Command::new("sudo")
-    .args(&["rm", "-rf", ".artifacts/mnt/var/lib/system-state"])
-    .status()
-    .expect("Failed to delete system-state");
-  if !status.success() {
-    eprintln!("[!] Failed to clean system-state");
-  }
-  umount_rootfs();
-}
-
-fn run_tests() {
-  println!("[*] Running tests...");
-  let nextest_check = Command::new("cargo")
-    .args(&["nextest", "--version"])
-    .output();
-  let status = if nextest_check.is_ok() && nextest_check.unwrap().status.success() {
-    Command::new("cargo")
-      .args(&["nextest", "run"])
-      .status()
-  } else {
-    println!("[*] nextest not found, falling back to cargo test");
-    Command::new("cargo")
-      .args(&["test"])
-      .status()
-  };
-  
-  match status {
-    Ok(s) if s.success() => println!("[*] Tests passed successfully."),
-    _ => {
-      eprintln!("[!] Tests failed.");
-      exit(1);
-    }
-  }
-}
-
-fn run_bench(bench_name: &str) {
-  println!("[*] Running bench: {}", bench_name);
-  let mut cmd = Command::new("cargo");
-  cmd.arg("bench");
-  if !bench_name.is_empty() {
-    cmd.args(&["--bench", bench_name]);
-  }
-  cmd.arg("--");
-  cmd.arg("--quiet");
-  
-  let status = cmd.status().expect("Failed to run cargo bench");
-  if !status.success() {
-    eprintln!("[!] Benchmark failed.");
-    exit(1);
-  }
-}
-
 fn main() {
   let args: Vec<String> = std::env::args().collect();
   if args.len() < 2 {
@@ -1399,30 +1310,17 @@ fn main() {
 
   let command = &args[1];
   match command.as_str() {
-    "mount" | "mr" => {
-      mount_rootfs();
-    }
-    "umount" | "umr" => {
-      umount_rootfs();
-    }
-    "clean-state" => {
-      clean_state();
-    }
-    "test" => {
-      run_tests();
-    }
-    "bench" => {
-      let bench_name = args.get(2).map(|s| s.as_str()).unwrap_or("");
-      run_bench(bench_name);
-    }
     _ => {
       if !command.chars().all(|c| "abniprux".contains(c)) {
-        eprintln!("[!] Unknown command or invalid command characters: {}", command);
+        eprintln!(
+          "[!] Unknown command or invalid command characters: {}",
+          command
+        );
         print_usage();
         exit(1);
       }
-      
-      let config: RinbConfig = toml::from_str(&fs::read_to_string("builder.toml").unwrap()).unwrap();
+
+      let config: RinbConfig = toml::from_str(&fs::read_to_string("rootfs.toml").unwrap()).unwrap();
       let profile = config.profile.get("main").unwrap();
       let mut fs_ext4: Option<Ext4Fs> = None;
       for c in command.chars() {
