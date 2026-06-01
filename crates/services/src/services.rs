@@ -30,6 +30,7 @@ use rind_flow::{
   condition_is_active, condition_matches,
 };
 use rind_ipc::TransportMessage;
+use rind_primitives::mounts::{Mount, NamespaceMountEntry};
 use rind_primitives::permissions::PERM_SYSTEM_SERVICES;
 use rind_primitives::scopes::ScopeStore;
 use rind_primitives::variables::VariableHeap;
@@ -127,8 +128,9 @@ pub enum ServiceState {
   Error(String),
 }
 
-use crate::executor::{
-  Executor, ExecutorContext, ImaExecutor, InstanceHandle, NaturalExecutor, RemoteExecutor,
+use crate::executors::{
+  Executor, ExecutorContext, ImaExecutor, InstanceHandle, NamespaceNetworkConfig, NativeExecutor,
+  RemoteExecutor,
 };
 
 pub struct ChildInstance {
@@ -250,6 +252,15 @@ pub struct ServiceCgroup {
   pub pids_max: Option<Ustr>,
 }
 
+impl ServiceCgroup {
+  fn is_empty(&self) -> bool {
+    self.path.is_none()
+      && self.memory_max.is_none()
+      && self.cpu_max.is_none()
+      && self.pids_max.is_none()
+  }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct ServiceNamespaces {
   #[serde(default)]
@@ -266,6 +277,76 @@ pub struct ServiceNamespaces {
   pub user: bool,
   #[serde(default)]
   pub cgroup: bool,
+  #[serde(default)]
+  pub mount_private: bool,
+  pub rootfs: Option<Ustr>,
+  pub hostname: Option<Ustr>,
+  #[serde(default)]
+  pub persist: bool,
+  #[serde(default)]
+  pub init: bool,
+}
+
+impl ServiceNamespaces {
+  fn is_empty(&self) -> bool {
+    !self.mount
+      && !self.uts
+      && !self.ipc
+      && !self.net
+      && !self.pid
+      && !self.user
+      && !self.cgroup
+      && !self.mount_private
+      && self.rootfs.is_none()
+      && self.hostname.is_none()
+      && !self.persist
+      && !self.init
+  }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ServiceIsolation {
+  pub scope: Option<Ustr>,
+  pub cgroup: Option<ServiceCgroup>,
+  pub namespaces: Option<ServiceNamespaces>,
+  pub capabilities: Option<CapabilityPolicy>,
+  pub seccomp: Option<SeccompPolicy>,
+}
+
+impl ServiceIsolation {
+  pub fn needs_namespace_supervisor(&self) -> bool {
+    self
+      .namespaces
+      .as_ref()
+      .map(|ns| ns.pid || ns.user || ns.persist || ns.init)
+      .unwrap_or(false)
+      || self.capabilities.is_some()
+      || self.seccomp.is_some()
+  }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CapabilityPolicy {
+  pub drop: Vec<Ustr>,
+  pub keep: Vec<Ustr>,
+}
+
+impl CapabilityPolicy {
+  fn is_empty(&self) -> bool {
+    self.drop.is_empty() && self.keep.is_empty()
+  }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SeccompPolicy {
+  pub profile: Option<Ustr>,
+  pub path: Option<Ustr>,
+}
+
+impl SeccompPolicy {
+  fn is_empty(&self) -> bool {
+    self.profile.is_none() && self.path.is_none()
+  }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -382,7 +463,7 @@ impl Default for ServiceRuntime {
   fn default() -> Self {
     let (stdio_tx, stdio_rx) = mpsc::channel();
     let mut executors: HashMap<Ustr, Box<dyn Executor>> = HashMap::new();
-    executors.insert(Ustr::from("natural"), Box::new(NaturalExecutor));
+    executors.insert(Ustr::from("natural"), Box::new(NativeExecutor));
     executors.insert(Ustr::from("remote"), Box::new(RemoteExecutor));
     executors.insert(Ustr::from("ima"), Box::new(ImaExecutor));
 
@@ -428,14 +509,12 @@ impl ServiceRuntime {
 
   fn cgroup_path_for(
     service: &Service,
+    cgroup: Option<&ServiceCgroup>,
     branch_ctx: Option<&ServiceBranchContext>,
     user: Option<&Ustr>,
   ) -> Option<PathBuf> {
-    let Some(cg) = &service.metadata.cgroup else {
-      return None;
-    };
-
-    let mut path = if let Some(custom) = &cg.path {
+    let cgroup = cgroup?;
+    let mut path = if let Some(custom) = &cgroup.path {
       PathBuf::from(custom.as_str())
     } else {
       let mut p = PathBuf::from("/sys/fs/cgroup/rind");
@@ -458,29 +537,225 @@ impl ServiceRuntime {
     Some(path)
   }
 
+  fn attr<'a>(attrs: &'a HashMap<Ustr, String>, keys: &[&str]) -> Option<&'a str> {
+    keys
+      .iter()
+      .find_map(|key| attrs.get(&Ustr::from(*key)).map(|v| v.as_str()))
+  }
+
+  fn attr_bool(attrs: &HashMap<Ustr, String>, keys: &[&str]) -> Option<bool> {
+    let value = Self::attr(attrs, keys)?;
+    match value.trim().to_ascii_lowercase().as_str() {
+      "1" | "true" | "yes" | "on" => Some(true),
+      "0" | "false" | "no" | "off" => Some(false),
+      _ => None,
+    }
+  }
+
+  fn scope_cgroup(scope: Option<&str>) -> Option<ServiceCgroup> {
+    let attrs = ScopeStore::attrs_for_scope(scope?)?;
+    let cgroup = ServiceCgroup {
+      path: Self::attr(&attrs, &["cgroup.path"]).map(Ustr::from),
+      memory_max: Self::attr(&attrs, &["cgroup.memory-max", "cgroup.memory_max"]).map(Ustr::from),
+      cpu_max: Self::attr(&attrs, &["cgroup.cpu-max", "cgroup.cpu_max"]).map(Ustr::from),
+      pids_max: Self::attr(&attrs, &["cgroup.pids-max", "cgroup.pids_max"]).map(Ustr::from),
+    };
+    (!cgroup.is_empty()).then_some(cgroup)
+  }
+
+  fn scope_namespaces(scope: Option<&str>) -> Option<ServiceNamespaces> {
+    let attrs = ScopeStore::attrs_for_scope(scope?)?;
+    let namespaces = ServiceNamespaces {
+      mount: Self::attr_bool(&attrs, &["namespace.mount", "namespaces.mount", "ns.mount"])
+        .unwrap_or(false),
+      uts: Self::attr_bool(&attrs, &["namespace.uts", "namespaces.uts", "ns.uts"]).unwrap_or(false),
+      ipc: Self::attr_bool(&attrs, &["namespace.ipc", "namespaces.ipc", "ns.ipc"]).unwrap_or(false),
+      net: Self::attr_bool(&attrs, &["namespace.net", "namespaces.net", "ns.net"]).unwrap_or(false),
+      pid: Self::attr_bool(&attrs, &["namespace.pid", "namespaces.pid", "ns.pid"]).unwrap_or(false),
+      user: Self::attr_bool(&attrs, &["namespace.user", "namespaces.user", "ns.user"])
+        .unwrap_or(false),
+      cgroup: Self::attr_bool(
+        &attrs,
+        &["namespace.cgroup", "namespaces.cgroup", "ns.cgroup"],
+      )
+      .unwrap_or(false),
+      mount_private: Self::attr_bool(
+        &attrs,
+        &[
+          "namespace.mount-private",
+          "namespace.mount_private",
+          "namespaces.mount-private",
+          "namespaces.mount_private",
+          "ns.mount-private",
+          "ns.mount_private",
+        ],
+      )
+      .unwrap_or(false),
+      rootfs: Self::attr(
+        &attrs,
+        &["namespace.rootfs", "namespaces.rootfs", "ns.rootfs"],
+      )
+      .map(Ustr::from),
+      hostname: Self::attr(
+        &attrs,
+        &["namespace.hostname", "namespaces.hostname", "ns.hostname"],
+      )
+      .map(Ustr::from),
+      persist: Self::attr_bool(
+        &attrs,
+        &["namespace.persist", "namespaces.persist", "ns.persist"],
+      )
+      .unwrap_or(false),
+      init: Self::attr_bool(&attrs, &["namespace.init", "namespaces.init", "ns.init"])
+        .unwrap_or(false),
+    };
+    (!namespaces.is_empty()).then_some(namespaces)
+  }
+
+  fn split_attr_list(value: &str) -> Vec<Ustr> {
+    value
+      .split(',')
+      .map(str::trim)
+      .filter(|v| !v.is_empty())
+      .map(Ustr::from)
+      .collect()
+  }
+
+  fn scope_capabilities(scope: Option<&str>) -> Option<CapabilityPolicy> {
+    let attrs = ScopeStore::attrs_for_scope(scope?)?;
+    let caps = CapabilityPolicy {
+      drop: Self::attr(
+        &attrs,
+        &["capabilities.drop", "capability.drop", "caps.drop"],
+      )
+      .map(Self::split_attr_list)
+      .unwrap_or_default(),
+      keep: Self::attr(
+        &attrs,
+        &["capabilities.keep", "capability.keep", "caps.keep"],
+      )
+      .map(Self::split_attr_list)
+      .unwrap_or_default(),
+    };
+    (!caps.is_empty()).then_some(caps)
+  }
+
+  fn scope_seccomp(scope: Option<&str>) -> Option<SeccompPolicy> {
+    let attrs = ScopeStore::attrs_for_scope(scope?)?;
+    let seccomp = SeccompPolicy {
+      profile: Self::attr(&attrs, &["seccomp.profile"]).map(Ustr::from),
+      path: Self::attr(&attrs, &["seccomp.path"]).map(Ustr::from),
+    };
+    (!seccomp.is_empty()).then_some(seccomp)
+  }
+
+  fn merge_cgroup(
+    scope: Option<ServiceCgroup>,
+    service: Option<ServiceCgroup>,
+  ) -> Option<ServiceCgroup> {
+    match (scope, service) {
+      (None, None) => None,
+      (Some(c), None) | (None, Some(c)) => Some(c),
+      (Some(scope), Some(service)) => Some(ServiceCgroup {
+        path: service.path.or(scope.path),
+        memory_max: service.memory_max.or(scope.memory_max),
+        cpu_max: service.cpu_max.or(scope.cpu_max),
+        pids_max: service.pids_max.or(scope.pids_max),
+      }),
+    }
+  }
+
+  fn merge_namespaces(
+    scope: Option<ServiceNamespaces>,
+    service: Option<ServiceNamespaces>,
+  ) -> Option<ServiceNamespaces> {
+    match (scope, service) {
+      (None, None) => None,
+      (Some(ns), None) | (None, Some(ns)) => Some(ns),
+      (Some(scope), Some(service)) => Some(ServiceNamespaces {
+        mount: scope.mount || service.mount,
+        uts: scope.uts || service.uts,
+        ipc: scope.ipc || service.ipc,
+        net: scope.net || service.net,
+        pid: scope.pid || service.pid,
+        user: scope.user || service.user,
+        cgroup: scope.cgroup || service.cgroup,
+        mount_private: scope.mount_private || service.mount_private,
+        rootfs: service.rootfs.or(scope.rootfs),
+        hostname: service.hostname.or(scope.hostname),
+        persist: scope.persist || service.persist,
+        init: scope.init || service.init,
+      }),
+    }
+  }
+
+  fn validate_service_inline_namespaces(service: &Service) -> CoreResult<Void> {
+    let Some(ns) = &service.metadata.namespaces else {
+      return Ok(Void);
+    };
+    let mut invalid = Vec::new();
+    if ns.pid {
+      invalid.push("pid");
+    }
+    if ns.user {
+      invalid.push("user");
+    }
+    if ns.persist {
+      invalid.push("persist");
+    }
+    if ns.init {
+      invalid.push("init");
+    }
+    if invalid.is_empty() {
+      return Ok(Void);
+    }
+
+    Err(CoreError::InvalidState(format!(
+      "service '{}' declares scope-only namespace feature(s) inline: {}; put them on scope attributes instead",
+      service.metadata.name,
+      invalid.join(", ")
+    )))
+  }
+
+  fn isolation_for(service: &Service, scope: Option<&str>) -> CoreResult<ServiceIsolation> {
+    Self::validate_service_inline_namespaces(service)?;
+    Ok(ServiceIsolation {
+      scope: scope.map(Ustr::from),
+      cgroup: Self::merge_cgroup(Self::scope_cgroup(scope), service.metadata.cgroup.clone()),
+      namespaces: Self::merge_namespaces(
+        Self::scope_namespaces(scope),
+        service.metadata.namespaces.clone(),
+      ),
+      capabilities: Self::scope_capabilities(scope),
+      seccomp: Self::scope_seccomp(scope),
+    })
+  }
+
   fn setup_cgroup_for_pid(
     &self,
     service: &Service,
+    cgroup: Option<&ServiceCgroup>,
     branch_ctx: Option<&ServiceBranchContext>,
     user: Option<&Ustr>,
     pid: u32,
   ) -> CoreResult<Void> {
-    let Some(path) = Self::cgroup_path_for(service, branch_ctx, user) else {
+    let Some(cgroup) = cgroup else {
+      return Ok(Void);
+    };
+    let Some(path) = Self::cgroup_path_for(service, Some(cgroup), branch_ctx, user) else {
       return Ok(Void);
     };
 
     std::fs::create_dir_all(&path)?;
 
-    if let Some(cg) = &service.metadata.cgroup {
-      if let Some(mem) = &cg.memory_max {
-        let _ = std::fs::write(path.join("memory.max"), mem.as_str());
-      }
-      if let Some(cpu) = &cg.cpu_max {
-        let _ = std::fs::write(path.join("cpu.max"), cpu.as_str());
-      }
-      if let Some(pids) = &cg.pids_max {
-        let _ = std::fs::write(path.join("pids.max"), pids.as_str());
-      }
+    if let Some(mem) = &cgroup.memory_max {
+      let _ = std::fs::write(path.join("memory.max"), mem.as_str());
+    }
+    if let Some(cpu) = &cgroup.cpu_max {
+      let _ = std::fs::write(path.join("cpu.max"), cpu.as_str());
+    }
+    if let Some(pids) = &cgroup.pids_max {
+      let _ = std::fs::write(path.join("pids.max"), pids.as_str());
     }
 
     std::fs::write(path.join("cgroup.procs"), pid.to_string())?;
@@ -786,6 +1061,8 @@ impl ServiceRuntime {
     registry_key: Ustr,
     notifier: Option<Notifier>,
     resources: &mut Resources,
+    namespace_mounts: Vec<NamespaceMountEntry>,
+    namespace_networks: Vec<NamespaceNetworkConfig>,
   ) -> CoreResult<Vec<ChildInstance>> {
     let mut instances = Vec::new();
 
@@ -815,6 +1092,8 @@ impl ServiceRuntime {
         registry_key.clone(),
         notifier.clone(),
         resources,
+        namespace_mounts.clone(),
+        namespace_networks.clone(),
       )?;
 
       instances.push(instance);
@@ -872,6 +1151,8 @@ impl ServiceRuntime {
     registry_key: Ustr,
     notifier: Option<Notifier>,
     resources: &mut Resources,
+    namespace_mounts: Vec<NamespaceMountEntry>,
+    namespace_networks: Vec<NamespaceNetworkConfig>,
   ) -> CoreResult<Void> {
     log.log(
       LogLevel::Info,
@@ -890,6 +1171,8 @@ impl ServiceRuntime {
       registry_key,
       notifier,
       resources,
+      namespace_mounts,
+      namespace_networks,
     )?;
     service.instances.extend(instances);
     Ok(Void)
@@ -914,6 +1197,8 @@ impl ServiceRuntime {
     registry_key: Ustr,
     notifier: Option<Notifier>,
     resources: &mut Resources,
+    namespace_mounts: Vec<NamespaceMountEntry>,
+    namespace_networks: Vec<NamespaceNetworkConfig>,
   ) -> CoreResult<ChildInstance> {
     let (full_name, scope_name) = {
       let key = registry_key.as_str();
@@ -931,6 +1216,7 @@ impl ServiceRuntime {
     } else {
       self.resolve_service_user(service, branch_ctx, sm, scope_name)?
     };
+    let isolation = Self::isolation_for(service, scope_name)?;
     let watchdog_cfg = service.metadata.watchdog.clone();
 
     if let Some(transport) = &service.metadata.transport {
@@ -1111,10 +1397,29 @@ impl ServiceRuntime {
       resolved_user: resolved_user.clone(),
       envs,
       args,
+      isolation: isolation.clone(),
+      cgroup_path: Self::cgroup_path_for(
+        service,
+        isolation.cgroup.as_ref(),
+        branch_ctx,
+        resolved_user.as_ref(),
+      ),
+      namespace_mounts,
+      namespace_networks,
     })?;
 
     if let Some(pid) = handle.pid() {
-      if let Err(e) = self.setup_cgroup_for_pid(service, branch_ctx, resolved_user.as_ref(), pid) {
+      if let Err(e) = self.setup_cgroup_for_pid(
+        service,
+        if isolation.needs_namespace_supervisor() {
+          None
+        } else {
+          isolation.cgroup.as_ref()
+        },
+        branch_ctx,
+        resolved_user.as_ref(),
+        pid,
+      ) {
         let _ = handle.kill(Signal::SIGKILL);
         return Err(CoreError::InvalidState(format!(
           "failed to setup cgroup for service '{}': {e}",
@@ -1181,6 +1486,8 @@ impl ServiceRuntime {
     registry_key: Ustr,
     notifier: Option<Notifier>,
     resources: &mut Resources,
+    namespace_mounts: Vec<NamespaceMountEntry>,
+    namespace_networks: Vec<NamespaceNetworkConfig>,
   ) {
     if let Some(inst) = service.instances.as_one_mut() {
       if inst.state == ServiceState::Active
@@ -1202,6 +1509,8 @@ impl ServiceRuntime {
       registry_key.clone(),
       notifier,
       resources,
+      namespace_mounts,
+      namespace_networks,
     ) {
       Ok(_) => {
         self.register_service_transport(service, dispatch, Some(registry_key.clone()));
@@ -2409,8 +2718,25 @@ impl ServiceRuntime {
         (FacetGraph::KEY.into(), VariableHeap::KEY.into()),
         |registry, (sm, vh)| {
           let service_key = Self::ensure_scoped_name(name.as_str());
+          let metadata_registry = registry.metadata;
           let service =
             registry.instantiate_one::<Service>("*", name.clone(), |x| Ok(Service::new(x)))?;
+
+          let ns_scope = name.rsplit_once('@').map(|(_, s)| s).unwrap_or("static");
+          let ns_mounts: Vec<NamespaceMountEntry> = metadata_registry
+            .items::<Mount>(ns_scope)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, m)| NamespaceMountEntry {
+              source: m.source.as_ref().map(|s| s.to_string()),
+              target: m.target.to_string(),
+              fstype: m.fstype.as_ref().map(|s| s.to_string()),
+              flags: m.flags.as_ref().map(|f| f.clone()),
+              data: m.data.clone(),
+              create: m.create,
+            })
+            .collect();
+          let ns_networks: Vec<NamespaceNetworkConfig> = Vec::new();
 
           if !deferred
             && self.register_service_transport(service, dispatch, Some(service_key.clone()))
@@ -2458,6 +2784,8 @@ impl ServiceRuntime {
               service_key.clone(),
               ctx.notifier.clone(),
               ctx.resources,
+              ns_mounts.clone(),
+              ns_networks.clone(),
             ) {
               Ok(instances) => {
                 service.instances.extend(instances);
@@ -2513,6 +2841,8 @@ impl ServiceRuntime {
               service_key.clone(),
               ctx.notifier.clone(),
               ctx.resources,
+              ns_mounts.clone(),
+              ns_networks.clone(),
             ) {
               Ok(instances) => {
                 service.instances.extend(instances);
@@ -2558,6 +2888,8 @@ impl ServiceRuntime {
               service_key.clone().into(),
               ctx.notifier.clone(),
               ctx.resources,
+              ns_mounts,
+              ns_networks,
             );
 
             Ok(Some((
@@ -2957,5 +3289,145 @@ impl ServiceRuntime {
       let _ = kill(pgid, Signal::SIGKILL);
       self.stopping_map.remove(&pid);
     }
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use rind_core::prelude::Metadata;
+
+  fn service_from_toml(source: &str) -> Service {
+    let mut metadata = Metadata::new("test").of::<Service>("service");
+    metadata.from_toml(source, "svc").unwrap();
+    let service = metadata
+      .get_in_group::<Service>("svc")
+      .and_then(|services| services.first())
+      .cloned()
+      .expect("service should parse");
+    Service::new(service)
+  }
+
+  #[test]
+  fn isolation_uses_scope_cgroup_defaults_and_service_overrides() {
+    let scope = "iso_cgroup_test";
+    let mut attrs = HashMap::new();
+    attrs.insert(Ustr::from("cgroup.path"), "rind/scope-default".to_string());
+    attrs.insert(Ustr::from("cgroup.memory-max"), "128M".to_string());
+    attrs.insert(Ustr::from("cgroup.pids-max"), "64".to_string());
+    ScopeStore::upsert_global(scope, attrs, None);
+
+    let service = service_from_toml(
+      r#"
+[[service]]
+name = "demo"
+run.exec = "/bin/true"
+cgroup = { path = "rind/service", cpu-max = "50000 100000" }
+"#,
+    );
+
+    let isolation = ServiceRuntime::isolation_for(&service, Some(scope)).unwrap();
+    let cgroup = isolation.cgroup.expect("cgroup should merge");
+
+    assert_eq!(cgroup.path.unwrap().as_str(), "rind/service");
+    assert_eq!(cgroup.memory_max.unwrap().as_str(), "128M");
+    assert_eq!(cgroup.cpu_max.unwrap().as_str(), "50000 100000");
+    assert_eq!(cgroup.pids_max.unwrap().as_str(), "64");
+
+    ScopeStore::remove_scope_global(scope);
+  }
+
+  #[test]
+  fn isolation_merges_scope_namespace_attributes_with_service_config() {
+    let scope = "iso_namespace_test";
+    let mut attrs = HashMap::new();
+    attrs.insert(Ustr::from("namespace.mount"), "true".to_string());
+    attrs.insert(Ustr::from("namespace.rootfs"), "/scope-root".to_string());
+    attrs.insert(Ustr::from("namespace.hostname"), "scope-host".to_string());
+    ScopeStore::upsert_global(scope, attrs, None);
+
+    let service = service_from_toml(
+      r#"
+[[service]]
+name = "demo"
+run.exec = "/bin/true"
+namespaces = { ipc = true, hostname = "service-host" }
+"#,
+    );
+
+    let isolation = ServiceRuntime::isolation_for(&service, Some(scope)).unwrap();
+    let namespaces = isolation.namespaces.expect("namespaces should merge");
+
+    assert!(namespaces.mount);
+    assert!(namespaces.ipc);
+    assert_eq!(namespaces.rootfs.unwrap().as_str(), "/scope-root");
+    assert_eq!(namespaces.hostname.unwrap().as_str(), "service-host");
+
+    ScopeStore::remove_scope_global(scope);
+  }
+
+  #[test]
+  fn inline_service_namespace_rejects_scope_only_features() {
+    let service = service_from_toml(
+      r#"
+[[service]]
+name = "demo"
+run.exec = "/bin/true"
+namespaces = { pid = true, user = true, persist = true, init = true }
+"#,
+    );
+
+    let err = ServiceRuntime::isolation_for(&service, Some("static")).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("scope-only namespace feature"));
+    assert!(msg.contains("pid"));
+    assert!(msg.contains("user"));
+    assert!(msg.contains("persist"));
+    assert!(msg.contains("init"));
+  }
+
+  #[test]
+  fn scope_attrs_parse_namespace_security_policy() {
+    let scope = "iso_security_test";
+    let mut attrs = HashMap::new();
+    attrs.insert(Ustr::from("namespace.pid"), "true".to_string());
+    attrs.insert(Ustr::from("namespace.user"), "true".to_string());
+    attrs.insert(Ustr::from("namespace.persist"), "true".to_string());
+    attrs.insert(Ustr::from("namespace.init"), "true".to_string());
+    attrs.insert(Ustr::from("capabilities.drop"), "all".to_string());
+    attrs.insert(
+      Ustr::from("capabilities.keep"),
+      "net_bind_service,sys_chroot".to_string(),
+    );
+    attrs.insert(Ustr::from("seccomp.profile"), "default".to_string());
+    ScopeStore::upsert_global(scope, attrs, None);
+
+    let service = service_from_toml(
+      r#"
+[[service]]
+name = "demo"
+run.exec = "/bin/true"
+"#,
+    );
+
+    let isolation = ServiceRuntime::isolation_for(&service, Some(scope)).unwrap();
+    let namespaces = isolation.namespaces.expect("scope namespace policy");
+    assert!(namespaces.pid);
+    assert!(namespaces.user);
+    assert!(namespaces.persist);
+    assert!(namespaces.init);
+
+    let caps = isolation.capabilities.expect("scope capability policy");
+    assert_eq!(caps.drop, vec![Ustr::from("all")]);
+    assert_eq!(
+      caps.keep,
+      vec![Ustr::from("net_bind_service"), Ustr::from("sys_chroot")]
+    );
+    assert_eq!(
+      isolation.seccomp.unwrap().profile.unwrap().as_str(),
+      "default"
+    );
+
+    ScopeStore::remove_scope_global(scope);
   }
 }

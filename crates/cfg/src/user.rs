@@ -57,8 +57,6 @@ pub fn handle_ipc_run0(
     return Err(CoreError::PermissionDenied);
   };
 
-  println!("user {uid} wants to run");
-
   if !pm.user_has(msg.from_uid.unwrap(), PERM_RUN0)
     && !pm.users.user_in_group(
       pm.users.lookup_by_uid(msg.from_uid.unwrap()).unwrap(),
@@ -78,8 +76,6 @@ pub fn handle_ipc_run0(
       return Ok(Message::from_type(MessageType::RequestInput));
     }
   }
-
-  println!("user {uid} verified");
 
   let payload = msg
     .parse_payload::<Run0AuthPayload>()

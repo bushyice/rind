@@ -13,4 +13,5 @@ rind-core = { path = "../core" }
 rind-plugins = { path = "../plugins" }
 rind-ipc = { path = "../ipc" }
 rind-flow = { path = "../flow" }
+rind-primitives = { path = "../primitives" }
 serde.workspace = true

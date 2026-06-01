@@ -17,11 +17,7 @@ kanban-plugin: board
 	**e.g**:
 	- NixShellEntry: Resolves `flake.nix`, provides with the nix provider to download and return from `/nix/store` before it finally just passing it to default spawner.
 - [ ] **Remote Executors**: Executors that connect to a remote to spawn and manage services.
-- [ ] **initrd**
 - [ ] **telemetry**
-- [ ] **API**: More rind API utils.
-	- [ ] State management (`has_state`, `branches_for`)
-	- [ ] Lookups
 
 
 ## Doing
@@ -36,17 +32,6 @@ kanban-plugin: board
 	**Sockets**:
 	 - [ ] Spawners
 	 - [ ] Proxy
-- [ ] **Namespaces**: Service namespaces (user, network, mounts) in isolated envs.
-	- [x] Basic namespaces
-	- [ ] PID namespace proper `clone/fork+exec` flow (not `pre_exec+unshare`)
-	- [ ] User namespace setup with `/proc/<pid>/uid_map`,`gid_map`,`setgroups`
-	- [ ] Mount propagation setup
-	- [ ] Rootfs isolation flow
-	- [ ] Network namespace bring-up
-	- [ ] Namespace persistence/join support
-	- [ ] Namespace-local init/PID1 behavior (child reaping + sigfwd)
-	- [ ] Capability bounding/drop pipeline
-	- [ ] Seccomp profile (pre-exec)
 - [ ] **Sophisticated timers**
 - [ ] **Json Optimizations**
 - [ ] **KDL Configs**: Replace `TOML` with `KDL`.
@@ -65,6 +50,21 @@ kanban-plugin: board
 ## Testing
 
 - [ ] **cgroups**: Using linux cgroups for service resource management.
+- [ ] **API**: More rind API utils.
+	- [x] State management (`has_state`, `branches_for`)
+	- [x] Lookups
+- [ ] **initrd**
+- [ ] **Namespaces**: Service namespaces (user, network, mounts) in isolated envs.
+	- [x] Basic namespaces
+	- [x] PID namespace proper `clone/fork+exec` flow (not `pre_exec+unshare`)
+	- [x] User namespace setup with `/proc/<pid>/uid_map`,`gid_map`,`setgroups`
+	- [ ] Mount propagation setup
+	- [ ] Rootfs isolation flow
+	- [ ] Network namespace bring-up
+	- [x] Namespace persistence/join support
+	- [x] Namespace-local init/PID1 behavior (child reaping + sigfwd)
+	- [ ] Capability bounding/drop pipeline
+	- [ ] Seccomp profile (pre-exec)
 - [ ] **Advanced Triggering**: More complex state based service triggers.
 
 

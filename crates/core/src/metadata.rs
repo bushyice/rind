@@ -141,7 +141,7 @@ impl Metadata {
 
     let mut items = grouped
       .get(&type_id)
-      .and_then(|v| v.downcast_ref::<Vec<Arc<T::M>>>() )
+      .and_then(|v| v.downcast_ref::<Vec<Arc<T::M>>>())
       .cloned()
       .unwrap_or_default();
     items.push(Arc::new(value));

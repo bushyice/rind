@@ -14,6 +14,7 @@ use rind_ipc::payloads::{NetworkPayload, SSPayload};
 use rind_ipc::recv::IpcSourcemap;
 use rind_ipc::ser::{IpcListComponent, IpcListPrinter};
 use rind_plugins::prelude::*;
+use rind_primitives::utils::networking::bring_interface_up;
 use serde::{Deserialize, Serialize};
 
 const NETWORKING_INTERFACE_STATE: &str = "net:interface";
@@ -510,7 +511,7 @@ impl NetworkingRuntime {
     }
     self.bootstrapped = true;
 
-    setup_loopback();
+    setup_loopback()?;
     log.log(
       LogLevel::Info,
       "networking",
@@ -523,7 +524,7 @@ impl NetworkingRuntime {
       let iface = &cfg.name;
       let sysfs_path = self.sys_class_net.join(iface.as_str());
       if sysfs_path.exists() {
-        bring_interface_up(iface);
+        bring_interface_up(iface)?;
         let mut fields = HashMap::new();
         fields.insert("interface".to_string(), iface.to_string());
         log.log(LogLevel::Info, "networking", "brought interface up", fields);
@@ -694,7 +695,7 @@ impl NetworkingRuntime {
       .as_ref()
       .and_then(|g| g.parse::<Ipv4Addr>().ok());
 
-    bring_interface_up(iface);
+    bring_interface_up(iface)?;
     set_interface_addr(iface, ip, mask);
     if let Some(gw) = gateway {
       add_specific_route(Ipv4Addr::UNSPECIFIED, 0, Some(gw), 0);
@@ -772,7 +773,7 @@ impl NetworkingRuntime {
     dispatch: &RuntimeDispatcher,
     _log: &LogHandle,
   ) -> Result<Void, CoreError> {
-    bring_interface_up(iface);
+    bring_interface_up(iface)?;
     set_interface_addr(iface, lease.ip, lease.subnet_mask);
 
     if let Some(gw) = lease.gateway {
@@ -1077,32 +1078,15 @@ pub fn get_ports() -> Vec<PortStateSerialized> {
 
 // low level stuff
 
-fn setup_loopback() {
-  bring_interface_up("lo");
+fn setup_loopback() -> CoreResult<()> {
+  bring_interface_up("lo")?;
   set_interface_addr(
     "lo",
     Ipv4Addr::new(127, 0, 0, 1),
     Ipv4Addr::new(255, 0, 0, 0),
   );
-}
 
-fn bring_interface_up(iface: &str) {
-  unsafe {
-    let sock = libc::socket(libc::AF_INET, libc::SOCK_DGRAM, 0);
-    if sock < 0 {
-      return;
-    }
-
-    let mut ifr: libc::ifreq = std::mem::zeroed();
-    copy_ifname(&mut ifr, iface);
-
-    if libc::ioctl(sock, libc::SIOCGIFFLAGS as _, &mut ifr) == 0 {
-      ifr.ifr_ifru.ifru_flags |= libc::IFF_UP as i16 | libc::IFF_RUNNING as i16;
-      libc::ioctl(sock, libc::SIOCSIFFLAGS as _, &ifr);
-    }
-
-    libc::close(sock);
-  }
+  Ok(())
 }
 
 fn set_interface_addr(iface: &str, ip: Ipv4Addr, mask: Ipv4Addr) {

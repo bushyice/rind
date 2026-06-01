@@ -738,6 +738,7 @@ dependencies = [
  "rind-flow",
  "rind-ipc",
  "rind-plugins",
+ "rind-primitives",
  "serde",
 ]
 
@@ -1091,6 +1092,7 @@ dependencies = [
 name = "rind-primitives"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "nix",
  "rind-core",
  "rind-ipc",

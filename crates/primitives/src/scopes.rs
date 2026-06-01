@@ -15,6 +15,10 @@ impl ScopeInfo {
   pub fn user(&self) -> Option<Ustr> {
     self.attributes.get(&Ustr::from("user")).map(Ustr::from)
   }
+
+  pub fn attr(&self, key: &str) -> Option<&str> {
+    self.attributes.get(&Ustr::from(key)).map(|v| v.as_str())
+  }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -114,6 +118,13 @@ impl ScopeStore {
       .lock()
       .expect("scope store lock poisoned");
     store.by_name(scope).and_then(|s| s.user())
+  }
+
+  pub fn attrs_for_scope(scope: &str) -> Option<HashMap<Ustr, String>> {
+    let store = GLOBAL_SCOPE_STORE
+      .lock()
+      .expect("scope store lock poisoned");
+    store.by_name(scope).map(|s| s.attributes.clone())
   }
 
   pub fn list_global() -> Vec<ScopeInfo> {

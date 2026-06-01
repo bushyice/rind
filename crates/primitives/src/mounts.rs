@@ -1,5 +1,6 @@
 use std::{
   collections::{HashMap, HashSet},
+  ffi::CString,
   fs::File,
   io::{BufRead, BufReader},
   path::PathBuf,
@@ -11,6 +12,7 @@ use nix::{
   mount::{MsFlags, mount, umount},
 };
 use rind_core::prelude::*;
+use serde::{Deserialize, Serialize};
 
 #[model(meta_name = target, meta_fields(target, source, fstype, flags, data, create, after, rind_broadcast), derive_metadata(Debug))]
 pub struct Mount {
@@ -225,7 +227,7 @@ impl MountRuntime {
   }
 }
 
-fn parse_mount_flags(items: Option<&[String]>) -> MsFlags {
+pub fn parse_mount_flags(items: Option<&[String]>) -> MsFlags {
   let Some(items) = items else {
     return MsFlags::empty();
   };
@@ -333,4 +335,51 @@ impl MountRuntime {
       log,
     )?;
   }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamespaceMountEntry {
+  pub source: Option<String>,
+  pub target: String,
+  pub fstype: Option<String>,
+  #[serde(default)]
+  pub flags: Option<Vec<String>>,
+  pub data: Option<String>,
+  #[serde(default)]
+  pub create: Option<bool>,
+}
+
+pub fn mount_all_in_namespace(entries: &[NamespaceMountEntry]) -> std::io::Result<()> {
+  for entry in entries {
+    if entry.create.unwrap_or(false) {
+      let _ = std::fs::create_dir_all(&entry.target);
+    }
+    let flags = parse_mount_flags(entry.flags.as_deref());
+    let source = entry.source.as_deref().and_then(|s| CString::new(s).ok());
+    let target = CString::new(entry.target.as_str())
+      .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let fstype = entry.fstype.as_deref().and_then(|s| CString::new(s).ok());
+    let data = entry.data.as_deref().and_then(|s| CString::new(s).ok());
+    let rc = unsafe {
+      libc::mount(
+        source.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+        target.as_ptr(),
+        fstype.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+        flags.bits(),
+        data
+          .as_ref()
+          .map_or(std::ptr::null(), |s| s.as_ptr() as *const libc::c_void),
+      )
+    };
+    if rc < 0 {
+      let err = std::io::Error::last_os_error();
+      if let Some(ref fstype) = entry.fstype {
+        if fstype == "devtmpfs" && entry.target == "/dev" {
+          continue;
+        }
+      }
+      return Err(err);
+    }
+  }
+  Ok(())
 }
