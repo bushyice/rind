@@ -11,6 +11,11 @@ fn tty_path() -> String {
     .map(|x| {
       if x.is_empty() {
         "/dev/tty1".to_string()
+      } else if x.starts_with("seat") {
+        format!(
+          "/dev/tty{}",
+          x.trim_start_matches("seat").parse::<u32>().unwrap_or(0) + 1
+        )
       } else {
         format!("/dev/{x}")
       }
@@ -58,7 +63,7 @@ fn send_login_state(user: &str, pass: Option<String>, tty: &str, writer: &mut Fi
   let payload = LoginPayload {
     username: user.to_string(),
     password: pass,
-    tty: tty.to_string(),
+    seat: tty.to_string(),
   };
 
   let msg = Message::from("login").with(ser_to_vec(&payload, false));

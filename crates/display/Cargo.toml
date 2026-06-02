@@ -14,4 +14,21 @@ rind-core = { path = "../core" }
 rind-plugins-common = { path = "../common" }
 serde.workspace = true
 
-# smithay = "0.7.0"
+# smithay = { version = "0.7", default-features = false, features = [
+#   "backend_drm",
+#   "backend_udev",
+#   "backend_winit",
+#   "backend_libinput",
+#   "backend_session_libseat",
+#   "backend_egl",
+#   "backend_gbm",
+#   "renderer_gl",
+#   "renderer_glow",
+#   "wayland_frontend",
+# ] }
+# smithay-egui = "0.2"
+# egui = "0.31"
+# calloop = "0.14"
+# wayland-server = "0.31"
+# xkbcommon = "0.9.0"
+# input = { package = "input", version = "0.9", default-features = false }

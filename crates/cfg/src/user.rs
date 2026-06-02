@@ -137,12 +137,12 @@ pub fn handle_ipc_login(
     return Err(CoreError::PamError(e));
   }
 
-  let mut tty = payload.tty.clone();
-  if !tty.starts_with("/dev/") {
-    tty = format!("/dev/{}", tty);
+  let mut seat = payload.seat.clone();
+  if !seat.starts_with("/dev/") {
+    seat = format!("/dev/{}", seat);
   }
 
-  let session = match pam.pam_open_session(&payload.username, &tty) {
+  let session = match pam.pam_open_session(&payload.username, &seat) {
     Ok(s) => s,
     Err(e) => return Err(CoreError::PamError(e)),
   };
@@ -152,7 +152,7 @@ pub fn handle_ipc_login(
     "login",
     rpayload!({
       "username": payload.username.to_ustr(),
-      "tty": tty.to_ustr(),
+      "seat": seat.to_ustr(),
       "session_id": session.id,
     })
     .into(),
@@ -200,7 +200,7 @@ pub fn handle_ipc_logout(
     rpayload!({
       "session_id": payload.session_id,
       "username": payload.username.to_ustr(),
-      "tty": payload.tty.map(|x| x.to_ustr()),
+      "seat": payload.seat.map(|x| x.to_ustr()),
     })
     .into(),
   );
@@ -247,7 +247,7 @@ impl UserRuntime {
 
 #[runtime("user")]
 impl UserRuntime {
-  fn login(&mut self, session_id: u64, tty: Ustr, username: Ustr) {
+  fn login(&mut self, session_id: u64, seat: Ustr, username: Ustr) {
     let pam = ctx
       .registry
       .singleton::<Arc<PamHandle>>(PamHandle::KEY)
@@ -266,7 +266,7 @@ impl UserRuntime {
         .payload(json!({
           "session_id": session_id,
           "username": username.as_str(),
-          "tty": tty.trim_start_matches("/dev/"),
+          "seat": seat.trim_start_matches("/dev/"),
           "runtime_dir": runtime_dir(user.uid).to_string_lossy().to_string()
         }))
         .into(),
@@ -302,7 +302,7 @@ impl UserRuntime {
     }
   }
 
-  fn logout(&mut self, session_id: u64, username: Ustr, #[optional] tty: Ustr) {
+  fn logout(&mut self, session_id: u64, username: Ustr, #[optional] seat: Ustr) {
     let pam = ctx
       .registry
       .singleton::<Arc<PamHandle>>(PamHandle::KEY)
@@ -316,8 +316,8 @@ impl UserRuntime {
 
     let mut filter = serde_json::Map::new();
     filter.insert("session_id".into(), session_id.into());
-    if let Some(tty) = tty {
-      filter.insert("tty".into(), tty.as_str().into());
+    if let Some(seat) = seat {
+      filter.insert("seat".into(), seat.as_str().into());
     }
 
     let _ = dispatch.dispatch(
@@ -378,12 +378,15 @@ impl UserRuntime {
               path: "username".into(),
             },
           )?;
-          let tty = user
-            .payload
-            .get_json_field_as::<String>("tty")
-            .ok_or(CoreError::MissingField { path: "tty".into() })?;
+          let seat =
+            user
+              .payload
+              .get_json_field_as::<String>("seat")
+              .ok_or(CoreError::MissingField {
+                path: "seat".into(),
+              })?;
 
-          let session = pam.pam_open_session(&username, &tty)?;
+          let session = pam.pam_open_session(&username, &seat)?;
           user
             .payload
             .set_json("session_id".into(), session.id.into());

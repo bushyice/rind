@@ -27,14 +27,14 @@ pub struct Run0AuthPayload {
 pub struct LoginPayload {
   pub username: String,
   pub password: Option<String>,
-  pub tty: String,
+  pub seat: String,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 pub struct LogoutPayload {
   pub username: String,
   pub session_id: u64,
-  pub tty: Option<String>,
+  pub seat: Option<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]

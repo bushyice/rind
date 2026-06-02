@@ -1,9 +1,3 @@
-// To handle tty, maybe either set the login_required state for each tty only on-access and set a timer to
-// remove that state whenever it's not accessed for a while
-//
-// or maybe, make login_required just a signal instead of a state, and have a timer stop the service
-// when it's not being accessed anymore?
-
 use std::{
   fs::{self, File, OpenOptions},
   os::fd::{AsRawFd, BorrowedFd, OwnedFd, RawFd},
@@ -22,19 +16,37 @@ use rind_flow::{
 };
 use rind_ipc::{Message, recv::IpcSourcemap};
 use rind_plugins::prelude::*;
-use rind_plugins_common::TTYPayload;
+use rind_plugins_common::{SeatPayload, TTYEvent};
 use rind_primitives::mounts::MountMetadata;
+
+mod seatd;
 
 plugin_extensible!(EXTENSIONS);
 
-pub static PERM_TTY: PermissionId = PermissionId(1004);
+pub static PERM_SEAT: PermissionId = PermissionId(1004);
+
+fn seat_to_tty(seat: &str) -> String {
+  let n = seat
+    .strip_prefix("seat")
+    .and_then(|n| n.parse::<u64>().ok())
+    .unwrap_or(0);
+  format!("tty{}", n + 1)
+}
+
+fn tty_to_seat(tty: &str) -> String {
+  let n = tty
+    .strip_prefix("tty")
+    .and_then(|n| n.parse::<u64>().ok())
+    .unwrap_or(1);
+  format!("seat{}", n.saturating_sub(1))
+}
 
 #[derive(Default)]
-struct TTYOrchestrator;
+struct SeatdOrchestrator;
 
-impl Orchestrator for TTYOrchestrator {
+impl Orchestrator for SeatdOrchestrator {
   fn id(&self) -> &str {
-    "ttys"
+    "seatd"
   }
 
   fn depends_on(&self) -> &[&str] {
@@ -49,22 +61,21 @@ impl Orchestrator for TTYOrchestrator {
   }
 
   fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
-    TTYRuntime::actions.bootstrap().orchestrate(ctx)?;
-    TTYRuntime::actions.watch_events().orchestrate(ctx)?;
-
+    SeatRuntime::actions.bootstrap().orchestrate(ctx)?;
+    SeatRuntime::actions.watch_events().orchestrate(ctx)?;
     Ok(Void)
   }
 
   fn runtimes(&self) -> Vec<Box<dyn Runtime>> {
-    vec![Box::new(TTYRuntime::default())]
+    vec![Box::new(SeatRuntime::default())]
   }
 }
 
-struct TTYPumpOrchestrator;
+struct SeatdPumpOrchestrator;
 
-impl Orchestrator for TTYPumpOrchestrator {
+impl Orchestrator for SeatdPumpOrchestrator {
   fn id(&self) -> &str {
-    "tty-pump"
+    "seatd-pump"
   }
 
   fn depends_on(&self) -> &[&str] {
@@ -79,7 +90,7 @@ impl Orchestrator for TTYPumpOrchestrator {
   }
 
   fn run(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
-    TTYRuntime::actions.drain_events().orchestrate(ctx)?;
+    SeatRuntime::actions.drain_events().orchestrate(ctx)?;
     Ok(Void)
   }
 }
@@ -87,27 +98,34 @@ impl Orchestrator for TTYPumpOrchestrator {
 const VT_ACTIVATE: libc::c_ulong = 0x5606;
 const VT_WAITACTIVE: libc::c_ulong = 0x5607;
 
-pub struct TTYRuntime {
+pub struct SeatRuntime {
   active: String,
+  seats: Vec<String>,
   event_rx: Option<Subscription<FlowEvent>>,
 }
 
-impl Default for TTYRuntime {
+impl Default for SeatRuntime {
   fn default() -> Self {
     Self {
-      active: "tty1".to_string(),
+      active: "seat0".to_string(),
+      seats: Vec::new(),
       event_rx: None,
     }
   }
 }
 
-impl TTYRuntime {
-  fn switch_tty(&self, n: u64) -> CoreResult<Void> {
+impl SeatRuntime {
+  fn switch_seat(&self, seat: &str) -> CoreResult<Void> {
+    let tty = seat_to_tty(seat);
+    let n = tty
+      .strip_prefix("tty")
+      .and_then(|n| n.parse::<u64>().ok())
+      .ok_or_else(|| CoreError::InvalidState(format!("Invalid TTY from seat: {seat:?}")))?;
+
     let file = OpenOptions::new()
       .read(true)
       .write(true)
       .open("/dev/tty0")?;
-
     let fd = file.as_raw_fd();
 
     unsafe {
@@ -126,12 +144,12 @@ impl TTYRuntime {
     Ok(Void)
   }
 
-  fn has_login_required(&self, sm: &FacetGraph, tty: &str) -> bool {
-    sm.facets.get("tty:login_required").map_or(false, |x| {
+  fn has_login_required(&self, sm: &FacetGraph, seat: &str) -> bool {
+    sm.facets.get("seat:login_required").map_or(false, |x| {
       x.iter().any(|x| {
         x.payload
-          .get_json_field_as::<String>("tty")
-          .map_or(false, |v| v == tty)
+          .get_json_field_as::<String>("seat")
+          .map_or(false, |v| v == seat)
       })
     })
   }
@@ -140,54 +158,76 @@ impl TTYRuntime {
     &self,
     sm: &FacetGraph,
     dispatch: &RuntimeDispatcher,
-    tty_name: &str,
+    seat: &str,
     last: &str,
   ) -> CoreResult<Void> {
-    if tty_name != last && self.has_login_required(sm, &last) {
+    if seat != last && self.has_login_required(sm, last) {
       FlowRuntime::actions
-        .remove_facet("tty:login_required".into())
-        .payload(json!({ "tty": last.to_string() }))
+        .remove_facet("seat:login_required".into())
+        .payload(json!({ "seat": last.to_string() }))
         .dispatch(dispatch)?;
     }
 
-    if sm.facets.get("tty:taken").map_or(true, |x| {
-      !x.iter().any(|x| x.payload.to_string_payload() == tty_name)
+    if sm.facets.get("seat:taken").map_or(true, |x| {
+      !x.iter().any(|x| x.payload.to_string_payload() == seat)
     }) && sm.facets.get("rind:user_session").map_or(true, |x| {
       !x.iter().any(|x| {
         x.payload
-          .get_json_field_as::<String>("tty")
-          .map_or(false, |x| x == tty_name)
+          .get_json_field_as::<String>("seat")
+          .map_or(false, |x| tty_to_seat(&x) == seat)
       })
-    }) && !self.has_login_required(sm, &tty_name)
+    }) && !self.has_login_required(sm, seat)
     {
       FlowRuntime::actions
-        .set_facet("tty:login_required".into())
-        .payload(json!({ "tty": tty_name.to_string() }))
+        .set_facet("seat:login_required".into())
+        .payload(json!({ "seat": seat.to_string() }))
         .dispatch(dispatch)?;
     }
 
     Ok(Void)
   }
 
-  fn taken_state(
-    &self,
-    dispatch: &RuntimeDispatcher,
-    tty_name: Ustr,
-    take: bool,
-  ) -> CoreResult<Void> {
-    // keep
+  fn taken_state(&self, dispatch: &RuntimeDispatcher, seat: Ustr, take: bool) -> CoreResult<Void> {
     dispatch.dispatch(
       "flow",
       if take { "set_facet" } else { "remove_facet" },
-      FlowRuntimePayload::new("tty:taken")
-        .payload(serde_json::Value::String(tty_name.to_string()))
+      FlowRuntimePayload::new("seat:taken")
+        .payload(serde_json::Value::String(seat.to_string()))
         .into(),
     )
   }
+
+  fn discover_seats() -> Vec<String> {
+    let limit = std::env::var("RIND_ACTIVATE_TTYS")
+      .ok()
+      .and_then(|v| v.parse::<usize>().ok())
+      .unwrap_or(7);
+
+    let mut seats = Vec::new();
+    if let Ok(dir) = fs::read_dir("/sys/class/tty") {
+      let mut entries: Vec<_> = dir.filter_map(|e| e.ok()).collect();
+      entries.sort_by_key(|e| {
+        let name = e.file_name();
+        let name = name.to_string_lossy();
+        name
+          .strip_prefix("tty")
+          .and_then(|n| n.parse::<u32>().ok())
+          .unwrap_or(u32::MAX)
+      });
+      for (i, item) in entries.iter().enumerate() {
+        let name = item.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("tty") && name != "tty" && name != "tty0" && i < limit {
+          seats.push(format!("seat{i}"));
+        }
+      }
+    }
+    seats
+  }
 }
 
-#[runtime("ttys")]
-impl TTYRuntime {
+#[runtime("seatd")]
+impl SeatRuntime {
   fn watch_events() {
     self.event_rx = Some(ctx.event_bus.subscribe::<FlowEvent>());
   }
@@ -215,52 +255,48 @@ impl TTYRuntime {
       .trim()
       .to_string();
 
-    self.active = current_tty.clone();
-
-    if let Some(target_name) = ctx
-      .registry
-      .singleton::<FacetGraph>(FacetGraph::KEY)
-      .and_then(|sm| sm.facets.get("tty:active"))
-      .and_then(|instances| instances.first())
-      .map(|x| x.payload.to_string_payload())
-    {
-      if target_name != current_tty {
-        let tty_num = target_name
-          .strip_prefix("tty")
-          .and_then(|n| n.parse::<u64>().ok())
-          .ok_or_else(|| CoreError::InvalidState(format!("Invalid TTY name: {:?}", target_name)))?;
-
-        log.log(
-          LogLevel::Info,
-          "tty",
-          "switching tty",
-          [("tty".to_string(), current_tty)].into(),
-        );
-
-        self.switch_tty(tty_num)?;
-      }
-    }
-
-    let file =
-      File::open("/sys/class/tty/tty0/active").map_err(|e| CoreError::Custom(e.to_string()))?;
-
-    let fd = file.as_raw_fd();
-
-    ctx.resources.own(fd, OwnedFd::from(file));
-
-    ctx
-      .resources
-      .flag(fd, EpollFlags::EPOLLPRI | EpollFlags::EPOLLERR);
-
-    ctx.resources.action(fd, ("ttys", "on_switch"));
+    let current_seat = tty_to_seat(&current_tty);
+    self.active = current_seat.clone();
+    self.seats = Self::discover_seats();
 
     let sm = ctx
       .registry
       .singleton::<FacetGraph>(FacetGraph::KEY)
       .ok_or(CoreError::RuntimeStopped)?;
 
+    if let Some(target_seat) = sm
+      .facets
+      .get("seat:active")
+      .and_then(|instances| instances.first())
+      .map(|x| x.payload.to_string_payload())
+    {
+      if target_seat != current_seat {
+        log.log(
+          LogLevel::Info,
+          "seatd",
+          "switching seat",
+          [
+            ("current".to_string(), current_seat),
+            ("target".to_string(), target_seat.clone()),
+          ]
+          .into(),
+        );
+
+        self.switch_seat(&target_seat)?;
+      }
+    }
+
+    let file =
+      File::open("/sys/class/tty/tty0/active").map_err(|e| CoreError::Custom(e.to_string()))?;
+    let fd = file.as_raw_fd();
+    ctx.resources.own(fd, OwnedFd::from(file));
+    ctx
+      .resources
+      .flag(fd, EpollFlags::EPOLLPRI | EpollFlags::EPOLLERR);
+    ctx.resources.action(fd, ("seatd", "on_switch"));
+
     let ipcsrc = ctx.scope.get::<IpcSourcemap>().cloned().unwrap_or_default();
-    ipcsrc.register("tty", handle_ipc_tty, PERM_TTY);
+    ipcsrc.register("seat", handle_ipc_seat, PERM_SEAT);
 
     match EXTENSIONS.with(|extensions| {
       extensions
@@ -268,17 +304,19 @@ impl TTYRuntime {
         .expect("extension manager not initialized")
         .resolve(
           "boot",
-          TTYPayload::Taken(sm.facets.get("tty:taken").map_or(Default::default(), |x| {
+          SeatPayload::Taken(sm.facets.get("seat:taken").map_or(Default::default(), |x| {
             x.iter()
               .map(|x| x.payload.to_string_payload().to_ustr())
               .collect()
           })),
         )
     })? {
-      TTYPayload::Return(tty) => self.taken_state(dispatch, tty, false)?,
-      TTYPayload::Take(tty) => self.taken_state(dispatch, tty, true)?,
+      SeatPayload::Return(seat) => self.taken_state(dispatch, seat, false)?,
+      SeatPayload::Take(seat) => self.taken_state(dispatch, seat, true)?,
       _ => {}
     }
+
+    std::thread::spawn(|| seatd::start());
 
     self.__runtime_reconcile(payload, ctx, dispatch, log)?;
   }
@@ -291,25 +329,34 @@ impl TTYRuntime {
     self.reconcile_login(sm, dispatch, &self.active, &self.active)?;
   }
 
-  fn take(tty: Ustr) {
+  fn take(seat: Ustr) {
     log.log(
       LogLevel::Info,
-      "ttys",
-      &format!("taking tty {tty}"),
+      "seatd",
+      &format!("taking seat {seat}"),
       Default::default(),
     );
-    self.taken_state(dispatch, tty, true)?;
+    self.taken_state(dispatch, seat, true)?;
   }
 
-  fn return_tty(tty: Ustr) {
+  fn return_seat(seat: Ustr) {
     log.log(
       LogLevel::Info,
-      "ttys",
-      &format!("returning tty {tty}"),
+      "seatd",
+      &format!("returning seat {seat}"),
       Default::default(),
     );
+    self.taken_state(dispatch, seat, false)?;
+  }
 
-    self.taken_state(dispatch, tty, false)?;
+  fn activate(seat: Ustr) {
+    log.log(
+      LogLevel::Info,
+      "seatd",
+      &format!("activating seat {seat}"),
+      Default::default(),
+    );
+    self.switch_seat(seat.as_str())?;
   }
 
   fn on_switch(fd: i32) {
@@ -322,50 +369,56 @@ impl TTYRuntime {
     if let Ok(bytes_read) = read(bfd, &mut buf) {
       let content = String::from_utf8_lossy(&buf[..bytes_read]);
       let tty_name = content.trim();
+      let seat_name = tty_to_seat(tty_name);
 
-      self.active = tty_name.to_string();
+      self.active = seat_name.clone();
 
       let sm = ctx
         .registry
         .singleton::<FacetGraph>(FacetGraph::KEY)
         .ok_or(CoreError::RuntimeStopped)?;
 
-      if sm.facets.get("tty:active").map_or(true, |x| {
-        !x.iter().any(|x| x.payload.to_string_payload() == tty_name)
+      if sm.facets.get("seat:active").map_or(true, |x| {
+        !x.iter().any(|x| x.payload.to_string_payload() == seat_name)
       }) {
         FlowRuntime::actions
-          .remove_facet("tty:active".into())
+          .remove_facet("seat:active".into())
           .payload(serde_json::Value::String(last.clone()))
           .dispatch(dispatch)?;
 
         FlowRuntime::actions
-          .set_facet("tty:active".into())
-          .payload(serde_json::Value::String(tty_name.to_string()))
+          .set_facet("seat:active".into())
+          .payload(serde_json::Value::String(seat_name.clone()))
           .dispatch(dispatch)?;
       }
 
-      if tty_name == last {
+      if seat_name == last {
         return Ok(None);
       }
 
       FlowRuntime::actions
-        .impulse("tty:switch".into())
-        .payload(serde_json::Value::String(tty_name.to_string()))
+        .impulse("seat:switch".into())
+        .payload(serde_json::Value::String(seat_name.clone()))
         .dispatch(dispatch)?;
 
-      self.reconcile_login(sm, dispatch, tty_name, &last)?;
+      ctx.event_bus.emit(TTYEvent {
+        tty: tty_name.to_ustr(),
+        from: last.to_ustr(),
+      });
+
+      self.reconcile_login(sm, dispatch, &seat_name, &last)?;
     }
   }
 }
 
-fn handle_ipc_tty(
+fn handle_ipc_seat(
   msg: Message,
   ctx: &mut RuntimeContext<'_>,
   dispatch: &RuntimeDispatcher,
   _log: &LogHandle,
 ) -> CoreResult<Message> {
   let payload = msg
-    .parse_payload::<TTYPayload>()
+    .parse_payload::<SeatPayload>()
     .map_err(CoreError::Custom)?;
 
   let sm = ctx
@@ -374,23 +427,108 @@ fn handle_ipc_tty(
     .ok_or(CoreError::RuntimeStopped)?;
 
   match payload {
-    TTYPayload::Check => {
+    SeatPayload::Check => {
       return Ok(Message::ok(
         sm.facets
-          .get("tty:active")
+          .get("seat:active")
           .and_then(|x| x.first().map(|x| x.payload.to_string_payload()))
-          .unwrap_or("tty1".to_string()),
+          .unwrap_or("seat0".to_string()),
       ));
     }
-    TTYPayload::Take(tty) => {
-      dispatch.dispatch("ttys", "take", RuntimePayload::default().insert("tty", tty))?
-    }
-    TTYPayload::Return(tty) => dispatch.dispatch(
-      "ttys",
-      "return",
-      RuntimePayload::default().insert("tty", tty),
+    SeatPayload::Take(seat) => dispatch.dispatch(
+      "seatd",
+      "take",
+      RuntimePayload::default().insert("seat", seat),
     )?,
-    _ => {}
+    SeatPayload::Return(seat) => dispatch.dispatch(
+      "seatd",
+      "return_seat",
+      RuntimePayload::default().insert("seat", seat),
+    )?,
+    SeatPayload::Activate(seat) => dispatch.dispatch(
+      "seatd",
+      "activate",
+      RuntimePayload::default().insert("seat", seat),
+    )?,
+    SeatPayload::List => {
+      let taken: Vec<String> = sm.facets.get("seat:taken").map_or(Vec::new(), |x| {
+        x.iter().map(|x| x.payload.to_string_payload()).collect()
+      });
+      let login_required: Vec<String> =
+        sm.facets
+          .get("seat:login_required")
+          .map_or(Vec::new(), |x| {
+            x.iter()
+              .filter_map(|x| x.payload.get_json_field_as::<String>("seat"))
+              .collect()
+          });
+      let active = sm
+        .facets
+        .get("seat:active")
+        .and_then(|x| x.first())
+        .map(|x| x.payload.to_string_payload())
+        .unwrap_or_default();
+      let sessions: Vec<serde_json::Value> =
+        sm.facets.get("seat:session").map_or(Vec::new(), |x| {
+          x.iter()
+            .filter_map(|x| {
+              let v = x.payload.to_json();
+              Some(json!({
+                "seat": v.get("seat")?,
+                "session": v.get("session")?,
+                "user": v.get("user")?,
+              }))
+            })
+            .collect()
+        });
+
+      return Ok(Message::ok(
+        serde_json::to_string(&json!({
+          "active": active,
+          "taken": taken,
+          "login_required": login_required,
+          "sessions": sessions,
+        }))
+        .unwrap_or_default(),
+      ));
+    }
+    SeatPayload::Session {
+      seat,
+      session,
+      user,
+    } => {
+      FlowRuntime::actions
+        .set_facet("seat:session".into())
+        .payload(json!({
+          "seat": seat.as_str(),
+          "session": session.as_str(),
+          "user": user,
+        }))
+        .dispatch(dispatch)?;
+    }
+    SeatPayload::SessionEnd {
+      seat: _,
+      session: _,
+    } => {
+      FlowRuntime::actions
+        .remove_facet("seat:session".into())
+        .payload(serde_json::Value::Null)
+        .dispatch(dispatch)?;
+    }
+    SeatPayload::Devices(seat) => {
+      let tty = seat_to_tty(seat.as_str());
+      return Ok(Message::ok(
+        serde_json::to_string(&json!({
+          "seat": seat.as_str(),
+          "tty": tty,
+          "devices": [
+            format!("/dev/{tty}"),
+          ],
+        }))
+        .unwrap_or_default(),
+      ));
+    }
+    SeatPayload::Taken(_) => {}
   }
 
   Ok(Message::ok("ok"))
@@ -400,14 +538,14 @@ fn inject_builtin(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {
   match name {
     "built_in" => {
       metadata
-        .group("tty")
+        .group("seat")
         .insert::<FlowFacet>(FlowFacetMetadata {
           name: "login_required".into(),
           payload: FlowPayloadType::Json,
-          branch: Some(vec!["tty".into()]),
+          branch: Some(vec!["seat".into()]),
           stop_on: Some(vec![InverseBranchingConfig::Detailed {
             name: "rind:user_session".into(),
-            branch: Some("tty".into()),
+            branch: Some("seat".into()),
           }]),
           subscribers: Some(vec![
             TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
@@ -427,6 +565,16 @@ fn inject_builtin(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {
         .insert::<FlowFacet>(FlowFacetMetadata {
           name: "active".into(),
           payload: FlowPayloadType::String,
+          subscribers: Some(vec![
+            TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
+            TransportMethod::Type(TransportProtocolId("route:rind:sys-shm".into())),
+          ]),
+          ..Default::default()
+        })
+        .insert::<FlowFacet>(FlowFacetMetadata {
+          name: "session".into(),
+          payload: FlowPayloadType::Json,
+          branch: Some(vec!["seat".into()]),
           subscribers: Some(vec![
             TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
             TransportMethod::Type(TransportProtocolId("route:rind:sys-shm".into())),
@@ -482,7 +630,6 @@ fn trigger_ttyload(
           let name = item.file_name();
           let name = name.to_string_lossy();
 
-          // TODO: proper tty fetch
           if name.starts_with("tty") && name != "tty" && name != "tty0" && tty_count < limit {
             tty_count += 1;
 
@@ -505,7 +652,7 @@ plugin!(
   caps: PluginCapability::EXTENSIONS | PluginCapability::EXTENSIBLE | PluginCapability::ORCHESTRATORS | PluginCapability::RUNTIMES | PluginCapability::IPC,
   deps: &[],
   create: MyPlugin,
-  orchestrators: [TTYOrchestrator::default(), TTYPumpOrchestrator],
+  orchestrators: [SeatdOrchestrator::default(), SeatdPumpOrchestrator],
   extensions: [resolve(inject_builtin), resolve(trigger_ttyload)],
   struct MyPlugin;
 );

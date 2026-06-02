@@ -495,7 +495,7 @@ fn main() {
         &LogoutPayload {
           session_id,
           username,
-          tty: None
+          seat: None
         }
       );
     }

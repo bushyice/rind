@@ -10,9 +10,9 @@ name = "user_login"
 run.exec = "/usr/bin/user_login"
 run.args = []
 restart = false
-start-on = [{ facet = "tty:login_required" }]
-transport = { id = "env", options = ["RIND_LOGIN_TTY=facet:$/tty"] }
-branching = { source = "tty:login_required", key = "tty", max-instances = 16 }
+start-on = [{ facet = "seat:login_required" }]
+transport = { id = "env", options = ["RIND_LOGIN_TTY=facet:$/seat"] }
+branching = { source = "seat:login_required", key = "seat", max-instances = 16 }
 
 [[service]]
 name = "user_shell"
@@ -21,7 +21,7 @@ run.args = []
 restart = false
 start-on = [{ facet = "rind:user_session" }]
 transport = { id = "env", options = ["RIND_USER_ACTIVE=facet:$"] }
-branching = { source = "rind:user_session", key = "tty", max-instances = 16, except = ["facet:tty:taken"] }
+branching = { source = "rind:user_session", key = "seat", max-instances = 16, except = ["facet:tty:taken"] }
 
 [[service]]
 name = "niri"

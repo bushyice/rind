@@ -5,7 +5,7 @@ run.args = ["makano-test"]
 space = "user"
 user-source = { branch = true, username-field = "username" }
 start-on = [{ facet = "rind:user_session" }]
-branching = { source = "rind:user_session", key = "tty", max-instances = 16 }
+branching = { source = "rind:user_session", key = "seat", max-instances = 16 }
 transport = { id = "env", options = ["USER=$"] }
 
 [[service]]
