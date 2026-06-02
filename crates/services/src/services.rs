@@ -463,9 +463,13 @@ impl Default for ServiceRuntime {
   fn default() -> Self {
     let (stdio_tx, stdio_rx) = mpsc::channel();
     let mut executors: HashMap<Ustr, Box<dyn Executor>> = HashMap::new();
-    executors.insert(Ustr::from("natural"), Box::new(NativeExecutor));
+
+    executors.insert(Ustr::from("native"), Box::new(NativeExecutor));
     executors.insert(Ustr::from("remote"), Box::new(RemoteExecutor));
     executors.insert(Ustr::from("ima"), Box::new(ImaExecutor));
+
+    let _ =
+      EXTENSIONS.with(|extensions| extensions.get().map(|e| e.act("collect", &mut executors)));
 
     Self {
       stdio_tx,
@@ -1374,10 +1378,7 @@ impl ServiceRuntime {
       }
     }
 
-    let executor_name = run
-      .executor
-      .clone()
-      .unwrap_or_else(|| Ustr::from("natural"));
+    let executor_name = run.executor.clone().unwrap_or_else(|| Ustr::from("native"));
     let executor = self
       .executors
       .get(&executor_name)

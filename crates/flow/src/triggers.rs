@@ -1,6 +1,23 @@
+use std::collections::HashMap;
+
 use crate::{FacetGraph, FlowInstance, FlowItem, FlowType, Trigger};
 use rind_core::prelude::*;
+use rind_core::reexports::once_cell::sync::OnceCell;
+
 use rind_ipc::{FlowMatchOperation, FlowPayload, FlowPayloadType};
+
+pub static TRIGGER_ACTIONS: OnceCell<std::sync::Arc<TriggerActions>> = OnceCell::new();
+
+#[derive(Default)]
+pub struct TriggerActions {
+  pub(crate) inner: HashMap<Ustr, Ustr>,
+}
+
+impl TriggerActions {
+  pub fn insert(&mut self, name: impl Into<Ustr>, runtime: impl Into<Ustr>) {
+    self.inner.insert(name.into(), runtime.into());
+  }
+}
 
 fn same_flow_name(a: &Ustr, b: &Ustr) -> bool {
   if a == b {
@@ -218,6 +235,21 @@ pub fn trigger_events(
             "start"
           },
           rpayload!({ "name": socket.clone() }),
+        );
+      } else if let (Some(action), Some(actions)) = (resolved_trigger.action, TRIGGER_ACTIONS.get())
+        && let Some(runtime) = actions.inner.get(&action)
+      {
+        let Some((runtime, action)) = runtime.split_once(":") else {
+          continue;
+        };
+
+        let _ = dispatch.dispatch(
+          runtime,
+          action,
+          RuntimePayload::default()
+            .insert_opt("exec", resolved_trigger.exec)
+            .insert_opt("args", resolved_trigger.args)
+            .insert_opt("stop", resolved_trigger.stop),
         );
       }
     }

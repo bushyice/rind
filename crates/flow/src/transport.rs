@@ -10,6 +10,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{Arc, Mutex};
 
 use crate::shm_tp::ShmClient;
+use crate::triggers::{TRIGGER_ACTIONS, TriggerActions};
 use crate::{FacetGraph, FlowFacet, FlowImpulse};
 use rind_core::notifier::Notifier;
 use rind_core::prelude::*;
@@ -487,6 +488,17 @@ impl TransportRuntime {
         }
       }
     }
+
+    let mut actions = TriggerActions::default();
+
+    EXTENSIONS.with(|extensions| {
+      extensions
+        .get()
+        .expect("extension manager not initialized")
+        .act("get_actions", &mut actions)
+    })?;
+
+    let _ = TRIGGER_ACTIONS.set(std::sync::Arc::new(actions));
   }
 
   fn setup_route(&mut self, endpoint: Ustr) {

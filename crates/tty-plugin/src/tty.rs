@@ -12,6 +12,7 @@ use rind_core::reexports::{
 };
 use rind_flow::{
   transport::{TransportMethod, TransportProtocolId},
+  triggers::TriggerActions,
   *,
 };
 use rind_ipc::{Message, recv::IpcSourcemap};
@@ -349,6 +350,36 @@ impl SeatRuntime {
     self.taken_state(dispatch, seat, false)?;
   }
 
+  fn act_trigger(args: Vec<Ustr>) {
+    if args.len() < 2 {
+      return Ok(None);
+    }
+
+    let act = args.remove(0);
+    let tty = args.remove(0);
+
+    let sm = ctx
+      .registry
+      .singleton::<FacetGraph>(FacetGraph::KEY)
+      .ok_or(CoreError::RuntimeStopped)?;
+
+    match &**act {
+      "take" => {
+        self.taken_state(dispatch, tty.clone(), true)?;
+        if self.active == &**tty {
+          self.reconcile_login(sm, dispatch, &self.active, "seat-1")?;
+        }
+      }
+      "return" => {
+        self.taken_state(dispatch, tty.clone(), false)?;
+        if self.active == &**tty {
+          self.reconcile_login(sm, dispatch, &self.active, "seat-1")?;
+        }
+      }
+      _ => {}
+    }
+  }
+
   fn activate(seat: Ustr) {
     log.log(
       LogLevel::Info,
@@ -646,6 +677,11 @@ fn trigger_ttyload(
   }
 }
 
+fn register_trigger(_: &str, actions: &mut TriggerActions) -> CoreResult<()> {
+  actions.insert("tty", "tty:act_trigger");
+  Ok(())
+}
+
 plugin!(
   name: "myplugin",
   version: 0,
@@ -653,7 +689,7 @@ plugin!(
   deps: &[],
   create: MyPlugin,
   orchestrators: [SeatdOrchestrator::default(), SeatdPumpOrchestrator],
-  extensions: [resolve(inject_builtin), resolve(trigger_ttyload)],
+  extensions: [resolve(inject_builtin), resolve(trigger_ttyload), act(register_trigger)],
   struct MyPlugin;
 );
 

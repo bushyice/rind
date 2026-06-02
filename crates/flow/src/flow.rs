@@ -67,6 +67,7 @@ pub struct Trigger {
   pub socket: Option<Ustr>,
   pub stop: Option<bool>,
   pub payload: Option<serde_json::Value>,
+  pub action: Option<Ustr>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq)]

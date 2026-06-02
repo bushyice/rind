@@ -40,6 +40,13 @@ impl RuntimePayload {
     self
   }
 
+  pub fn insert_opt<T: Send + Sync + 'static>(self, key: &str, value: Option<T>) -> Self {
+    match value {
+      Some(v) => self.insert(key, v),
+      None => self,
+    }
+  }
+
   pub fn get<T: Send + Sync + 'static>(&mut self, name: impl Into<Ustr>) -> Result<T, CoreError> {
     let name = name.into();
     self

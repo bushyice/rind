@@ -11,7 +11,7 @@ pub struct NativeExecutor;
 
 impl Executor for NativeExecutor {
   fn name(&self) -> &'static str {
-    "natural"
+    "native"
   }
 
   fn spawn(&self, ctx: ExecutorContext) -> CoreResult<Box<dyn InstanceHandle>> {

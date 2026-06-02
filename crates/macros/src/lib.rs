@@ -584,21 +584,21 @@ fn generate_param_extraction(params: &[RuntimeParam]) -> proc_macro2::TokenStrea
     match param.mode {
       ParamMode::Required => {
         quote! {
-            let #ident =
+            let mut #ident =
                 payload.get::<#ty>(#key)?;
         }
       }
 
       ParamMode::Optional => {
         quote! {
-            let #ident =
+            let mut #ident =
                 payload.get::<#ty>(#key).ok();
         }
       }
 
       ParamMode::Default => {
         quote! {
-            let #ident =
+            let mut #ident =
                 payload
                     .get::<#ty>(#key)
                     .unwrap_or_default();
