@@ -14,7 +14,7 @@ use rind_flow::triggers::trigger_events;
 #[model(
   meta_name = name,
   meta_fields(name, duration, after, finish),
-  derive_metadata(Debug)
+  derive_metadata(Debug, Default)
 )]
 pub struct Timer {
   pub name: Ustr,

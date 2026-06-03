@@ -35,7 +35,7 @@ use rind_primitives::permissions::PERM_SYSTEM_SERVICES;
 use rind_primitives::scopes::ScopeStore;
 use rind_primitives::variables::VariableHeap;
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct RunOption {
   #[serde(default)]
   pub exec: Ustr,
@@ -52,6 +52,12 @@ pub struct RunOption {
 pub enum RunOptions {
   One(RunOption),
   Many(Vec<RunOption>),
+}
+
+impl Default for RunOptions {
+  fn default() -> Self {
+    RunOptions::One(RunOption::default())
+  }
 }
 
 impl RunOptions {
@@ -87,7 +93,7 @@ impl RunOptions {
   }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(untagged, rename_all = "snake_case")]
 pub enum RestartPolicy {
   Bool(bool),
@@ -252,6 +258,17 @@ pub struct ServiceCgroup {
   pub pids_max: Option<Ustr>,
 }
 
+impl Default for ServiceCgroup {
+  fn default() -> Self {
+    Self {
+      path: None,
+      memory_max: None,
+      cpu_max: None,
+      pids_max: None,
+    }
+  }
+}
+
 impl ServiceCgroup {
   fn is_empty(&self) -> bool {
     self.path.is_none()
@@ -390,7 +407,7 @@ pub enum ServiceSpace {
     transport, working_dir, space, user_source, singleton, managed_by, cgroup,
     namespaces, watchdog
   ),
-  derive_metadata(Debug)
+  derive_metadata(Debug, Default)
 )]
 pub struct Service {
   // Metadata

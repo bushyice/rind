@@ -17,10 +17,10 @@ use rind_plugins::prelude::*;
 use rind_primitives::utils::networking::bring_interface_up;
 use serde::{Deserialize, Serialize};
 
-const NETWORKING_INTERFACE_STATE: &str = "net:interface";
-const NETWORKING_ONLINE_STATE: &str = "net:online";
-const NETWORKING_CONFIGURED_STATE: &str = "net:configured";
-const NETWORKING_DNS_READY_STATE: &str = "net:dns_ready";
+const NETWORKING_INTERFACE_STATE: &str = "net:_interface_";
+const NETWORKING_ONLINE_STATE: &str = "net:_online_";
+const NETWORKING_CONFIGURED_STATE: &str = "net:_configured_";
+const NETWORKING_DNS_READY_STATE: &str = "net:_dns_ready_";
 pub static PERM_NETWORK: PermissionId = PermissionId(1003);
 
 plugin!(
@@ -207,7 +207,7 @@ fn inject_networking(name: &str, mut metadata: Metadata) -> CoreResult<Metadata>
       metadata
         .group("net")
         .insert::<FlowFacet>(FlowFacetMetadata {
-          name: "interface".into(),
+          name: "_interface_".into(),
           payload: FlowPayloadType::Json,
           branch: Some(vec!["name".into()]),
           subscribers: Some(vec![
@@ -217,7 +217,7 @@ fn inject_networking(name: &str, mut metadata: Metadata) -> CoreResult<Metadata>
           ..Default::default()
         })
         .insert::<FlowFacet>(FlowFacetMetadata {
-          name: "online".into(),
+          name: "_online_".into(),
           payload: FlowPayloadType::None,
           subscribers: Some(vec![
             TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),
@@ -226,7 +226,7 @@ fn inject_networking(name: &str, mut metadata: Metadata) -> CoreResult<Metadata>
           ..Default::default()
         })
         .insert::<FlowFacet>(FlowFacetMetadata {
-          name: "configured".into(),
+          name: "_configured_".into(),
           payload: FlowPayloadType::Json,
           branch: Some(vec!["name".into()]),
           subscribers: Some(vec![
@@ -236,7 +236,7 @@ fn inject_networking(name: &str, mut metadata: Metadata) -> CoreResult<Metadata>
           ..Default::default()
         })
         .insert::<FlowFacet>(FlowFacetMetadata {
-          name: "dns_ready".into(),
+          name: "_dns_ready_".into(),
           payload: FlowPayloadType::None,
           subscribers: Some(vec![
             TransportMethod::Type(TransportProtocolId("route:rind:sys-uds".into())),

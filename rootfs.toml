@@ -29,6 +29,7 @@ binaries = [
   "libtty_plugin.so:/usr/lib/rind/plugins/",
   "libnetworking.so:/usr/lib/rind/plugins/",
   "libdisplay.so:/usr/lib/rind/plugins/",
+  "libsystemd_loader.so:/usr/lib/rind/plugins/",
 ]
 # Supported forms:
 # - "name" -> copied to bins_dir (or /usr/bin by default)

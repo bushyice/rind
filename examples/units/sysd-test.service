@@ -1,0 +1,12 @@
+[Unit]
+Description=Test service loaded by systemd-loader
+After=network-online.target
+WantedBy=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/example-active --greet=hi
+Restart=on-failure
+User=root
+WorkingDirectory=/etc
+Environment=FOO=bar BAZ=qux

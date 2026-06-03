@@ -14,7 +14,7 @@ use nix::{
 use rind_core::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[model(meta_name = target, meta_fields(target, source, fstype, flags, data, create, after, rind_broadcast), derive_metadata(Debug))]
+#[model(meta_name = target, meta_fields(target, source, fstype, flags, data, create, after, rind_broadcast), derive_metadata(Debug, Default))]
 pub struct Mount {
   pub source: Option<Ustr>,
   pub target: Ustr,

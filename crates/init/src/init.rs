@@ -56,6 +56,12 @@ impl Orchestrator for BootOrchestrator {
         .insert("payload", serde_json::Value::String("".into())),
     )?;
 
+    ctx.dispatch(
+      "flow",
+      "set_facet",
+      RuntimePayload::default().insert("name", "rind:_up_".to_ustr()),
+    )?;
+
     Ok(Void)
   }
 }

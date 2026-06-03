@@ -22,9 +22,10 @@ use rind_ipc::Message;
 use rind_primitives::permissions::PERM_SYSTEM_SERVICES;
 use rind_primitives::variables::VariableHeap;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SocketType {
+  #[default]
   Tcp,
   Udp,
   Uds,
@@ -38,7 +39,7 @@ pub enum SocketServiceLifecycle {
   Owned,
 }
 
-#[model(meta_name = name, meta_fields(name, listen, r#type, owner, start_on, lifecycle, trigger, stop_on, managed_by, on_start, on_stop, on_data, permissions), derive_metadata(Debug, Clone))]
+#[model(meta_name = name, meta_fields(name, listen, r#type, owner, start_on, lifecycle, trigger, stop_on, managed_by, on_start, on_stop, on_data, permissions), derive_metadata(Debug, Clone, Default))]
 pub struct Socket {
   pub name: Ustr,
   pub listen: String,

@@ -14,7 +14,7 @@ pub type Loader = dyn Fn(&mut Metadata, &str, Ustr, &Path, &mut OrchestratorCont
   + Send
   + Sync;
 
-static LOADERS: LazyLock<Mutex<HashMap<Ustr, Box<Loader>>>> = LazyLock::new(|| {
+pub(crate) static LOADERS: LazyLock<Mutex<HashMap<Ustr, Box<Loader>>>> = LazyLock::new(|| {
   let mut defaults: HashMap<Ustr, Box<Loader>> = HashMap::new();
 
   defaults.insert("toml".to_ustr(), Box::new(toml_loader));
@@ -46,6 +46,8 @@ fn load_in_dir(
     ))
   })?;
 
+  let loaders = LOADERS.lock().unwrap();
+
   for entry in dir {
     let entry = entry.map_err(|e| CoreError::Custom(format!("dir entry error: {e}")))?;
     let path = entry.path();
@@ -66,8 +68,7 @@ fn load_in_dir(
         CoreError::Custom(format!("failed to read unit file {}: {e}", path.display()))
       })?;
 
-      let loaders = LOADERS.lock().unwrap();
-
+      println!("Loading: {}; loaders: {:?}", extension, loaders.keys());
       let Some(loader) = loaders.get(&extension.to_ustr()) else {
         continue;
       };
@@ -79,10 +80,10 @@ fn load_in_dir(
       if let Some(trigger) = trigger {
         trigger(&content, &group, metadata)?;
       }
-
-      drop(loaders);
     }
   }
+
+  drop(loaders);
 
   Ok(Void)
 }
@@ -91,9 +92,20 @@ pub fn load_units_from(
   ctx: &mut OrchestratorContext<'_>,
   metadata: &mut Metadata,
   units_dir: &Path,
-  trigger: Option<impl Fn(&str, &Ustr, &mut Metadata) -> CoreResult<Void>>,
+  trigger: Option<impl Fn(&str, &Ustr, &mut Metadata) -> CoreResult<Void> + Copy>,
 ) -> CoreResult<Void> {
-  load_in_dir(ctx, units_dir, metadata, &trigger)?;
+  let raw = units_dir.to_string_lossy();
+  for part in raw.split(':') {
+    let trimmed = part.trim();
+    if trimmed.is_empty() {
+      continue;
+    }
+    let path = Path::new(trimmed);
+    if !path.exists() {
+      continue;
+    }
+    load_in_dir(ctx, path, metadata, &trigger)?;
+  }
   Ok(Void)
 }
 
@@ -102,10 +114,13 @@ pub fn register_loader(r#type: impl Into<Ustr>, loader: Box<Loader>) {
   loaders.insert(r#type.into(), loader);
 }
 
-pub struct RegisterLoader;
+#[derive(Default)]
+pub struct RegisterLoader {
+  pub(crate) loaders: HashMap<Ustr, Box<Loader>>,
+}
 
 impl RegisterLoader {
-  pub fn register(&self, r#type: impl Into<Ustr>, loader: Box<Loader>) {
-    register_loader(r#type, loader);
+  pub fn register(&mut self, r#type: impl Into<Ustr>, loader: Box<Loader>) {
+    self.loaders.insert(r#type.into(), loader);
   }
 }

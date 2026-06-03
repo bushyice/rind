@@ -42,6 +42,11 @@ fn add_builtin_defs(metadata: &mut Metadata) {
     })
     // Facets
     .insert::<FlowFacet>(FlowFacetMetadata {
+      name: "_up_".into(),
+      payload: FlowPayloadType::None,
+      ..Default::default()
+    })
+    .insert::<FlowFacet>(FlowFacetMetadata {
       name: "active".into(),
       payload: FlowPayloadType::String,
       subscribers: Some(vec![

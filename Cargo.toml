@@ -5,7 +5,7 @@ members = [
   "crates/core",
   # "crates/common",
   "crates/init", "crates/macros",
-  "crates/ipc","crates/plugins", "crates/tty-plugin", "crates/networking", "crates/display", "crates/common", "crates/initramfs", "crates/services", "crates/primitives", "crates/flow", "crates/cfg",
+  "crates/ipc","crates/plugins", "crates/tty-plugin", "crates/networking", "crates/display", "crates/common", "crates/initramfs", "crates/services", "crates/primitives", "crates/flow", "crates/cfg", "crates/systemd-loader",
   "crates/cli",
   "crates/xtask",
 ]

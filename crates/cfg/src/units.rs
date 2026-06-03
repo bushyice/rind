@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::dunits::{build_indexes, create_units_metadata};
-use crate::loader::RegisterLoader;
+use crate::loader::{LOADERS, RegisterLoader};
 use crate::user::Run0QueueState;
 use rind_core::prelude::*;
 use rind_core::user::{PamHandle, UserStore};
@@ -66,12 +66,18 @@ impl Orchestrator for UnitsOrchestrator {
   }
 
   fn preload(&mut self, ctx: &mut OrchestratorContext<'_>) -> Result<Void, CoreError> {
-    EXTENSIONS.with(|extensions| {
-      extensions
-        .get()
-        .expect("extension manager not initialized")
-        .act("register", &mut RegisterLoader)
-    })?;
+    {
+      let mut reg = RegisterLoader::default();
+      EXTENSIONS.with(|extensions| {
+        extensions
+          .get()
+          .expect("extension manager not initialized")
+          .act("register", &mut reg)
+      })?;
+      let mut loaders = LOADERS.lock().unwrap();
+      loaders.extend(reg.loaders);
+      drop(loaders);
+    }
 
     let metadata = &*ctx.metadata;
     let users = self.users.clone();
