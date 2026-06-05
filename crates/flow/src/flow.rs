@@ -308,7 +308,7 @@ impl FacetGraph {
   pub fn save_all_scopes(&mut self) -> Result<Void, CoreError> {
     let mut per_scope: HashMap<Ustr, StateSnapshot> = HashMap::new();
     for (name, branches) in &self.facets {
-      if name.as_str().contains(":_") {
+      if name.contains("!@") || name.ends_with("!") {
         continue;
       }
       let scope = Self::scope_from_state_name(name.as_str());
@@ -333,7 +333,7 @@ impl FacetGraph {
       .iter()
       .filter_map(|(name, states)| {
         // State impermanence
-        if name.as_str().contains(":_") {
+        if name.contains("!@") || name.ends_with("!") {
           return None;
         }
         Some((

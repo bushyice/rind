@@ -262,10 +262,10 @@ fn timer_duration_from(tmr: &HashMap<String, Vec<String>>) -> Option<String> {
 
 fn target_to_facet(target: &str) -> String {
   match target.trim_end_matches(".target") {
-    "network-online" => "net:_online_".to_string(),
-    "network" => "net:_configured_".to_string(),
-    "network-pre" => "net:_configured_".to_string(),
-    "multi-user" => "rind:_up_".to_string(),
+    "network-online" => "net:online!".to_string(),
+    "network" => "net:configured!".to_string(),
+    "network-pre" => "net:configured!".to_string(),
+    "multi-user" => "rind:up!".to_string(),
     "graphical" => "rind:graphical".to_string(),
     "sockets" => "rind:sockets".to_string(),
     "timers" => "rind:timers".to_string(),
@@ -797,8 +797,8 @@ Environment=FOO=bar BAZ=qux
     );
     let start_on = svc[0].start_on.as_ref().expect("start-on");
     let facets: Vec<String> = start_on.iter().map(facet_name_of).collect();
-    assert!(facets.contains(&"net:_online_".to_string()), "{facets:?}");
-    assert!(facets.contains(&"rind:_up_".to_string()), "{facets:?}");
+    assert!(facets.contains(&"net:online!".to_string()), "{facets:?}");
+    assert!(facets.contains(&"rind:up!".to_string()), "{facets:?}");
   }
 
   #[test]
@@ -891,10 +891,10 @@ Options=defaults,noatime
 
   #[test]
   fn target_alias_maps_known_targets() {
-    assert_eq!(target_to_facet("network-online.target"), "net:_online_");
-    assert_eq!(target_to_facet("network.target"), "net:_configured_");
-    assert_eq!(target_to_facet("network-pre.target"), "net:_configured_");
-    assert_eq!(target_to_facet("multi-user.target"), "rind:_up_");
+    assert_eq!(target_to_facet("network-online.target"), "net:online!");
+    assert_eq!(target_to_facet("network.target"), "net:configured!");
+    assert_eq!(target_to_facet("network-pre.target"), "net:configured!");
+    assert_eq!(target_to_facet("multi-user.target"), "rind:up!");
   }
 
   #[test]
@@ -922,21 +922,21 @@ ExecStart=/usr/bin/needs-net
     let start_on = svc[0].start_on.as_ref().expect("start-on");
     let facets: Vec<String> = start_on.iter().map(facet_name_of).collect();
     assert!(
-      facets.contains(&"net:_online_".to_string()),
+      facets.contains(&"net:online!".to_string()),
       "facets: {facets:?}"
     );
     assert!(
-      facets.contains(&"net:_configured_".to_string()),
+      facets.contains(&"net:configured!".to_string()),
       "facets: {facets:?}"
     );
 
     let facet_names = collect_facet_names(&m, "needs-net");
     assert!(
-      facet_names.contains(&"net:_online_".to_string()),
+      facet_names.contains(&"net:online!".to_string()),
       "{facet_names:?}"
     );
     assert!(
-      facet_names.contains(&"net:_configured_".to_string()),
+      facet_names.contains(&"net:configured!".to_string()),
       "{facet_names:?}"
     );
   }
@@ -959,11 +959,11 @@ ExecStart=/usr/bin/joins-mu
     let svc = m.get_in_group::<Service>("joins-mu").unwrap();
     let start_on = svc[0].start_on.as_ref().expect("start-on");
     let facets: Vec<String> = start_on.iter().map(facet_name_of).collect();
-    assert_eq!(facets, vec!["rind:_up_"]);
+    assert_eq!(facets, vec!["rind:up!"]);
 
     let facet_names = collect_facet_names(&m, "joins-mu");
     assert!(
-      facet_names.contains(&"rind:_up_".to_string()),
+      facet_names.contains(&"rind:up!".to_string()),
       "{facet_names:?}"
     );
   }
@@ -980,7 +980,7 @@ Requires=basic.target
     load_into("multi-user", &ini, &mut m);
 
     let names = collect_facet_names(&m, "multi-user");
-    assert!(names.contains(&"rind:_up_".to_string()), "{names:?}");
+    assert!(names.contains(&"rind:up!".to_string()), "{names:?}");
     assert!(names.contains(&"rind:basic".to_string()), "{names:?}");
 
     let services = m.get_in_group::<Service>("multi-user");

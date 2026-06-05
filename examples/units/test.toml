@@ -12,7 +12,7 @@ transport = { id = "env", options = ["USER=$"] }
 name = "many"
 run.variable = "someservice"
 space = "user"
-start-on = [{ facet = "rind:user_session" }, { facet = "net:_configured_" }]
+start-on = [{ facet = "rind:user_session" }, { facet = "net:configured!" }]
 user-source = { facet = "rind:user_session", username-field = "username" }
 
 [[service]]
@@ -42,7 +42,7 @@ name = "ipcs_s"
 type = "uds"
 listen = "/var/sock/some.sock"
 owner = "test:ipcs"
-start-on = [{ facet = "net:_configured_" }]
+start-on = [{ facet = "net:configured!" }]
 trigger = [{
   impulse = "test:thething",
   payload = "()"

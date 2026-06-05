@@ -59,7 +59,7 @@ impl Orchestrator for BootOrchestrator {
     ctx.dispatch(
       "flow",
       "set_facet",
-      RuntimePayload::default().insert("name", "rind:_up_".to_ustr()),
+      RuntimePayload::default().insert("name", "rind:up!".to_ustr()),
     )?;
 
     Ok(Void)
