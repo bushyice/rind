@@ -24,7 +24,7 @@
 </div>
 
 > [!CAUTION]
-> **Experimental Status:** Rind is currently a proof-of-concept. The codebase is under active development and in a state of rapid flux. Expect architectural shifts, breaking changes, and occasional instability as we refine the core engine.
+> **Experimental Status:** Rind is currently a proof-of-concept. The codebase is under active development and in a state of rapid flux. Expect architectural shifts, breaking changes, and occasional instability as I refine the core engine.
 
 ## About rind
 
@@ -39,23 +39,23 @@ For more information and architectural details, visit [rind.bushyice.com](https:
 
 ## Build System
 
-You can build with the builder at `/builder`. It's a rust builder so you can just `cargo build` in the `builder` folder and copy the `builder` binary into where you can use it comfortably. I personally use it via just with `just build XXXX`
+The builder for the rootfs is written in `crates/xtask`, you can use `cargo xtask` to use the builder.
 
 ### Build Configuration
 
-Inside of `builder.toml`, you can configure settings for how you want the builder to build and run the init.
+Inside of `rootfs.toml`, you can configure settings for how you want the builder to build and run the init.
 
 ## Build Commands
 
 To get help, you can just execute the builder executable without any arguments and it will print help, but here's a quick start:
-- When you build first time do: `builder iubp`
-- When you change code and rebuild: `builder xbpr` (build, prepare rootfs, run, x = existing disk image)
-- If you changed something like bzimage or busybox configs or new packages, do: `builder xi`
-- If you ever need to reset, do: `builder iubp`
+- When you build first time do: `cargo xtask iu`
+- When you change code and rebuild: `cargo xtask bpr` (build, prepare rootfs, run)
+- If you changed something like bzimage or busybox configs or new packages, do: `cargo xtask i`
+- If you ever need to reset, do: `cargo xtask iubp` (if you need a new fresh rootfs, remove `.artifacts/rootfs.img`)
 
 ## Devenv
 
-There's a flake.nix, but as of now it only builds and sets up the builder. So, once you do `direnv allow` you have the builder command available.
+There's a flake.nix, but as of now it only builds and sets up the builder. 
 
 ## License
 

@@ -15,7 +15,7 @@ export default ((opts?: Options) => {
           gao: "10px",
           justifyContent: "center",
           alignItems: "center",
-          textAlign: "center"
+          textAlign: "center",
         }}
       >
         <svg
@@ -622,7 +622,12 @@ export default ((opts?: Options) => {
 
         <p className="text-center max-w-10/12">
           <strong>
-            An init system and system runtime that provides the building primitives for reactive systems with persistent machine state, where services are drawn via dynamic state trees as opposed to static dependency threads.          </strong>
+            <code>rind</code>(pronounced rin-dee, or rindy) is an init system
+            and system runtime that provides the building primitives for
+            reactive systems with persistent machine state, where services are
+            drawn via dynamic state trees as opposed to static dependency
+            threads.
+          </strong>
         </p>
         <p className="w-full flex justify-center gap-4">
           <a href="https://github.com/bushyice/rind/stargazers">
