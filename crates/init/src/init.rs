@@ -1,19 +1,14 @@
-//! ◇
-use std::path::PathBuf;
-use std::time::Duration;
-
-use nix::sys::epoll::{Epoll, EpollCreateFlags, EpollEvent, EpollFlags};
-use nix::sys::signal::{Signal, kill};
-use nix::sys::signalfd::{SfdFlags, SigSet, SignalFd};
-use nix::sys::time::TimeSpec;
-use nix::sys::timerfd::{ClockId, Expiration, TimerFd, TimerFlags, TimerSetTimeFlags};
-use nix::unistd::Pid;
 use rind_cfg::prelude::*;
-use rind_core::{notifier::Notifier, prelude::*};
+use rind_core::prelude::*;
 use rind_plugins::{PluginCapability, collect_plugins, plugins_path};
-use std::os::fd::AsFd;
+use std::path::PathBuf;
 
+use crate::pump::setup_event_loop;
+
+mod early;
+mod fstab;
 mod initramfs;
+mod pump;
 
 struct BootOrchestrator;
 
@@ -159,156 +154,42 @@ impl Orchestrator for PumpOrchestrator {
   }
 }
 
-fn try_stop_services(
-  boot: &BootEngine,
-  metadata: &MetadataRegistry,
-  runtime: &RuntimeHandle,
-  resources: &mut Resources,
-  force: bool,
-) {
-  let Some(context_id) = boot.primary_context_id() else {
-    return;
-  };
-
-  let _ = runtime.dispatch(
-    "services",
-    "stop_all",
-    rpayload!({ "force": force }),
-    context_id,
-  );
-  let _ = runtime.flush_context(context_id, metadata, resources);
-}
-
-fn collect_other_pids() -> Vec<i32> {
-  let self_pid = std::process::id() as i32;
-  let mut pids = Vec::new();
-
-  let Ok(entries) = std::fs::read_dir("/proc") else {
-    return pids;
-  };
-
-  for entry in entries.flatten() {
-    let name = entry.file_name();
-    let name = name.to_string_lossy();
-    let Ok(pid) = name.parse::<i32>() else {
-      continue;
-    };
-    if pid <= 1 || pid == self_pid {
-      continue;
-    }
-    pids.push(pid);
-  }
-
-  pids
-}
-
-fn terminate_all_processes() {
-  let pids = collect_other_pids();
-  for pid in &pids {
-    let _ = kill(Pid::from_raw(*pid), Signal::SIGTERM);
-  }
-
-  std::thread::sleep(Duration::from_millis(500));
-
-  let pids = collect_other_pids();
-  for pid in &pids {
-    let _ = kill(Pid::from_raw(*pid), Signal::SIGKILL);
-  }
-}
-
-fn load_env() {
-  unsafe {
-    for (key, value) in rind_core::utils::read_env_file("/etc/.env") {
-      std::env::set_var(&key, &value);
-    }
-  }
-}
-
-fn process_lifecycle_action(
-  action: LifecycleAction,
-  boot: &mut BootEngine,
-  metadata: &mut MetadataRegistry,
-  instances: &mut InstanceMap,
-  runtime: &RuntimeHandle,
-  resources: &mut Resources,
-) -> bool {
-  match action {
-    LifecycleAction::ReloadUnits => {
-      load_env();
-      let _ = boot.reload_units_collection(metadata, instances, runtime, resources);
-      // let _ = runtime.dispatch(
-      //   "services",
-      //   "bootstrap",
-      //   Default::default(),
-      //   boot.primary_context_id().unwrap_or(0),
-      // );
-      // let _ = runtime.dispatch(
-      //   "sockets",
-      //   "bootstrap",
-      //   Default::default(),
-      //   boot.primary_context_id().unwrap_or(0),
-      // );
-      // let _ = runtime.dispatch(
-      //   "services",
-      //   "start_all",
-      //   Default::default(),
-      //   boot.primary_context_id().unwrap_or(0),
-      // );
-      // let _ = runtime.dispatch(
-      //   "sockets",
-      //   "setup_all",
-      //   Default::default(),
-      //   boot.primary_context_id().unwrap_or(0),
-      // );
-      let _ = runtime.dispatch(
-        "events",
-        "reload_scopes",
-        Default::default(),
-        boot.primary_context_id().unwrap_or(0),
-      );
-      let _ = runtime.flush_context(boot.primary_context_id().unwrap_or(0), metadata, resources);
-      true
-    }
-    LifecycleAction::SoftReboot => {
-      try_stop_services(boot, metadata, runtime, resources, false);
-      terminate_all_processes();
-      metadata.remove_metadata("static");
-      let _ = boot.run(metadata, instances, runtime, resources);
-      true
-    }
-    LifecycleAction::Reboot => {
-      try_stop_services(boot, metadata, runtime, resources, false);
-      terminate_all_processes();
-      let _ = runtime.send(RuntimeCommand::Stop);
-      unsafe {
-        libc::sync();
-        libc::reboot(libc::LINUX_REBOOT_CMD_RESTART);
-      }
-      false
-    }
-    LifecycleAction::Shutdown => {
-      try_stop_services(boot, metadata, runtime, resources, true);
-      terminate_all_processes();
-      let _ = runtime.send(RuntimeCommand::Stop);
-      unsafe {
-        libc::sync();
-        libc::reboot(libc::LINUX_REBOOT_CMD_POWER_OFF);
-      }
-      false
-    }
-  }
-}
-
 fn main() -> Result<Void, Box<dyn std::error::Error>> {
+  std::panic::set_hook(Box::new(|info| {
+    let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+      s.to_string()
+    } else if let Some(s) = info.payload().downcast_ref::<String>() {
+      s.clone()
+    } else {
+      "unknown panic".to_string()
+    };
+    eprintln!("[rind] FATAL: {msg}");
+    if let Some(loc) = info.location() {
+      eprintln!("  at {}:{}", loc.file(), loc.line());
+    }
+  }));
+
   if initramfs::should_run_initramfs() {
     let continue_boot = initramfs::initramfs_init()?;
     if !continue_boot {
-      initramfs::exec_real_init_from_env()?;
       return Ok(Void);
     }
   }
 
-  load_env();
+  early::load_env();
+
+  early::mount_essential_filesystems().unwrap_or_else(|e| {
+    eprintln!("[early] warning: {e}");
+  });
+  early::create_device_nodes().unwrap_or_else(|e| {
+    eprintln!("[early] warning: {e}");
+  });
+  early::set_hostname().unwrap_or_else(|e| {
+    eprintln!("[early] warning: {e}");
+  });
+  early::mount_fstab().unwrap_or_else(|e| {
+    eprintln!("[early] warning: {e}");
+  });
 
   let units_dir = if let Ok(path) = std::env::var("RIND_UNITS_DIR") {
     PathBuf::from(path)
@@ -371,150 +252,18 @@ fn main() -> Result<Void, Box<dyn std::error::Error>> {
   boot.orchestrators.insert(0, units);
   boot.orchestrators.insert(0, RuntimeProviderOrchestrator);
 
-  let notifier = Notifier::new().expect("failed to create notifier");
-  let runtime = boot.init_runtime(log.clone(), Some(notifier.clone()));
+  let event_loop = setup_event_loop(
+    &mut boot,
+    &mut metadata,
+    &mut instances,
+    &mut resources,
+    &log,
+    pump_interval,
+  )?;
 
-  boot
-    .run(&mut metadata, &mut instances, &runtime, &mut resources)
-    .map_err(|e| format!("boot failed: {e}"))?;
-
-  let context_id = boot
-    .primary_context_id()
-    .ok_or_else(|| "missing runtime context id after boot".to_string())?;
-
-  let mut sigset = SigSet::empty();
-  sigset.add(Signal::SIGCHLD);
-  sigset.thread_block().expect("failed to block SIGCHLD");
-
-  let sfd = SignalFd::with_flags(&sigset, SfdFlags::SFD_NONBLOCK | SfdFlags::SFD_CLOEXEC)
-    .expect("failed to create signalfd");
-
-  let tfd = TimerFd::new(
-    ClockId::CLOCK_MONOTONIC,
-    TimerFlags::TFD_NONBLOCK | TimerFlags::TFD_CLOEXEC,
-  )
-  .expect("failed to create timerfd");
-
-  tfd
-    .set(
-      Expiration::Interval(TimeSpec::from(Duration::from_secs(pump_interval))),
-      TimerSetTimeFlags::empty(),
-    )
-    .expect("failed to set timerfd");
-
-  let epoll = Epoll::new(EpollCreateFlags::EPOLL_CLOEXEC).expect("failed to create epoll");
-
-  // 0 = Notifier, 1 = SignalFd, 2 = TimerFd
-  epoll
-    .add(notifier.as_fd(), EpollEvent::new(EpollFlags::EPOLLIN, 0))
-    .expect("failed to add notifier to epoll");
-  epoll
-    .add(sfd.as_fd(), EpollEvent::new(EpollFlags::EPOLLIN, 1))
-    .expect("failed to add signalfd to epoll");
-  epoll
-    .add(tfd.as_fd(), EpollEvent::new(EpollFlags::EPOLLIN, 2))
-    .expect("failed to add timerfd to epoll");
-
-  let mut events = [EpollEvent::empty(); 16];
-
-  loop {
-    while let Some(action) = runtime.next_lifecycle_action(context_id) {
-      if !process_lifecycle_action(
-        action,
-        &mut boot,
-        &mut metadata,
-        &mut instances,
-        &runtime,
-        &mut resources,
-      ) {
-        return Ok(Void);
-      }
-    }
-
-    for fd in resources.removed_fds() {
-      use std::os::fd::BorrowedFd;
-
-      let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-
-      match epoll.delete(borrowed) {
-        Err(e) => log.log(
-          LogLevel::Error,
-          "epoll",
-          &format!("failed to delete dynamic resource \"{fd}\": {e}"),
-          Default::default(),
-        ),
-        _ => {}
-      }
-
-      if !resources.is_paused(fd) {
-        resources.remove_full(fd);
-      } else {
-        resources.clear_removed(fd);
-      }
-    }
-
-    for fd in resources.unwatched_fds() {
-      use std::os::fd::BorrowedFd;
-
-      let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-
-      match epoll.add(
-        borrowed,
-        EpollEvent::new(resources.flags(fd), fd as u64 + 100),
-      ) {
-        Ok(_) | Err(nix::Error::EEXIST) => {
-          resources.watch(fd);
-        }
-        Err(e) => log.log(
-          LogLevel::Error,
-          "epoll",
-          &format!("failed to add dynamic resource \"{fd}\": {e}"),
-          Default::default(),
-        ),
-      }
-    }
-
-    let n = epoll
-      .wait(&mut events, nix::sys::epoll::EpollTimeout::NONE)
-      .expect("epoll_wait failed");
-    // println!("Here");
-
-    for i in 0..n {
-      let event = events[i];
-      match event.data() {
-        0 => {
-          notifier.reset().ok();
-        }
-        1 => {
-          let _ = sfd.read_signal();
-          // quick fix
-          let _ = runtime.dispatch("reaper", "reap_once", Default::default(), context_id);
-        }
-        2 => {
-          // println!("here");
-          let _ = tfd.wait();
-        }
-        d if d >= 100 => {
-          let fd = (d - 100) as i32;
-          if let Some(act) = resources.get_action(fd) {
-            let payload = RuntimePayload::default().insert("fd", fd);
-            let _ = runtime.dispatch(
-              &act.runtime,
-              &act.action,
-              if let Some(p) = &act.payload {
-                p(payload)
-              } else {
-                payload
-              },
-              context_id,
-            );
-          }
-        }
-        _ => {}
-      }
-    }
-
-    // println!("Pumping");
-    let _ = boot.pump_once(&mut metadata, &mut instances, &runtime, &mut resources);
+  if !event_loop.run(&mut boot, &mut metadata, &mut instances, &mut resources) {
+    return Ok(Void);
   }
+
+  Ok(Void)
 }

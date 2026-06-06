@@ -71,7 +71,9 @@ impl Orchestrator for UnitsOrchestrator {
       EXTENSIONS.with(|extensions| {
         extensions
           .get()
-          .expect("extension manager not initialized")
+          .ok_or(CoreError::InvalidState(
+            "extension manager not initialized".into(),
+          ))?
           .act("register", &mut reg)
       })?;
       let mut loaders = LOADERS.lock().unwrap();

@@ -518,7 +518,9 @@ fn build_ipc_list_response(
       .with(|extensions| {
         extensions
           .get()
-          .expect("extension manager not initialized")
+          .ok_or(CoreError::InvalidState(
+            "extension manager not initialized".into(),
+          ))?
           .resolve(
             &format!("ipc:list:{}", payload.unit_type),
             ExtensionExecutionCtx::new(IpcListComponent::default()),
@@ -578,7 +580,9 @@ pub fn handle_ipc_life(
     .with(|extensions| {
       extensions
         .get()
-        .expect("extension manager not initialized")
+        .ok_or(CoreError::InvalidState(
+          "extension manager not initialized".into(),
+        ))?
         .resolve(
           &format!("ipc:{action}:{}", payload.unit_type),
           ExtensionExecutionCtx::new(payload),

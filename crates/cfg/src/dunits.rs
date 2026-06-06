@@ -159,7 +159,9 @@ pub fn create_units_metadata<P: AsRef<Path>>(
   metadata = EXTENSIONS.with(|extensions| {
     extensions
       .get()
-      .expect("extension manager not initialized")
+      .ok_or(CoreError::InvalidState(
+        "extension manager not initialized".into(),
+      ))?
       .resolve("component", metadata)
   })?;
 
@@ -169,7 +171,9 @@ pub fn create_units_metadata<P: AsRef<Path>>(
     metadata = EXTENSIONS.with(|extensions| {
       extensions
         .get()
-        .expect("extension manager not initialized")
+        .ok_or(CoreError::InvalidState(
+          "extension manager not initialized".into(),
+        ))?
         .resolve("built_in", metadata)
     })?;
   }
@@ -196,7 +200,9 @@ pub fn create_units_metadata<P: AsRef<Path>>(
   EXTENSIONS.with(|extensions| {
     extensions
       .get()
-      .expect("extension manager not initialized")
+      .ok_or(CoreError::InvalidState(
+        "extension manager not initialized".into(),
+      ))?
       .act("loaded_units_scope", &mut metadata)
   })?;
 
@@ -217,7 +223,9 @@ pub fn build_indexes(ctx: &mut OrchestratorContext<'_>, scope: &str) -> CoreResu
   EXTENSIONS.with(|extensions| {
     extensions
       .get()
-      .expect("extension manager not initialized")
+      .ok_or(CoreError::InvalidState(
+        "extension manager not initialized".into(),
+      ))?
       .act("create_index", ctx.metadata)
   })?;
 

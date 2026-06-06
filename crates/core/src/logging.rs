@@ -187,12 +187,20 @@ fn open_segment(dir: &Path, id: u64) -> (BufWriter<File>, PathBuf) {
         FALLBACK_LOG_PATH
       );
       let fallback = PathBuf::from(FALLBACK_LOG_PATH);
-      let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&fallback)
-        .unwrap_or_else(|err| panic!("failed to open fallback log file: {err}")); // change (if not opened, don't crash)
-      (BufWriter::new(file), fallback)
+      match OpenOptions::new().create(true).append(true).open(&fallback) {
+        Ok(file) => (BufWriter::new(file), fallback),
+        Err(fallback_err) => {
+          eprintln!(
+            "logger: failed to open fallback log '{}': {fallback_err}; logging to stderr only",
+            FALLBACK_LOG_PATH
+          );
+          let devnull = OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .expect("failed to open /dev/null");
+          (BufWriter::new(devnull), PathBuf::from("/dev/null"))
+        }
+      }
     }
   }
 }

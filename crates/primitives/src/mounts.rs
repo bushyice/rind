@@ -91,7 +91,9 @@ impl MountRuntime {
         .with(|extensions| {
           extensions
             .get()
-            .expect("extension manager not initialized")
+            .ok_or(CoreError::InvalidState(
+              "extension manager not initialized".into(),
+            ))?
             .resolve("mount", ExtensionExecutionCtx::new(target.clone()))
         })?
         .dispatch(Some(dispatch), Some(log), Some(registry))?;

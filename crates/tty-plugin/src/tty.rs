@@ -302,7 +302,9 @@ impl SeatRuntime {
     match EXTENSIONS.with(|extensions| {
       extensions
         .get()
-        .expect("extension manager not initialized")
+        .ok_or(CoreError::InvalidState(
+          "extension manager not initialized".into(),
+        ))?
         .resolve(
           "boot",
           SeatPayload::Taken(sm.facets.get("seat:taken").map_or(Default::default(), |x| {
@@ -683,14 +685,14 @@ fn register_trigger(_: &str, actions: &mut TriggerActions) -> CoreResult<()> {
 }
 
 plugin!(
-  name: "myplugin",
+  name: "tty",
   version: 0,
   caps: PluginCapability::EXTENSIONS | PluginCapability::EXTENSIBLE | PluginCapability::ORCHESTRATORS | PluginCapability::RUNTIMES | PluginCapability::IPC,
   deps: &[],
-  create: MyPlugin,
+  create: SeatPlugin,
   orchestrators: [SeatdOrchestrator::default(), SeatdPumpOrchestrator],
   extensions: [resolve(inject_builtin), resolve(trigger_ttyload), act(register_trigger)],
-  struct MyPlugin;
+  struct SeatPlugin;
 );
 
 plugin_abi!(1);

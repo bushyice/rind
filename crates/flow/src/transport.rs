@@ -494,7 +494,9 @@ impl TransportRuntime {
     EXTENSIONS.with(|extensions| {
       extensions
         .get()
-        .expect("extension manager not initialized")
+        .ok_or(CoreError::InvalidState(
+          "extension manager not initialized".into(),
+        ))?
         .act("get_actions", &mut actions)
     })?;
 

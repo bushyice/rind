@@ -204,7 +204,7 @@ fn realpath(path: &str) -> Option<String> {
 
 fn handle_client(mut stream: UnixStream) {
   let peer = stream.peer_addr().ok();
-  eprintln!("[seatd] client connected: {:?}", peer);
+  println!("[seatd] client connected: {:?}", peer);
 
   if let Err(e) = run_client(&mut stream) {
     eprintln!("[seatd] client error: errno={}", e);
@@ -421,7 +421,7 @@ pub fn start() {
   };
 
   let _ = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o666));
-  eprintln!("[seatd] listening on {socket_path:?}");
+  println!("[seatd] listening on {socket_path:?}");
 
   for stream in listener.incoming() {
     match stream {

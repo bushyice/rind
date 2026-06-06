@@ -28,6 +28,7 @@ pub mod prelude {
   pub use lifecycle::*;
   pub use logging::*;
   pub use metadata::*;
+  pub use notifier::*;
   pub use orchestrator::*;
   pub use permissions::*;
   pub use persistence::*;

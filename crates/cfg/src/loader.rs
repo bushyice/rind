@@ -68,7 +68,7 @@ fn load_in_dir(
         CoreError::Custom(format!("failed to read unit file {}: {e}", path.display()))
       })?;
 
-      println!("Loading: {}; loaders: {:?}", extension, loaders.keys());
+      // println!("Loading: {}; loaders: {:?}", extension, loaders.keys());
       let Some(loader) = loaders.get(&extension.to_ustr()) else {
         continue;
       };
