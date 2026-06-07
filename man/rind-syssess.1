@@ -1,0 +1,147 @@
+.TH RIND-SYSSESS 1 "2026-06-07" "rind" "User Commands"
+.SH NAME
+rind-syssess \- manage user sessions
+.SH SYNOPSIS
+.B rind syssess logout
+.br
+.B rind syssess login
+.br
+.B rind syssess shell
+.SH DESCRIPTION
+.B rind syssess
+manages user login sessions within the rind init system. It provides commands for logging out, prompting for login credentials, and starting a user shell.
+.PP
+When invoked as
+.B syssess
+(directly), subcommands are parsed from the command line.
+.SS logout
+End the current user session by sending a logout request to the daemon. Reads the
+.B USER
+and
+.B SESSION_ID
+environment variables to identify the session.
+.SS login
+Prompt for username and password on the current TTY, then send a login request to the daemon. On success, the screen is cleared and the session is established. On failure, the prompt repeats.
+.PP
+The target TTY is determined by the
+.B RIND_LOGIN_TTY
+environment variable. If unset, defaults to
+.IR /dev/tty1 .
+.PP
+If
+.B RIND_LOGIN_TTY
+starts with
+.IR seat ,
+it is translated to the corresponding TTY number (e.g.,
+.I seat0
+becomes
+.IR /dev/tty1 ).
+.SS login (TUI mode)
+When
+.B RIND_LOGIN_TUI=1
+is set, the login prompt uses a centered terminal UI instead of the plain getty-style prompt.
+.PP
+The TUI renders:
+.IP \(bu 4
+A bordered box centered on screen (80% of terminal width, max 80 columns)
+.IP \(bu 4
+Hostname banner at the top of the box
+.IP \(bu 4
+.B /etc/issue
+content displayed inside the box
+.IP \(bu 4
+rind version string
+.IP \(bu 4
+Username and password prompts
+.IP \(bu 4
+Subtle background decoration
+.PP
+The background can be replaced with an external command by setting
+.BR RIND_LOGIN_BG_CMD .
+For example:
+.RS
+.nf
+RIND_LOGIN_BG_CMD="pipes \-t 0 \-c 4 \-p 20"
+.fi
+.RE
+.PP
+The background process is spawned when the login screen appears and killed when authentication completes.
+.SS shell
+Start a user shell for the current session. Reads session parameters from the
+.B RIND_USER_ACTIVE
+environment variable (JSON format) or falls back to
+.BR RIND_LOGIN_TTY ,
+.BR USER ,
+and
+.BR SESSION_ID .
+.PP
+The shell process:
+.IP 1. 4
+Opens the session TTY and acquires it via
+.BR TIOCSCTTY .
+.IP 2. 4
+Looks up the user's shell, UID, GID, and home directory from
+.IR /etc/passwd .
+.IP 3. 4
+Loads environment variables from
+.I ~/.env
+(or
+.I /root/.env
+for root).
+.IP 4. 4
+Starts the user's login shell with clean environment, proper UID/GID, and the session TTY as stdin/stdout/stderr.
+.SH ENVIRONMENT
+.TP
+.B USER
+Current username (used by
+.BR logout ).
+.TP
+.B SESSION_ID
+Numeric session identifier (used by
+.BR logout ).
+.TP
+.B RIND_LOGIN_TTY
+Target TTY for login and shell. Default:
+.IR /dev/tty1 .
+.TP
+.B RIND_USER_ACTIVE
+JSON object with session parameters:
+.IR tty ,
+.IR seat ,
+.IR username ,
+.IR session_id .
+.TP
+.B RIND_LOGIN_TUI
+Set to
+.B 1
+to enable the TUI login screen.
+.TP
+.B RIND_LOGIN_BG_CMD
+Command to run as the TUI background (e.g.,
+.IR "pipes \-t 0" ).
+.TP
+.B RIND_LOGIN_HOSTNAME
+Override the hostname displayed in the login prompt.
+.SH FILES
+.TP
+.I /etc/issue
+System banner displayed before the login prompt (both TUI and non-TUI modes).
+.TP
+.I /etc/passwd
+User database for shell, UID, GID, and home directory lookup.
+.SH EXAMPLES
+.nf
+rind syssess login
+rind syssess shell
+rind syssess logout
+
+# TUI mode
+RIND_LOGIN_TUI=1 rind syssess login
+
+# TUI with custom background
+RIND_LOGIN_TUI=1 RIND_LOGIN_BG_CMD="pipes \-t 0 \-c 4" rind syssess login
+.fi
+.SH SEE ALSO
+.BR rind (1),
+.BR rind-run0 (1),
+.BR rind-sysperms (1)

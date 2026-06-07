@@ -42,7 +42,13 @@ symlinks = [
   "/usr/bin:bin",
   "/usr/lib:/lib",
   "/usr/lib:/lib64",
-  "/usr/lib:/usr/lib64"
+  "/usr/lib:/usr/lib64",
+  "rind:/usr/bin/run0",
+  "rind:/usr/bin/sysinvoke",
+  "rind:/usr/bin/syslogs",
+  "rind:/usr/bin/sysunit",
+  "rind:/usr/bin/sysperms",
+  "rind:/usr/bin/syssess"
 ]
 
 # ldd_bins = ["/usr/bin/init"]
@@ -52,6 +58,8 @@ symlinks = [
 # - archive extract: "@alias:member/in/archive:/dst/path"
 files = [
   "examples/units:/etc/units",
+  "examples/etc:/etc",
+  "man:/usr/share/man/man1",
   "examples/fallback.toml:/etc/fallback.toml",
   "crates/api/examples/api.c:/home/makano/api.c",
   "examples/units-makano:/home/makano/.local/share/rind/units",
@@ -216,7 +224,8 @@ disk_permissions = [
 root_envs = [
   "RIND", "v0",
   "CPATH", "/usr/include",
-  "TEST", "some-test"
+  "TEST", "some-test",
+  "TERM", "xterm",
 ]
 
 [[profile.main.user]]

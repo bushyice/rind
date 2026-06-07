@@ -166,7 +166,15 @@ pub fn print_units(units: &[UnitSerialized]) {
 }
 
 pub fn print_unit(unit_name: &String, unit: &UnitItemsSerialized) {
-  println!("{}", format!("Unit: {}", unit_name).bold().cyan());
+  println!(
+    "{}{}",
+    format!("Unit: {}", unit_name).bold().cyan(),
+    if let Some(desc) = &unit.description {
+      format!(" - {}", desc.bold().white())
+    } else {
+      "".to_string()
+    }
+  );
 
   if !unit.services.is_empty() {
     println!("{}", " Services ".on_cyan().bold().white());
@@ -359,7 +367,16 @@ pub fn print_service(service: &ServiceSerialized) {
     }
   };
 
-  println!("{} {}", dot, service.name.bold().white());
+  println!(
+    "{} {}{}",
+    dot,
+    service.name.bold().white(),
+    if let Some(desc) = &service.description {
+      format!(" - {}", desc.bold().white())
+    } else {
+      "".to_string()
+    }
+  );
 
   match service.pid {
     Some(pid) => println!(

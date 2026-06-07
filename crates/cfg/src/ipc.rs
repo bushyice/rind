@@ -75,53 +75,28 @@ fn build_ipc_list_response(
     .ok_or_else(|| CoreError::InvalidState("state machine store not found".into()))?;
 
   Ok(if payload.unit_type == "unit" {
-    let target_group = Ustr::from(payload.name.as_str());
-    let mut services = Vec::new();
-    let mut mounts = Vec::new();
-    let mut sockets = Vec::new();
-    let mut facets = Vec::new();
-    let mut impulses = Vec::new();
+    let (group, scope) = if let Some(n) = payload.name.split_once("@") {
+      n
+    } else {
+      (
+        payload.name.as_str(),
+        payload.scope.as_deref().unwrap_or("static"),
+      )
+    };
 
-    for (scope, items) in ctx.registry.metadata.all_items::<Service>() {
-      for (group, meta) in items {
-        if group == target_group {
-          services.push((scope.clone(), meta));
-        }
-      }
-    }
-    for (scope, items) in ctx.registry.metadata.all_items::<Mount>() {
-      for (group, meta) in items {
-        if group == target_group {
-          mounts.push((scope.clone(), meta));
-        }
-      }
-    }
-    for (scope, items) in ctx.registry.metadata.all_items::<Socket>() {
-      for (group, meta) in items {
-        if group == target_group {
-          sockets.push((scope.clone(), meta));
-        }
-      }
-    }
-    for (scope, items) in ctx.registry.metadata.all_items::<FlowFacet>() {
-      for (group, meta) in items {
-        if group == target_group {
-          facets.push((scope.clone(), meta));
-        }
-      }
-    }
-    for (scope, items) in ctx.registry.metadata.all_items::<FlowImpulse>() {
-      for (group, meta) in items {
-        if group == target_group {
-          impulses.push((scope.clone(), meta));
-        }
-      }
+    if !ctx.registry.metadata.has_group(scope, group) {
+      Err(CoreError::not_found("unit", group))?;
     }
 
+    let services = ctx
+      .registry
+      .metadata
+      .group_items::<Service>(scope, group)
+      .unwrap_or_default();
     let ser_instances: HashMap<Ustr, (String, Vec<u32>)> = services
       .iter()
-      .filter_map(|(scope, ser)| {
-        let scoped = Ustr::from(format!("{}:{}@{}", payload.name, ser.name, scope));
+      .filter_map(|ser| {
+        let scoped = Ustr::from(format!("{}:{}@{}", group, ser.name, scope));
         ctx.registry.as_one::<Service>("*", scoped).ok().map(|x| {
           (
             ser.name.clone(),
@@ -131,11 +106,18 @@ fn build_ipc_list_response(
       })
       .collect();
 
+    let descriptor = ctx.registry.metadata.descriptor(scope, group);
+
     Message::from_type(MessageType::Ok).with(
       UnitItemsSerialized {
-        mounts: mounts
+        description: descriptor.and_then(|x| x.description.clone()),
+        mounts: ctx
+          .registry
+          .metadata
+          .group_items::<Mount>(scope, group)
+          .unwrap_or_default()
           .iter()
-          .map(|(_, mnt)| MountSerialized {
+          .map(|mnt| MountSerialized {
             fstype: mnt.fstype.clone(),
             mounted: is_mounted(&mnt.target).unwrap_or(false),
             source: mnt.source.clone(),
@@ -144,7 +126,8 @@ fn build_ipc_list_response(
           .collect(),
         services: services
           .iter()
-          .map(|(_, svc)| ServiceSerialized {
+          .map(|svc| ServiceSerialized {
+            description: None,
             after: svc.after.clone(),
             run: svc.run.as_many().map(|x| x.exec.clone()).collect(),
             last_state: ser_instances
@@ -157,9 +140,13 @@ fn build_ipc_list_response(
             restart: svc.restart.as_ref().map_or(false, |_| true),
           })
           .collect(),
-        sockets: sockets
+        sockets: ctx
+          .registry
+          .metadata
+          .group_items::<Socket>(scope, group)
+          .unwrap_or_default()
           .iter()
-          .map(|(scope, x)| SocketSerialized {
+          .map(|x| SocketSerialized {
             name: x.name.clone(),
             active: ctx
               .registry
@@ -173,9 +160,13 @@ fn build_ipc_list_response(
             r#type: format!("{:?}", x.r#type).to_ustr(),
           })
           .collect(),
-        facets: facets
+        facets: ctx
+          .registry
+          .metadata
+          .group_items::<FlowFacet>(scope, group)
+          .unwrap_or_default()
           .iter()
-          .map(|(scope, st)| FacetSerialized {
+          .map(|st| FacetSerialized {
             name: st.name.clone(),
             instances: sm
               .facets
@@ -195,9 +186,13 @@ fn build_ipc_list_response(
             keys: st.branch.clone().unwrap_or_default(),
           })
           .collect(),
-        impulses: impulses
+        impulses: ctx
+          .registry
+          .metadata
+          .group_items::<FlowImpulse>(scope, group)
+          .unwrap_or_default()
           .iter()
-          .map(|(_, st)| ImpulseSerialized {
+          .map(|st| ImpulseSerialized {
             name: st.name.clone(),
           })
           .collect(),
@@ -227,6 +222,7 @@ fn build_ipc_list_response(
 
     Message::from_type(MessageType::Ok).with(
       ServiceSerialized {
+        description: service.metadata.description.clone(),
         name: service.metadata.name.clone(),
         after: service.metadata.after.clone(),
         last_state: service.instances.last_state(),

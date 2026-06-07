@@ -7,8 +7,8 @@ start-on = [{ facet = "tr_demo:user_active" }]
 
 [[service]]
 name = "user_login"
-run.exec = "/usr/bin/user_login"
-run.args = []
+run.exec = "/usr/bin/syssess"
+run.args = ["login"]
 restart = false
 start-on = [{ facet = "seat:login_required" }]
 transport = { id = "env", options = ["RIND_LOGIN_TTY=facet:$/seat"] }
@@ -16,8 +16,8 @@ branching = { source = "seat:login_required", key = "seat", max-instances = 16 }
 
 [[service]]
 name = "user_shell"
-run.exec = "/usr/bin/user_shell"
-run.args = []
+run.exec = "/usr/bin/syssess"
+run.args = ["shell"]
 restart = false
 start-on = [{ facet = "rind:user_session" }]
 transport = { id = "env", options = ["RIND_USER_ACTIVE=facet:$"] }

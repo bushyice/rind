@@ -10,8 +10,8 @@ use std::{
   sync::{Arc, Mutex},
 };
 
-use rind_core::prelude::*;
 use rind_core::reexports::*;
+use rind_core::{prelude::*, reexports::once_cell::sync::Lazy};
 use rind_ipc::{
   Message, MessageType,
   payloads::{LoginPayload, LogoutPayload, Run0AuthPayload},
@@ -21,7 +21,7 @@ use serde_json::json;
 use rind_flow::{FacetGraph, FlowRuntimePayload};
 use rind_primitives::{permissions::PERM_RUN0, scopes::ScopeStore};
 
-pub type Run0QueueState = Arc<Mutex<HashMap<i32, bool>>>;
+pub type Run0QueueState = Arc<Mutex<HashMap<i32, std::time::Instant>>>;
 
 #[derive(Default)]
 pub struct UserRuntime;
@@ -38,6 +38,15 @@ fn get_run0_queue(ctx: &RuntimeContext<'_>) -> Result<Run0QueueState, CoreError>
     .ok_or_else(|| CoreError::InvalidState("run0 queue state not found in scope".into()))
 }
 
+const TIMEOUT: Lazy<std::time::Duration> = Lazy::new(|| {
+  std::time::Duration::from_secs(
+    std::env::var("RIND_RUN0_TIMEOUT")
+      .unwrap_or_default()
+      .parse::<u64>()
+      .unwrap_or(300),
+  )
+});
+
 pub fn handle_ipc_run0(
   msg: Message,
   ctx: &mut RuntimeContext<'_>,
@@ -53,33 +62,50 @@ pub fn handle_ipc_run0(
   let Some(pid) = msg.from_pid else {
     return Err(CoreError::PermissionDenied);
   };
+
   let Some(uid) = msg.from_uid else {
     return Err(CoreError::PermissionDenied);
   };
 
-  if !pm.user_has(msg.from_uid.unwrap(), PERM_RUN0)
-    && !pm.users.user_in_group(
-      pm.users.lookup_by_uid(msg.from_uid.unwrap()).unwrap(),
-      "wheel",
-    )
+  if !pm.user_has(uid, PERM_RUN0)
+    && !pm
+      .users
+      .user_in_group(pm.users.lookup_by_uid(uid).unwrap(), "wheel")
   {
     return Err(CoreError::PermissionDenied);
   }
 
-  let queue = get_run0_queue(ctx)?;
-  {
-    let mut queue_guard = queue.lock().map_err(CoreError::custom)?;
-    let needs_auth = queue_guard.entry(pid).or_insert(false);
+  let ppid = std::fs::read_to_string(format!("/proc/{pid}/status"))?
+    .lines()
+    .find(|l| l.starts_with("PPid:"))
+    .and_then(|l| l.split_whitespace().nth(1))
+    .and_then(|s| s.parse::<i32>().ok())
+    .unwrap_or(pid);
 
-    if !*needs_auth {
-      *needs_auth = true;
-      return Ok(Message::from_type(MessageType::RequestInput));
+  let queue = get_run0_queue(ctx)?;
+
+  {
+    let queue_guard = queue.lock().map_err(CoreError::custom)?;
+
+    if let Some(last_auth) = queue_guard.get(&ppid)
+      && last_auth.elapsed() < *TIMEOUT
+    {
+      return Ok(Message::from_type(MessageType::Valid));
     }
   }
 
-  let payload = msg
-    .parse_payload::<Run0AuthPayload>()
-    .map_err(CoreError::Custom)?;
+  if matches!(msg.r#type, MessageType::RequestInput) {
+    return Ok(
+      Message::from_type(MessageType::Error).with_string(CoreError::PermissionDenied.to_string()),
+    );
+  }
+
+  let payload = match msg.parse_payload::<Run0AuthPayload>() {
+    Ok(payload) => payload,
+    Err(_) => {
+      return Ok(Message::from_type(MessageType::RequestInput));
+    }
+  };
 
   let pam = ctx
     .registry
@@ -92,20 +118,14 @@ pub fn handle_ipc_run0(
     .lookup_by_uid(uid)
     .ok_or(CoreError::Custom("user not found".into()))?;
 
-  let password = payload.password;
-  if let Err(e) = pam.pam_authenticate(&user.username, &password) {
-    let mut queue_guard = queue.lock().map_err(CoreError::custom)?;
-    queue_guard.remove(&pid);
-    drop(queue_guard);
+  if let Err(e) = pam.pam_authenticate(&user.username, &payload.password) {
     return Err(CoreError::PamError(e));
   }
 
   let mut queue_guard = queue.lock().map_err(CoreError::custom)?;
-  if queue_guard.remove(&pid).is_some() {
-    return Ok(Message::from_type(MessageType::Valid));
-  }
+  queue_guard.insert(ppid, std::time::Instant::now());
 
-  Ok(Message::from_type(MessageType::Unknown))
+  Ok(Message::from_type(MessageType::Valid))
 }
 
 pub fn handle_ipc_login(

@@ -43,6 +43,7 @@ pub fn serialize_many<T: Serialize>(items: &Vec<T>) -> Vec<u8> {
 #[derive(Serialize, Deserialize)]
 pub struct ServiceSerialized {
   pub name: Ustr,
+  pub description: Option<String>,
   pub last_state: String,
   pub after: Option<Vec<Ustr>>,
   pub restart: bool,
@@ -81,6 +82,7 @@ pub struct MountSerialized {
 
 #[derive(Serialize, Deserialize, Default)]
 pub struct UnitItemsSerialized {
+  pub description: Option<String>,
   pub mounts: Vec<MountSerialized>,
   pub services: Vec<ServiceSerialized>,
   pub sockets: Vec<SocketSerialized>,
@@ -207,6 +209,7 @@ mod tests {
       restart: true,
       run: vec!["hello".to_string().into()],
       pid: Some(1),
+      description: None,
     }];
     let out = serialize_many(&services);
     assert!(!out.is_empty());

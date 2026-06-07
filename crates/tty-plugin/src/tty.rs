@@ -20,6 +20,7 @@ use rind_plugins::prelude::*;
 use rind_plugins_common::{SeatPayload, TTYEvent};
 use rind_primitives::mounts::MountMetadata;
 
+#[cfg(feature = "seatd")]
 mod seatd;
 
 plugin_extensible!(EXTENSIONS);
@@ -319,7 +320,10 @@ impl SeatRuntime {
       _ => {}
     }
 
-    std::thread::spawn(|| seatd::start());
+    #[cfg(feature = "seatd")]
+    if std::env::var("RIND_ENABLE_SEATD").map_or(true, |x| x == "1") {
+      std::thread::spawn(|| seatd::start());
+    }
 
     self.__runtime_reconcile(payload, ctx, dispatch, log)?;
   }

@@ -1,0 +1,42 @@
+.TH RIND-SYSINVOKE 1 "2026-06-07" "rind" "User Commands"
+.SH NAME
+rind-sysinvoke \- send arbitrary IPC actions to the daemon
+.SH SYNOPSIS
+.B rind sysinvoke
+.I name
+.I payload
+.RB [ \-\-scope
+.IR scope ]
+.SH DESCRIPTION
+.B rind sysinvoke
+sends a raw IPC message to a named endpoint in the daemon. The
+.I payload
+is a JSON string or arbitrary data that is forwarded to the target runtime or handler.
+.PP
+This is a low-level command for sending custom actions that do not have dedicated CLI subcommands. Use with caution.
+.PP
+When invoked as
+.B sysinvoke
+(directly), the same arguments apply.
+.SH OPTIONS
+.TP
+.I name
+The target endpoint name (e.g., a runtime action name).
+.TP
+.I payload
+The payload to send. If valid JSON, it is sent as-is. Otherwise, it is wrapped as a string value.
+.TP
+.BI \-\-scope " scope"
+Target scope namespace. If specified and not
+.IR static ,
+the
+.I name
+field in JSON payloads is automatically scoped.
+.SH EXAMPLES
+.nf
+rind sysinvoke my_action '{"key": "value"}'
+rind sysinvoke custom_handler "plain data" \-\-scope myscope
+.fi
+.SH SEE ALSO
+.BR rind (1),
+.BR rind-sysman (1)

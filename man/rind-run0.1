@@ -1,0 +1,41 @@
+.TH RIND-RUN0 1 "2026-06-07" "rind" "User Commands"
+.SH NAME
+rind-run0 \- escalate to root privileges
+.SH SYNOPSIS
+.B rind run0
+.RI [ command " " [ args... ]]
+.br
+.B run0
+.RI [ command " " [ args... ]]
+.SH DESCRIPTION
+.B rind run0
+ authenticates the current user and, upon success, executes the given
+.I command
+as root (uid 0, gid 0).
+.PP
+When invoked directly as
+.B run0
+(e.g., via a symlink), the command arguments are taken from the command line directly.
+.PP
+Authentication is performed by prompting for the root password over the terminal. The password is sent to the daemon's
+.B run0
+IPC endpoint, which validates credentials through the privilege runtime.
+.SH OPTIONS
+.TP
+.I command
+The program to execute as root.
+.TP
+.I args
+Arguments passed to
+.IR command .
+.SH EXAMPLES
+.nf
+rind run0 /bin/bash
+rind run0 dmesg \-w
+run0 ls /root
+.fi
+.SH ENVIRONMENT
+The executed command inherits the current working directory, environment variables, and standard I/O from the calling process.
+.SH SEE ALSO
+.BR rind (1),
+.BR rind-syssess (1)

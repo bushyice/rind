@@ -137,7 +137,9 @@ fn logger_loop(config: LogConfig, rx: Receiver<LogEntry>) {
       continue;
     };
 
-    print_entry(&entry);
+    if std::env::var("RIND_LOGS_SILENT").map_or(true, |x| x == "0") {
+      print_entry(&entry);
+    }
 
     match encode_record(&entry) {
       Ok(bytes) => {

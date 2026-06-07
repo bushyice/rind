@@ -1,0 +1,116 @@
+.TH RIND-SYSLOGS 1 "2026-06-07" "rind" "User Commands"
+.SH NAME
+rind-syslogs \- view and tail system logs
+.SH SYNOPSIS
+.B rind syslogs
+.RB [ \-l
+.IR level ]
+.RB [ \-\-target
+.IR target ]
+.RB [ \-\-message
+.IR message ]
+.RB [ \-\-since
+.IR timestamp ]
+.RB [ \-\-current ]
+.RB [ \-\-field
+.IR KEY=VALUE ]
+.RB [ \-n
+.IR limit ]
+.RB [ \-f ]
+.RB [ \-\-less ]
+.RB [ \-\-poll\-ms
+.IR ms ]
+.RB [ \-\-dir
+.IR path ]
+.SH DESCRIPTION
+.B rind syslogs
+reads and displays log entries from rind's binary log files. By default it shows the most recent entries from
+.IR /var/log/rind/ .
+.PP
+Log entries are stored in a custom binary format with CRC verification. Each entry contains a timestamp, level, target, message, and optional key-value fields.
+.PP
+When invoked as
+.B syslogs
+(directly), the same options apply.
+.SH OPTIONS
+.TP
+.BI \-\-dir " path"
+Directory containing
+.I .rlog
+files. Default:
+.IR /var/log/rind .
+.TP
+.BI \-l " level" "\fR,\fP \-\-level " level
+Minimum log level to display. Values:
+.BR trace ,
+.BR debug ,
+.BR info ,
+.BR warn ,
+.BR error ,
+.BR fatal .
+.TP
+.BI \-\-target " target"
+Filter entries whose target contains
+.IR target .
+.TP
+.BI \-\-message " message"
+Filter entries whose message contains
+.IR message .
+.TP
+.BI \-\-since " timestamp"
+Show entries with timestamp greater than or equal to
+.IR timestamp
+(Unix seconds).
+.TP
+.B \-\-current
+Show only entries from the current boot. Resolves the boot start time from
+.IR /proc/stat .
+.TP
+.BI \-\-field " KEY=VALUE"
+Filter entries where the given field equals
+.IR VALUE .
+Can be specified multiple times; all must match.
+.TP
+.BI \-n " limit" "\fR,\fP \-\-limit " limit
+Maximum number of entries to display. Default:
+.BR 200 .
+.TP
+.B \-f\fR,\fP \-\-tail
+Tail mode: continuously poll for new entries and display them as they appear. Ctrl+C to stop.
+.TP
+.B \-\-less
+Pipe output through
+.BR less (1)
+with color support. Combined with
+.BR \-\-tail ,
+.B less
+is started with
+.B +F
+for live following.
+.TP
+.BI \-\-poll\-ms " ms"
+Polling interval in milliseconds when in tail mode. Default:
+.BR 500 .
+.SH OUTPUT FORMAT
+Each log entry is displayed as:
+.PP
+.RS
+[LEVEL TIMESTAMP TARGET] message
+.RE
+.PP
+If the entry has fields, they are displayed on the next line indented:
+.PP
+.RS
+  fields key1=value1 key2=value2
+.RE
+.SH EXAMPLES
+.nf
+rind syslogs
+rind syslogs \-\-level warn
+rind syslogs \-\-tail \-\-less
+rind syslogs \-\-field service=my\-service \-n 50
+rind syslogs \-\-current \-\-target net
+.fi
+.SH SEE ALSO
+.BR rind (1),
+.BR rind-sysman (1)

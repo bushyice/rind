@@ -20,13 +20,13 @@ path = "demo/inactive.rs"
 name = "example-uds"
 path = "demo/uds_echo.rs"
 
-[[bin]]
-name = "user_login"
-path = "demo/user_login.rs"
+# [[bin]]
+# name = "user_login"
+# path = "demo/user_login.rs"
 
-[[bin]]
-name = "user_shell"
-path = "demo/user_shell.rs"
+# [[bin]]
+# name = "user_shell"
+# path = "demo/user_shell.rs"
 
 [[bin]]
 name = "tcp"
@@ -43,6 +43,19 @@ path = "demo/sif.rs"
 # [[bin]]
 # name = "shm"
 # path = "demo/shm.c" # or shm.rs
+
+[features]
+default = [
+  "applet-exec",
+  "syssess-login",
+  "syssess-usershell"
+]
+applet-exec = []
+syssess-login = []
+syssess-usershell = []
+no-run0 = []
+no-syslogs = []
+no-sysinvoke = []
 
 [dependencies]
 clap.workspace = true

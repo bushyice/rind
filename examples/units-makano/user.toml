@@ -1,6 +1,9 @@
+[unit]
+description = "test unit"
 
 [[service]]
 name = "uservice1"
+description = "test user service"
 run.exec = "/usr/bin/example-active"
 run.args = ["makano-test"]
 space = "user"

@@ -28,3 +28,9 @@ source = "cgroup2"
 target = "/sys/fs/cgroup"
 fstype = "cgroup2"
 create = true
+
+[[mount]]
+source = "devpts"
+target = "/dev/pts"
+fstype = "devpts"
+create = true

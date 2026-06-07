@@ -7,6 +7,7 @@ use std::{
 use crate::{
   error::{CoreError, CoreResult},
   metadata::{Metadata, Model, NamedItem},
+  prelude::MetadataDescriptor,
   rslvns,
   types::{ToUstr, Void},
   utils::parse_scoped_name,
@@ -90,6 +91,14 @@ impl MetadataRegistry {
       .get(&metadata)?
       .get_in_group::<T>(group)
       .map(|x| x.iter().map(|x| x.clone()).collect())
+  }
+
+  pub fn has_group(&self, metadata: impl Into<Ustr>, group: impl Into<Ustr>) -> bool {
+    let metadata = metadata.into();
+    self
+      .metadata
+      .get(&metadata)
+      .map_or(false, |x| x.has_group(group))
   }
 
   pub fn items<T: Model + 'static>(
@@ -263,6 +272,17 @@ impl MetadataRegistry {
 
   pub fn stopper<T: Model + 'static>(&mut self, runtime: &'static str, action: &'static str) {
     self.stoppers.insert(TypeId::of::<T>(), (runtime, action));
+  }
+
+  pub fn descriptor(
+    &self,
+    metadata: impl Into<Ustr>,
+    group: impl Into<Ustr>,
+  ) -> Option<&MetadataDescriptor> {
+    self
+      .metadata
+      .get(&metadata.into())
+      .and_then(|x| x.get_descriptor(group))
   }
 }
 

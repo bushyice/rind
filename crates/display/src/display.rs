@@ -78,8 +78,7 @@ fn display_thread(mut file: File) {
         let read_bytes = &buf[..n];
 
         if read_bytes.contains(&b' ') || read_bytes.contains(&b'\n') {
-          let _ = std::process::Command::new("rind")
-            .arg("invoke")
+          let _ = std::process::Command::new("sysinvoke")
             .arg("seat")
             .arg(serde_json::to_string(&SeatPayload::Activate("seat0".to_ustr())).unwrap())
             .spawn()

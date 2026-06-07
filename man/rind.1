@@ -1,0 +1,67 @@
+.TH RIND 1 "2026-06-07" "rind" "User Commands"
+.SH NAME
+rind \- Rust Init Daemon
+.SH SYNOPSIS
+.B rind
+.I command
+.RI [ options ]
+.SH DESCRIPTION
+.B rind
+is the command-line interface to the rind init daemon. It communicates with the running daemon via IPC over a Unix domain socket and dispatches commands for service management, session control, log viewing, and system operations.
+.PP
+When invoked as
+.B rind
+with a subcommand, it dispatches to the corresponding applet. When the binary name matches an applet name directly (e.g., via a symlink), that applet is invoked without the subcommand prefix.
+.SH COMMANDS
+.TP
+.B rind run0 [ARGS...]
+Escalate to root privileges and execute a command. See
+.BR rind-run0 (1).
+.TP
+.B rind syslogs [OPTIONS]
+View and tail system logs. See
+.BR rind-syslogs (1).
+.TP
+.B rind sysunit \fIcommand\fR [OPTIONS]
+Manage services, units, and scopes. See
+.BR rind-sysunit (1).
+.TP
+.B rind sysinvoke \fINAME\fR \fIPAYLOAD\fR [\fB\-\-scope\fR \fISCOPE\fR]
+Send an arbitrary IPC action to a named endpoint.
+.TP
+.B rind sysperms \fIcommand\fR [OPTIONS]
+Manage access permissions. See
+.BR rind-sysperms (1).
+.TP
+.B rind syssess \fIcommand\fR
+Manage user sessions. See
+.BR rind-syssess (1).
+.TP
+.B rind reload\-units
+Signal the daemon to reload all unit definitions from disk. Triggers a Collect cycle without a full reboot.
+.TP
+.B rind soft\-reboot
+Restart the daemon runtime without exiting the process. Re-runs the Runtime cycle.
+.TP
+.B rind reboot
+Reboot the system.
+.TP
+.B rind shutdown
+Power off the system.
+.SH ENVIRONMENT
+.TP
+.B RIND_SOC_PATH
+Path to the daemon's Unix domain socket. Default:
+.IR /tmp/rind.sock .
+.SH FILES
+.TP
+.I /var/log/rind/
+Default log directory for
+.BR rind-syslogs (1).
+.SH SEE ALSO
+.BR rind-run0 (1),
+.BR rind-syslogs (1),
+.BR rind-sysunit (1),
+.BR rind-sysinvoke (1),
+.BR rind-sysperms (1),
+.BR rind-syssess (1)

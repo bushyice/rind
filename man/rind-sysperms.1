@@ -1,0 +1,96 @@
+.TH RIND-SYSPERMS 1 "2026-06-07" "rind" "User Commands"
+.SH NAME
+rind-sysperms \- manage access permissions
+.SH SYNOPSIS
+.B rind sysperms grant
+.I subject
+.I permission
+.RB [ \-g ]
+.br
+.B rind sysperms revoke
+.I subject
+.I permission
+.RB [ \-g ]
+.br
+.B rind sysperms show
+.RB [ \-\-user
+.IR user ]
+.RB [ \-\-group
+.IR group ]
+.SH DESCRIPTION
+.B rind sysperms
+manages access control entries in the daemon's permission store. Permissions control which users or groups can perform privileged actions such as managing services, setting facets, or escalating privileges.
+.PP
+When invoked as
+.B sysperms
+(directly), the same subcommands apply.
+.SS grant
+Grant a permission to a user or group.
+.TP
+.I subject
+User name or group name to grant the permission to.
+.TP
+.I permission
+Permission name (e.g.,
+.BR SystemServices ,
+.BR FacetWrite ,
+.BR Login ,
+.BR Run0 ,
+.BR Network ).
+.TP
+.B \-g\fR,\fP \-\-group
+Treat
+.I subject
+as a group name instead of a user name.
+.SS revoke
+Revoke a previously granted permission.
+.TP
+.I subject
+User name or group name.
+.TP
+.I permission
+Permission name to revoke.
+.TP
+.B \-g\fR,\fP \-\-group
+Treat
+.I subject
+as a group name.
+.SS show
+Display current permission grants.
+.TP
+.BI \-\-user " user"
+Show permissions for a specific user.
+.TP
+.BI \-\-group " group"
+Show permissions for a specific group.
+.PP
+If neither
+.B \-\-user
+nor
+.B \-\-group
+is specified, all permissions are displayed.
+.SH SYSTEM PERMISSIONS
+.TP
+.B SystemServices
+Allows managing system services (ID 1000).
+.TP
+.B Login
+Allows user login (ID 1001).
+.TP
+.B Run0
+Allows running as root (ID 1002).
+.TP
+.B Network
+Allows network configuration (ID 1003).
+.SH EXAMPLES
+.nf
+rind sysperms grant makano SystemServices
+rind sysperms grant admins FacetWrite \-g
+rind sysperms revoke makano Run0
+rind sysperms show \-\-user makano
+rind sysperms show
+.fi
+.SH SEE ALSO
+.BR rind (1),
+.BR rind-sysman (1),
+.BR rind-syssess (1)

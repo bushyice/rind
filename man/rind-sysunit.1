@@ -1,0 +1,164 @@
+.TH RIND-sysunit 1 "2026-06-07" "rind" "User Commands"
+.SH NAME
+rind-sysunit \- manage services, units, and scopes
+.SH SYNOPSIS
+.B rind sysunit start
+.I name
+.RB [ \-t
+.IR type ]
+.RB [ \-p ]
+.RB [ \-\-scope
+.IR scope ]
+.br
+.B rind sysunit stop
+.I name
+.RB [ \-t
+.IR type ]
+.RB [ \-f ]
+.RB [ \-p ]
+.RB [ \-\-scope
+.IR scope ]
+.br
+.B rind sysunit show
+.RI [ name ]
+.RB [ \-u ]
+.RB [ \-s ]
+.RB [ \-x ]
+.RB [ \-m ]
+.RB [ \-c ]
+.RB [ \-n ]
+.RB [ \-p ]
+.RB [ \-t
+.IR type ]
+.RB [ \-\-scope
+.IR scope ]
+.br
+.B rind sysunit scope create
+.I name
+.RB [ \-\-lifetime\-state
+.IR state ]
+.RB [ \-\-attr
+.IR KEY=VALUE ]
+.RB [ \-\-user
+.IR user ]
+.br
+.B rind sysunit scope destroy
+.I name
+.SH DESCRIPTION
+.B rind sysunit
+manages services, sockets, units, and scopes within the rind daemon.
+.PP
+When invoked as
+.B sysunit
+(directly), subcommands are parsed from the command line.
+.SS start
+Start a service, socket, or other unit by name.
+.TP
+.I name
+Name of the unit to start. Units are addressed as
+.IR group:name .
+Scoped units use
+.IR group:name@scope .
+.TP
+.BI \-t " type" "\fR,\fP \-\-type " type
+Unit type. Values:
+.BR service " (default),"
+.BR svc ,
+.BR socket ,
+.BR soc .
+.TP
+.B \-p\fR,\fP \-\-persist
+Persist the start action across reloads.
+.TP
+.BI \-\-scope " scope"
+Target scope namespace. Default:
+.IR static .
+.SS stop
+Stop a running service, socket, or other unit.
+.TP
+.I name
+Name of the unit to stop.
+.TP
+.BI \-t " type" "\fR,\fP \-\-type " type
+Unit type (same as
+.BR start ).
+.TP
+.B \-f\fR,\fP \-\-force
+Force stop even if dependencies are active.
+.TP
+.B \-p\fR,\fP \-\-persist
+Persist the stop action across reloads.
+.TP
+.BI \-\-scope " scope"
+Target scope namespace.
+.SS show
+Display information about units, services, sockets, facets, or networks.
+.TP
+.I name
+Optional name to show a specific unit. If omitted, lists all units.
+.TP
+.B \-u\fR,\fP \-\-unit
+Show unit summary (services, sockets, mounts, facets counts).
+.TP
+.B \-s\fR,\fP \-\-service
+Show detailed service information including recent logs.
+.TP
+.B \-x\fR,\fP \-\-socket
+Show socket information.
+.TP
+.B \-m\fR,\fP \-\-mount
+Show mount information.
+.TP
+.B \-c\fR,\fP \-\-facet
+Show facet (state) information with branching details.
+.TP
+.B \-n\fR,\fP \-\-network
+Show network interface information.
+.TP
+.B \-p\fR,\fP \-\-port
+Show network port information. Combined with
+.BR \-n ,
+shows netports.
+.TP
+.BI \-t " type" "\fR,\fP \-\-type " type
+Show entities of a specific type.
+.TP
+.BI \-\-scope " scope"
+Target scope namespace.
+.SS scope create
+Create a new dynamic scope namespace.
+.TP
+.I name
+Scope name.
+.TP
+.BI \-\-lifetime\-state " state"
+Facet that controls the scope's lifetime. When the facet is removed, the scope is destroyed.
+.TP
+.BI \-\-attr " KEY=VALUE"
+Scope attribute. Can be specified multiple times. Common attributes:
+.BR user ,
+.BR units_dir .
+.TP
+.BI \-\-user " user"
+Shorthand for
+.BR "\-\-attr user=\fIuser\fR" .
+.SS scope destroy
+Destroy a dynamic scope and its associated metadata.
+.TP
+.I name
+Scope name to destroy. The
+.I static
+scope cannot be destroyed.
+.SH EXAMPLES
+.nf
+rind sysunit start my\-service
+rind sysunit stop web\-socket \-t socket
+rind sysunit show \-\-service my\-service
+rind sysunit show \-u
+rind sysunit scope create makano \-\-attr user=makano
+rind sysunit scope destroy makano
+.fi
+.SH SEE ALSO
+.BR rind (1),
+.BR rind-sysperms (1),
+.BR rind-syssess (1)

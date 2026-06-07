@@ -405,7 +405,7 @@ pub enum ServiceSpace {
   meta_fields(
     name, run, after, branching, restart, start_on, stop_on, on_start, on_stop,
     transport, working_dir, space, user_source, singleton, managed_by, cgroup,
-    namespaces, watchdog
+    namespaces, watchdog, description
   ),
   derive_metadata(Debug, Default)
 )]
@@ -413,6 +413,7 @@ pub struct Service {
   // Metadata
   pub name: Ustr,
   pub run: RunOptions,
+  pub description: Option<String>,
   pub after: Option<Vec<Ustr>>,
   #[serde(rename = "start-on")]
   pub start_on: Option<Vec<FlowItem>>,

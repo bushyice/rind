@@ -8,6 +8,7 @@ use crate::{
   error::{CoreError, CoreResult},
   types::{Ustr, Void},
 };
+use serde::{Deserialize, Serialize};
 use toml::Value;
 
 pub trait NamedItem {
@@ -16,6 +17,14 @@ pub trait NamedItem {
 
 pub trait Model {
   type M: serde::de::DeserializeOwned + NamedItem;
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct MetadataDescriptor {
+  pub description: Option<String>,
+  pub r#type: Option<Ustr>,
+  #[serde(default)]
+  pub tags: Vec<Ustr>,
 }
 
 type ParserFn = Box<dyn Fn(Value) -> CoreResult<Box<dyn Any>> + Send + Sync>;
@@ -51,6 +60,21 @@ impl Metadata {
       parsers: HashMap::new(),
       values: HashMap::new(),
     }
+  }
+
+  pub fn descriptor(mut self, name: impl Into<Ustr>) -> Self {
+    let type_id = TypeId::of::<MetadataDescriptor>();
+
+    self.name_to_type.insert(name.into(), type_id);
+    self.parsers.insert(
+      type_id,
+      Box::new(|value| {
+        let parsed: MetadataDescriptor = value.try_into()?;
+        Ok(Box::new(parsed))
+      }),
+    );
+
+    self
   }
 
   pub fn of<T>(mut self, name: impl Into<Ustr>) -> Self
@@ -89,7 +113,7 @@ impl Metadata {
     let group = group.into();
     for (key, val) in table {
       let key_ustr = Ustr::from(key.as_str());
-      if matches!(val, Value::Array(_)) && self.name_to_type.contains_key(&key_ustr) {
+      if self.name_to_type.contains_key(&key_ustr) {
         self.insert_value(key_ustr, val.clone(), group.clone())?;
       }
     }
@@ -134,6 +158,11 @@ impl Metadata {
     }
   }
 
+  pub fn has_group(&self, name: impl Into<Ustr>) -> bool {
+    let group = name.into();
+    self.values.contains_key(&group)
+  }
+
   pub fn insert<T: Model + 'static>(&mut self, group: impl Into<Ustr>, value: T::M) -> &mut Self {
     let type_id = TypeId::of::<T::M>();
     let group = group.into();
@@ -161,6 +190,15 @@ impl Metadata {
       .get(&group)?
       .get(&TypeId::of::<T::M>())?
       .downcast_ref::<Vec<Arc<T::M>>>()
+  }
+
+  pub fn get_descriptor(&self, group: impl Into<Ustr>) -> Option<&MetadataDescriptor> {
+    let group = group.into();
+    self
+      .values
+      .get(&group)?
+      .get(&TypeId::of::<MetadataDescriptor>())?
+      .downcast_ref::<MetadataDescriptor>()
   }
 
   pub fn groups(&self) -> impl Iterator<Item = Ustr> + '_ {

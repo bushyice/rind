@@ -179,33 +179,58 @@ fn init_tp_internal(transport: rind_tp) -> rind_tp {
       .collect()
   };
 
-  if transport.protocol == RIND_TP_METHOD::UDS {
-    match UnixStream::connect(options[0]) {
-      Ok(stream) => {
-        UDS_CONNECTIONS
-          .write()
-          .unwrap()
-          .insert(transport.id, stream);
+  let mut retries = 0;
+
+  let connect_tp = || {
+    if transport.protocol == RIND_TP_METHOD::UDS {
+      match UnixStream::connect(options[0]) {
+        Ok(stream) => {
+          UDS_CONNECTIONS
+            .write()
+            .unwrap()
+            .insert(transport.id, stream);
+        }
+        Err(e) => {
+          return Err(e.to_string());
+        }
       }
-      Err(e) => {
-        eprintln!("{e}");
-        return transport;
+    } else if transport.protocol == RIND_TP_METHOD::SHM {
+      match shm_client_connect(SHM_SIZE, options[0]) {
+        Ok(stream) => {
+          SHM_CONNECTIONS
+            .write()
+            .unwrap()
+            .insert(transport.id, stream);
+        }
+        Err(e) => {
+          return Err(e.to_string());
+        }
       }
     }
-  } else if transport.protocol == RIND_TP_METHOD::SHM {
-    match shm_client_connect(SHM_SIZE, options[0]) {
-      Ok(stream) => {
-        SHM_CONNECTIONS
-          .write()
-          .unwrap()
-          .insert(transport.id, stream);
-      }
+
+    Ok::<(), String>(())
+  };
+
+  let mut last = Ok::<(), String>(());
+
+  while retries < 5 {
+    let res = connect_tp();
+    match &res {
+      Ok(_) => break,
       Err(e) => {
-        eprintln!("{e}");
-        return transport;
+        last = Err(format!("Failed to create connection: {e}"));
+        if !e.contains("no such file") {
+          eprintln!("{e}");
+          break;
+        }
       }
     }
+    retries += 1;
+    std::thread::sleep(std::time::Duration::from_millis(100));
   }
+
+  last.unwrap();
+
   transport
 }
 

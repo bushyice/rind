@@ -146,6 +146,7 @@ pub fn create_units_metadata<P: AsRef<Path>>(
   let units_dir = units_dir.as_ref();
 
   let mut metadata = Metadata::new(scope)
+    .descriptor("unit")
     .of::<Service>("service")
     .of::<Timer>("timer")
     .of::<Mount>("mount")
