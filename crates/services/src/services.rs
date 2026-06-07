@@ -1988,7 +1988,13 @@ impl ServiceRuntime {
     if let Some(var_name) = spec.strip_prefix("var:") {
       if let Some(vh) = vh {
         if let Some(val) = vh.get(var_name) {
-          if let Ok(json_val) = serde_json::to_value(val) {
+          if let Some(arr) = val.as_array() {
+            for val in arr {
+              if let Ok(json_val) = serde_json::to_value(val) {
+                return subset_match(&key_val, &json_val);
+              }
+            }
+          } else if let Ok(json_val) = serde_json::to_value(val) {
             return subset_match(&key_val, &json_val);
           }
         }
@@ -1996,15 +2002,37 @@ impl ServiceRuntime {
       return false;
     }
 
-    let state_name = spec.strip_prefix("facet:").unwrap_or(spec);
-    if let Some(instances) = sm.facets.get(&Ustr::from(state_name)) {
-      for inst in instances {
-        if subset_match(&key_val, &inst.payload.to_json()) {
+    if let Some(state_name) = spec.strip_prefix("facet:") {
+      let (state_name, key) = if let Some((s, k)) = state_name.split_once("/") {
+        (s, Some(k))
+      } else {
+        (state_name, None)
+      };
+      if let Some(instances) = sm.facets.get(&Ustr::from(state_name)) {
+        for inst in instances {
+          if subset_match(
+            &key_val,
+            &if let Some(key) = &key {
+              inst.payload.get_json_field(key).unwrap_or_default()
+            } else {
+              inst.payload.to_json()
+            },
+          ) {
+            return true;
+          }
+        }
+      }
+    }
+
+    if let Some(var_name) = spec.strip_prefix("many:") {
+      for var_name in var_name.split(",") {
+        if subset_match(&key_val, &serde_json::json!(var_name.trim())) {
           return true;
         }
       }
     }
-    false
+
+    return subset_match(&key_val, &serde_json::json!(spec));
   }
 
   fn reconcile(
