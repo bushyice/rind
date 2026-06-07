@@ -25,5 +25,9 @@ strumbra.workspace = true
 name = "dispatch"
 harness = false
 
+[[bench]]
+name = "user_store"
+harness = false
+
 [dev-dependencies]
 criterion.workspace = true

@@ -1991,9 +1991,12 @@ impl ServiceRuntime {
           if let Some(arr) = val.as_array() {
             for val in arr {
               if let Ok(json_val) = serde_json::to_value(val) {
-                return subset_match(&key_val, &json_val);
+                if subset_match(&key_val, &json_val) {
+                  return true;
+                }
               }
             }
+            return false;
           } else if let Ok(json_val) = serde_json::to_value(val) {
             return subset_match(&key_val, &json_val);
           }
@@ -3343,6 +3346,7 @@ impl ServiceRuntime {
 mod tests {
   use super::*;
   use rind_core::prelude::Metadata;
+  use rind_ipc::FlowJson;
 
   fn service_from_toml(source: &str) -> Service {
     let mut metadata = Metadata::new("test").of::<Service>("service");
@@ -3476,5 +3480,284 @@ run.exec = "/bin/true"
     );
 
     ScopeStore::remove_scope_global(scope);
+  }
+
+  fn test_facet_graph() -> FacetGraph {
+    let dir = std::env::temp_dir().join(format!(
+      "rind-fg-test-{}-{}",
+      std::process::id(),
+      std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    FacetGraph::from_persistence(StatePersistence::new(dir))
+  }
+
+  fn test_variable_heap() -> (VariableHeap, std::path::PathBuf) {
+    let path = std::env::temp_dir().join(format!(
+      "rind-vh-test-{}-{}.toml",
+      std::process::id(),
+      std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+    ));
+    (VariableHeap::new(&path), path)
+  }
+
+  #[test]
+  fn branch_match_plain_string_exact() {
+    let rt = ServiceRuntime::default();
+    let sm = test_facet_graph();
+    assert!(rt.check_branch_match("foo", "foo", &sm, None));
+  }
+
+  #[test]
+  fn branch_match_plain_string_no_match() {
+    let rt = ServiceRuntime::default();
+    let sm = test_facet_graph();
+    assert!(!rt.check_branch_match("foo", "bar", &sm, None));
+  }
+
+  #[test]
+  fn branch_match_many_spec_hits() {
+    let rt = ServiceRuntime::default();
+    let sm = test_facet_graph();
+    assert!(rt.check_branch_match("many:foo,bar,baz", "bar", &sm, None));
+    assert!(rt.check_branch_match("many:foo,bar,baz", "foo", &sm, None));
+  }
+
+  #[test]
+  fn branch_match_many_spec_misses() {
+    let rt = ServiceRuntime::default();
+    let sm = test_facet_graph();
+    assert!(!rt.check_branch_match("many:foo,bar,baz", "qux", &sm, None));
+  }
+
+  #[test]
+  fn branch_match_var_spec_string_value() {
+    let rt = ServiceRuntime::default();
+    let sm = test_facet_graph();
+    let (mut vh, _p) = test_variable_heap();
+    vh.set("my_var", toml::Value::String("hello".to_string()));
+    assert!(rt.check_branch_match("var:my_var", "hello", &sm, Some(&vh)));
+    assert!(!rt.check_branch_match("var:my_var", "world", &sm, Some(&vh)));
+  }
+
+  #[test]
+  fn branch_match_var_spec_array_value() {
+    let rt = ServiceRuntime::default();
+    let sm = test_facet_graph();
+    let (mut vh, _p) = test_variable_heap();
+    vh.set(
+      "my_var",
+      toml::Value::Array(vec![
+        toml::Value::String("alpha".to_string()),
+        toml::Value::String("beta".to_string()),
+      ]),
+    );
+    assert!(rt.check_branch_match("var:my_var", "alpha", &sm, Some(&vh)));
+    assert!(rt.check_branch_match("var:my_var", "beta", &sm, Some(&vh)));
+    assert!(!rt.check_branch_match("var:my_var", "gamma", &sm, Some(&vh)));
+  }
+
+  #[test]
+  fn branch_match_var_spec_missing_variable() {
+    let rt = ServiceRuntime::default();
+    let sm = test_facet_graph();
+    let (vh, _p) = test_variable_heap();
+    assert!(!rt.check_branch_match("var:nonexistent", "foo", &sm, Some(&vh)));
+  }
+
+  #[test]
+  fn branch_match_facet_spec_string_payload() {
+    let rt = ServiceRuntime::default();
+    let mut sm = test_facet_graph();
+    sm.facets.insert(
+      Ustr::from("test:state"),
+      vec![FlowInstance {
+        name: Ustr::from("test:state"),
+        payload: FlowPayload::String("target_value".to_string()),
+        r#type: FlowType::Facet,
+      }],
+    );
+    assert!(rt.check_branch_match("facet:test:state", "target_value", &sm, None));
+    assert!(!rt.check_branch_match("facet:test:state", "wrong_value", &sm, None));
+  }
+
+  #[test]
+  fn branch_match_facet_spec_json_payload_with_key() {
+    let rt = ServiceRuntime::default();
+    let mut sm = test_facet_graph();
+    sm.facets.insert(
+      Ustr::from("test:session"),
+      vec![FlowInstance {
+        name: Ustr::from("test:session"),
+        payload: FlowPayload::Json(FlowJson(r#"{"seat":"0","user":"makano"}"#.to_string())),
+        r#type: FlowType::Facet,
+      }],
+    );
+    assert!(rt.check_branch_match("facet:test:session/seat", "0", &sm, None));
+    assert!(!rt.check_branch_match("facet:test:session/seat", "1", &sm, None));
+  }
+
+  #[test]
+  fn branch_match_facet_spec_missing_state() {
+    let rt = ServiceRuntime::default();
+    let sm = test_facet_graph();
+    assert!(!rt.check_branch_match("facet:nonexistent", "foo", &sm, None));
+  }
+
+  #[test]
+  fn branch_only_filters_unmatched_keys() {
+    let branching = BranchingConfig {
+      source: Ustr::from("test:base"),
+      key: Some("id".to_string()),
+      max_instances: None,
+      only: Some(vec!["allowed".to_string()]),
+      except: None,
+    };
+
+    let matched = |key: &str| -> bool {
+      let rt = ServiceRuntime::default();
+      let sm = test_facet_graph();
+      if let Some(onlys) = &branching.only {
+        for spec in onlys {
+          if rt.check_branch_match(spec, key, &sm, None) {
+            return true;
+          }
+        }
+      }
+      false
+    };
+
+    assert!(matched("allowed"));
+    assert!(!matched("denied"));
+    assert!(!matched("anything"));
+  }
+
+  #[test]
+  fn branch_except_skips_matched_keys() {
+    let branching = BranchingConfig {
+      source: Ustr::from("test:base"),
+      key: Some("id".to_string()),
+      max_instances: None,
+      only: None,
+      except: Some(vec!["blocked".to_string()]),
+    };
+
+    let should_start = |key: &str| -> bool {
+      let rt = ServiceRuntime::default();
+      let sm = test_facet_graph();
+      if let Some(excepts) = &branching.except {
+        for spec in excepts {
+          if rt.check_branch_match(spec, key, &sm, None) {
+            return false;
+          }
+        }
+      }
+      true
+    };
+
+    assert!(should_start("allowed"));
+    assert!(should_start("anything"));
+    assert!(!should_start("blocked"));
+  }
+
+  #[test]
+  fn branch_only_and_except_combined() {
+    let branching = BranchingConfig {
+      source: Ustr::from("test:base"),
+      key: Some("id".to_string()),
+      max_instances: None,
+      only: Some(vec!["group_a".to_string(), "group_b".to_string()]),
+      except: Some(vec!["group_b".to_string()]),
+    };
+
+    let should_start = |key: &str| -> bool {
+      let rt = ServiceRuntime::default();
+      let sm = test_facet_graph();
+      if let Some(onlys) = &branching.only {
+        let mut matched = false;
+        for spec in onlys {
+          if rt.check_branch_match(spec, key, &sm, None) {
+            matched = true;
+            break;
+          }
+        }
+        if !matched {
+          return false;
+        }
+      }
+      if let Some(excepts) = &branching.except {
+        for spec in excepts {
+          if rt.check_branch_match(spec, key, &sm, None) {
+            return false;
+          }
+        }
+      }
+      true
+    };
+
+    assert!(should_start("group_a"));
+    assert!(!should_start("group_b"));
+    assert!(!should_start("group_c"));
+  }
+
+  #[test]
+  fn branch_only_with_many_spec() {
+    let branching = BranchingConfig {
+      source: Ustr::from("test:base"),
+      key: Some("id".to_string()),
+      max_instances: None,
+      only: Some(vec!["many:seat0,seat1".to_string()]),
+      except: None,
+    };
+
+    let matched = |key: &str| -> bool {
+      let rt = ServiceRuntime::default();
+      let sm = test_facet_graph();
+      if let Some(onlys) = &branching.only {
+        for spec in onlys {
+          if rt.check_branch_match(spec, key, &sm, None) {
+            return true;
+          }
+        }
+      }
+      false
+    };
+
+    assert!(matched("seat0"));
+    assert!(matched("seat1"));
+    assert!(!matched("seat2"));
+  }
+
+  #[test]
+  fn branch_except_with_facet_spec() {
+    let rt = ServiceRuntime::default();
+    let mut sm = test_facet_graph();
+    sm.facets.insert(
+      Ustr::from("test:tty"),
+      vec![FlowInstance {
+        name: Ustr::from("test:tty"),
+        payload: FlowPayload::Json(FlowJson(r#"{"taken":"tty1"}"#.to_string())),
+        r#type: FlowType::Facet,
+      }],
+    );
+
+    let should_start = |key: &str| -> bool {
+      let specs = vec!["facet:test:tty/taken".to_string()];
+      for spec in &specs {
+        if rt.check_branch_match(spec, key, &sm, None) {
+          return false;
+        }
+      }
+      true
+    };
+
+    assert!(!should_start("tty1"));
+    assert!(should_start("tty2"));
   }
 }
