@@ -1,12 +1,22 @@
 [workspace]
 members = [
   "crates/api",
-  # "crates/daemon",
-  "crates/core",
-  # "crates/common",
-  "crates/init", "crates/macros",
-  "crates/ipc","crates/plugins", "crates/tty-plugin", "crates/networking", "crates/display", "crates/common", "crates/initramfs", "crates/services", "crates/primitives", "crates/flow", "crates/cfg", "crates/systemd-loader",
+  "crates/cfg",
   "crates/cli",
+  "crates/common",
+  "crates/core",
+  "crates/display",
+  "crates/flow",
+  "crates/init",
+  "crates/initramfs",
+  "crates/ipc",
+  "crates/macros",
+  "crates/networking",
+  "crates/plugins",
+  "crates/primitives",
+  "crates/services",
+  "crates/systemd-loader",
+  "crates/tty-plugin",
   "crates/xtask",
 ]
 resolver = "3"

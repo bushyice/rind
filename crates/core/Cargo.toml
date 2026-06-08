@@ -31,3 +31,4 @@ harness = false
 
 [dev-dependencies]
 criterion.workspace = true
+rind-macros = { path = "../macros" }

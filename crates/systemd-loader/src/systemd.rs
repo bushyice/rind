@@ -274,7 +274,7 @@ fn target_to_facet(target: &str) -> String {
     "sysinit" => "rind:sysinit".to_string(),
     "rescue" => "rind:rescue".to_string(),
     "emergency" => "rind:emergency".to_string(),
-    other => other.to_string(),
+    other => format!("systemd:{other}"),
   }
 }
 
@@ -356,8 +356,6 @@ fn load_into(name: &str, ini: &IniFile, metadata: &mut Metadata) {
     metadata.insert::<Mount>(name, build_mount_meta(name, mnt, &after_list));
   }
 
-  let referenced_facets = referenced_targets_from(unit, &wanted_facets);
-
   let is_target_file = section_map.get("service").is_none()
     && section_map.get("socket").is_none()
     && section_map.get("timer").is_none()
@@ -365,16 +363,16 @@ fn load_into(name: &str, ini: &IniFile, metadata: &mut Metadata) {
     && section_map.get("automount").is_none()
     && unit.is_some();
 
-  let mut emit_facets: Vec<String> = referenced_facets;
   if is_target_file {
+    let referenced_facets = referenced_targets_from(unit, &wanted_facets);
+    let mut emit_facets = referenced_facets;
     let own_facet = target_to_facet(name);
     if !own_facet.is_empty() && !emit_facets.contains(&own_facet) {
       emit_facets.push(own_facet);
     }
-  }
-
-  for facet_name in &emit_facets {
-    metadata.insert::<FlowFacet>(name, build_facet_meta(facet_name));
+    for facet_name in &emit_facets {
+      metadata.insert::<FlowFacet>(name, build_facet_meta(facet_name));
+    }
   }
 }
 
@@ -747,61 +745,6 @@ Description = A \\
   }
 
   #[test]
-  fn load_service_inserts_metadata() {
-    let mut m = build_metadata();
-    let src = "\
-[Unit]
-Description=hello
-After=network-online.target
-WantedBy=multi-user.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/hello --greet=hi
-Restart=on-failure
-User=alice
-WorkingDirectory=/srv/hello
-Environment=FOO=bar BAZ=qux
-";
-    let ini = parse_ini(src);
-    load_into("hello", &ini, &mut m);
-
-    let svc = m.get_in_group::<Service>("hello").unwrap();
-    assert_eq!(svc.len(), 1);
-    assert_eq!(svc[0].name.as_str(), "hello");
-    let run = svc[0].run.as_one();
-    assert_eq!(run.exec.as_str(), "/usr/bin/hello");
-    assert_eq!(
-      run.args.iter().map(|a| a.as_str()).collect::<Vec<_>>(),
-      vec!["--greet=hi"]
-    );
-    let env = run.env.as_ref().expect("env should be set");
-    assert_eq!(
-      env
-        .get(&"FOO".to_ustr())
-        .map(|v: &rind_core::types::Ustr| v.as_str()),
-      Some("bar")
-    );
-    assert_eq!(
-      env
-        .get(&"BAZ".to_ustr())
-        .map(|v: &rind_core::types::Ustr| v.as_str()),
-      Some("qux")
-    );
-    assert_eq!(
-      svc[0]
-        .working_dir
-        .as_ref()
-        .map(|s: &rind_core::types::Ustr| s.as_str()),
-      Some("/srv/hello")
-    );
-    let start_on = svc[0].start_on.as_ref().expect("start-on");
-    let facets: Vec<String> = start_on.iter().map(facet_name_of).collect();
-    assert!(facets.contains(&"net:online!".to_string()), "{facets:?}");
-    assert!(facets.contains(&"rind:up!".to_string()), "{facets:?}");
-  }
-
-  #[test]
   fn load_socket_inserts_metadata() {
     let mut m = build_metadata();
     let src = "\
@@ -890,6 +833,61 @@ Options=defaults,noatime
   }
 
   #[test]
+  fn load_service_inserts_metadata() {
+    let mut m = build_metadata();
+    let src = "\
+[Unit]
+Description=hello
+After=network-online.target
+WantedBy=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/hello --greet=hi
+Restart=on-failure
+User=makano
+WorkingDirectory=/srv/hello
+Environment=FOO=bar BAZ=qux
+";
+    let ini = parse_ini(src);
+    load_into("hello", &ini, &mut m);
+
+    let svc = m.get_in_group::<Service>("hello").unwrap();
+    assert_eq!(svc.len(), 1);
+    assert_eq!(svc[0].name.as_str(), "hello");
+    let run = svc[0].run.as_one();
+    assert_eq!(run.exec.as_str(), "/usr/bin/hello");
+    assert_eq!(
+      run.args.iter().map(|a| a.as_str()).collect::<Vec<_>>(),
+      vec!["--greet=hi"]
+    );
+    let env = run.env.as_ref().expect("env should be set");
+    assert_eq!(
+      env
+        .get(&"FOO".to_ustr())
+        .map(|v: &rind_core::types::Ustr| v.as_str()),
+      Some("bar")
+    );
+    assert_eq!(
+      env
+        .get(&"BAZ".to_ustr())
+        .map(|v: &rind_core::types::Ustr| v.as_str()),
+      Some("qux")
+    );
+    assert_eq!(
+      svc[0]
+        .working_dir
+        .as_ref()
+        .map(|s: &rind_core::types::Ustr| s.as_str()),
+      Some("/srv/hello")
+    );
+    let start_on = svc[0].start_on.as_ref().expect("start-on");
+    let facets: Vec<String> = start_on.iter().map(facet_name_of).collect();
+    assert!(facets.contains(&"net:online!".to_string()), "{facets:?}");
+    assert!(facets.contains(&"rind:up!".to_string()), "{facets:?}");
+  }
+
+  #[test]
   fn target_alias_maps_known_targets() {
     assert_eq!(target_to_facet("network-online.target"), "net:online!");
     assert_eq!(target_to_facet("network.target"), "net:configured!");
@@ -899,11 +897,11 @@ Options=defaults,noatime
 
   #[test]
   fn target_alias_strips_unknown_suffix() {
-    assert_eq!(target_to_facet("weird.target"), "weird");
+    assert_eq!(target_to_facet("weird.target"), "systemd:weird");
   }
 
   #[test]
-  fn service_with_known_target_emits_facet() {
+  fn service_with_known_target_puts_targets_in_start_on() {
     let mut m = build_metadata();
     let src = "\
 [Unit]
@@ -932,17 +930,13 @@ ExecStart=/usr/bin/needs-net
 
     let facet_names = collect_facet_names(&m, "needs-net");
     assert!(
-      facet_names.contains(&"net:online!".to_string()),
-      "{facet_names:?}"
-    );
-    assert!(
-      facet_names.contains(&"net:configured!".to_string()),
-      "{facet_names:?}"
+      facet_names.is_empty(),
+      "service should not emit facets: {facet_names:?}"
     );
   }
 
   #[test]
-  fn service_with_unknown_target_emits_bare_facet() {
+  fn service_with_unknown_target_puts_targets_in_start_on() {
     let mut m = build_metadata();
     let src = "\
 [Unit]
@@ -963,8 +957,8 @@ ExecStart=/usr/bin/joins-mu
 
     let facet_names = collect_facet_names(&m, "joins-mu");
     assert!(
-      facet_names.contains(&"rind:up!".to_string()),
-      "{facet_names:?}"
+      facet_names.is_empty(),
+      "service should not emit facets: {facet_names:?}"
     );
   }
 
@@ -1001,5 +995,330 @@ Requires=basic.target
         facet.as_ref().map(|u| u.to_string()).unwrap_or_default()
       }
     }
+  }
+
+  #[test]
+  fn target_ref_known_target() {
+    assert_eq!(
+      target_ref("network-online.target").as_deref(),
+      Some("net:online!")
+    );
+    assert_eq!(target_ref("multi-user.target").as_deref(), Some("rind:up!"));
+    assert_eq!(
+      target_ref("network.target").as_deref(),
+      Some("net:configured!")
+    );
+  }
+
+  #[test]
+  fn target_ref_unknown_target() {
+    assert_eq!(
+      target_ref("custom.target").as_deref(),
+      Some("systemd:custom")
+    );
+  }
+
+  #[test]
+  fn target_ref_non_target_string() {
+    assert!(target_ref("foo.service").is_none());
+    assert!(target_ref("bar.socket").is_none());
+    assert!(target_ref("plain").is_none());
+    assert!(target_ref("").is_none());
+  }
+
+  #[test]
+  fn target_ref_whitespace_trimmed() {
+    assert_eq!(
+      target_ref("  network-online.target  ").as_deref(),
+      Some("net:online!")
+    );
+  }
+
+  #[test]
+  fn referenced_targets_from_after_and_wants() {
+    let mut unit = HashMap::new();
+    unit.insert(
+      "After".to_string(),
+      vec!["network.target".to_string(), "local-fs.target".to_string()],
+    );
+    unit.insert(
+      "Wants".to_string(),
+      vec!["network-online.target".to_string()],
+    );
+    let result = referenced_targets_from(Some(&unit), &[]);
+    assert!(
+      result.contains(&"net:configured!".to_string()),
+      "{result:?}"
+    );
+    assert!(result.contains(&"net:online!".to_string()), "{result:?}");
+    assert!(
+      result.contains(&"systemd:local-fs".to_string()),
+      "{result:?}"
+    );
+  }
+
+  #[test]
+  fn referenced_targets_from_wanted_by() {
+    let mut unit = HashMap::new();
+    unit.insert(
+      "WantedBy".to_string(),
+      vec!["multi-user.target".to_string()],
+    );
+    let result = referenced_targets_from(Some(&unit), &[]);
+    assert_eq!(result, vec!["rind:up!"]);
+  }
+
+  #[test]
+  fn referenced_targets_from_required_by() {
+    let mut unit = HashMap::new();
+    unit.insert(
+      "RequiredBy".to_string(),
+      vec!["network-online.target".to_string()],
+    );
+    let result = referenced_targets_from(Some(&unit), &[]);
+    assert_eq!(result, vec!["net:online!"]);
+  }
+
+  #[test]
+  fn referenced_targets_from_requires() {
+    let mut unit = HashMap::new();
+    unit.insert("Requires".to_string(), vec!["basic.target".to_string()]);
+    let result = referenced_targets_from(Some(&unit), &[]);
+    assert_eq!(result, vec!["rind:basic"]);
+  }
+
+  #[test]
+  fn referenced_targets_from_wanted_list() {
+    let result =
+      referenced_targets_from(None, &["net:online!".to_string(), "rind:up!".to_string()]);
+    assert_eq!(result, vec!["net:online!", "rind:up!"]);
+  }
+
+  #[test]
+  fn referenced_targets_from_merges_wanted_and_unit() {
+    let mut unit = HashMap::new();
+    unit.insert("After".to_string(), vec!["network.target".to_string()]);
+    let result = referenced_targets_from(Some(&unit), &["rind:up!".to_string()]);
+    assert!(
+      result.contains(&"net:configured!".to_string()),
+      "{result:?}"
+    );
+    assert!(result.contains(&"rind:up!".to_string()), "{result:?}");
+  }
+
+  #[test]
+  fn referenced_targets_from_skips_non_target_tokens() {
+    let mut unit = HashMap::new();
+    unit.insert(
+      "After".to_string(),
+      vec![
+        "network-online.target".to_string(),
+        "some.service".to_string(),
+      ],
+    );
+    let result = referenced_targets_from(Some(&unit), &[]);
+    assert!(result.contains(&"net:online!".to_string()), "{result:?}");
+    assert!(!result.iter().any(|s| s.contains("some")), "{result:?}");
+  }
+
+  #[test]
+  fn referenced_targets_from_deduplicates() {
+    let mut unit = HashMap::new();
+    unit.insert("After".to_string(), vec!["network.target".to_string()]);
+    unit.insert("Wants".to_string(), vec!["network.target".to_string()]);
+    let result = referenced_targets_from(Some(&unit), &[]);
+    assert_eq!(result, vec!["net:configured!"]);
+  }
+
+  #[test]
+  fn referenced_targets_from_empty_unit() {
+    let result = referenced_targets_from(Some(&HashMap::new()), &[]);
+    assert!(result.is_empty());
+  }
+
+  #[test]
+  fn target_file_with_multiple_dependencies_emits_all_facets() {
+    let mut m = build_metadata();
+    let src = "\
+[Unit]
+Description=Basic System
+Requires=sysinit.target
+Wants=sockets.target
+After=local-fs.target
+";
+    let ini = parse_ini(src);
+    load_into("basic", &ini, &mut m);
+
+    let names = collect_facet_names(&m, "basic");
+    assert!(names.contains(&"rind:basic".to_string()), "{names:?}");
+    assert!(names.contains(&"rind:sockets".to_string()), "{names:?}");
+    assert!(names.contains(&"systemd:local-fs".to_string()), "{names:?}");
+
+    let services = m.get_in_group::<Service>("basic");
+    assert!(services.is_none() || services.unwrap().is_empty());
+  }
+
+  #[test]
+  fn target_file_no_unit_section_emits_own_facet() {
+    let mut m = build_metadata();
+    let src = "\
+[Unit]
+Description=Empty target
+";
+    let ini = parse_ini(src);
+    load_into("empty", &ini, &mut m);
+
+    let names = collect_facet_names(&m, "empty");
+    assert!(names.contains(&"systemd:empty".to_string()), "{names:?}");
+    assert_eq!(names.len(), 1, "{names:?}");
+  }
+
+  #[test]
+  fn service_with_after_only_puts_facets_in_start_on() {
+    let mut m = build_metadata();
+    let src = "\
+[Unit]
+Description=after net only
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/after-net
+";
+    let ini = parse_ini(src);
+    load_into("after-net", &ini, &mut m);
+
+    let svc = m.get_in_group::<Service>("after-net").unwrap();
+    let start_on = svc[0].start_on.as_ref().expect("start-on");
+    let facets: Vec<String> = start_on.iter().map(facet_name_of).collect();
+    assert!(facets.contains(&"net:online!".to_string()), "{facets:?}");
+
+    let facet_names = collect_facet_names(&m, "after-net");
+    assert!(
+      facet_names.is_empty(),
+      "service should not emit facets: {facet_names:?}"
+    );
+  }
+
+  #[test]
+  fn service_with_requires_puts_facets_in_start_on() {
+    let mut m = build_metadata();
+    let src = "\
+[Unit]
+Description=requires basic
+Requires=basic.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/requires-basic
+";
+    let ini = parse_ini(src);
+    load_into("requires-basic", &ini, &mut m);
+
+    let svc = m.get_in_group::<Service>("requires-basic").unwrap();
+    let start_on = svc[0].start_on.as_ref().expect("start-on");
+    let facets: Vec<String> = start_on.iter().map(facet_name_of).collect();
+    assert!(facets.contains(&"rind:basic".to_string()), "{facets:?}");
+
+    let facet_names = collect_facet_names(&m, "requires-basic");
+    assert!(
+      facet_names.is_empty(),
+      "service should not emit facets: {facet_names:?}"
+    );
+  }
+
+  #[test]
+  fn service_with_no_targets_has_no_start_on() {
+    let mut m = build_metadata();
+    let src = "\
+[Unit]
+Description=standalone service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/standalone
+";
+    let ini = parse_ini(src);
+    load_into("standalone", &ini, &mut m);
+
+    let svc = m.get_in_group::<Service>("standalone").unwrap();
+    assert!(
+      svc[0].start_on.is_none(),
+      "start_on should be None for no targets"
+    );
+  }
+
+  #[test]
+  fn service_with_non_target_after_goes_to_after_list() {
+    let mut m = build_metadata();
+    let src = "\
+[Unit]
+Description=needs another service
+After=other.service network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/mixed
+";
+    let ini = parse_ini(src);
+    load_into("mixed", &ini, &mut m);
+
+    let svc = m.get_in_group::<Service>("mixed").unwrap();
+    let start_on = svc[0].start_on.as_ref().expect("start-on");
+    let facets: Vec<String> = start_on.iter().map(facet_name_of).collect();
+    assert!(
+      facets.contains(&"net:online!".to_string()),
+      "target should be in start_on: {facets:?}"
+    );
+  }
+
+  #[test]
+  fn service_wanted_by_multiple_targets() {
+    let mut m = build_metadata();
+    let src = "\
+[Unit]
+Description=multi target service
+WantedBy=network-online.target multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/multi
+";
+    let ini = parse_ini(src);
+    load_into("multi", &ini, &mut m);
+
+    let svc = m.get_in_group::<Service>("multi").unwrap();
+    let start_on = svc[0].start_on.as_ref().expect("start-on");
+    let facets: Vec<String> = start_on.iter().map(facet_name_of).collect();
+    assert!(facets.contains(&"net:online!".to_string()), "{facets:?}");
+    assert!(facets.contains(&"rind:up!".to_string()), "{facets:?}");
+
+    let facet_names = collect_facet_names(&m, "multi");
+    assert!(
+      facet_names.is_empty(),
+      "service should not emit facets: {facet_names:?}"
+    );
+  }
+
+  #[test]
+  fn service_after_and_wants_same_target_deduplicates() {
+    let mut m = build_metadata();
+    let src = "\
+[Unit]
+Description=double ref
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/double
+";
+    let ini = parse_ini(src);
+    load_into("double", &ini, &mut m);
+
+    let svc = m.get_in_group::<Service>("double").unwrap();
+    let start_on = svc[0].start_on.as_ref().expect("start-on");
+    let facets: Vec<String> = start_on.iter().map(facet_name_of).collect();
+    assert!(facets.contains(&"net:online!".to_string()), "{facets:?}");
   }
 }

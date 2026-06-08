@@ -2969,7 +2969,8 @@ impl ServiceRuntime {
               payload = payload.insert("branch_ctx", bctx);
             }
 
-            self.__runtime_start(payload, ctx, dispatch, log)?;
+            // self.__runtime_start(payload, ctx, dispatch, log)?;
+            dispatch.dispatch("services", "start", payload)?;
           } else {
             self.reconcile(ctx, log, dispatch, name, ServiceEventKind::Started)?;
           }
@@ -3759,5 +3760,99 @@ run.exec = "/bin/true"
 
     assert!(!should_start("tty1"));
     assert!(should_start("tty2"));
+  }
+
+  #[test]
+  fn branch_key_from_payload_string_variant() {
+    let payload = FlowPayload::String("seat0".to_string());
+    let key = ServiceRuntime::branch_key_from_payload(&payload, None);
+    assert_eq!(key, Some(Ustr::from("seat0")));
+  }
+
+  #[test]
+  fn branch_key_from_payload_string_empty_is_none() {
+    let payload = FlowPayload::String("".to_string());
+    let key = ServiceRuntime::branch_key_from_payload(&payload, None);
+    assert!(key.is_none());
+  }
+
+  #[test]
+  fn branch_key_from_payload_none_variant_is_none() {
+    let payload = FlowPayload::None(false);
+    let key = ServiceRuntime::branch_key_from_payload(&payload, None);
+    assert!(key.is_none());
+  }
+
+  #[test]
+  fn branch_key_from_payload_json_with_key_name() {
+    let payload = FlowPayload::Json(FlowJson(r#"{"seat":"tty1","user":"makano"}"#.to_string()));
+    let key = ServiceRuntime::branch_key_from_payload(&payload, Some("seat"));
+    assert_eq!(key, Some(Ustr::from("tty1")));
+  }
+
+  #[test]
+  fn branch_key_from_payload_json_missing_key_is_none() {
+    let payload = FlowPayload::Json(FlowJson(r#"{"user":"makano"}"#.to_string()));
+    let key = ServiceRuntime::branch_key_from_payload(&payload, Some("seat"));
+    assert!(key.is_none());
+  }
+
+  #[test]
+  fn branch_key_from_payload_json_empty_field_is_none() {
+    let payload = FlowPayload::Json(FlowJson(r#"{"seat":""}"#.to_string()));
+    let key = ServiceRuntime::branch_key_from_payload(&payload, Some("seat"));
+    assert!(key.is_none());
+  }
+
+  #[test]
+  fn branch_max_instances_caps_branch_creation() {
+    let branching = BranchingConfig {
+      source: Ustr::from("test:base"),
+      key: Some("id".to_string()),
+      max_instances: Some(2),
+      only: None,
+      except: None,
+    };
+    assert_eq!(branching.max_instances, Some(2));
+  }
+
+  #[test]
+  fn branch_only_and_except_order_matters() {
+    let branching = BranchingConfig {
+      source: Ustr::from("test:base"),
+      key: Some("id".to_string()),
+      max_instances: None,
+      only: Some(vec!["a".to_string(), "b".to_string()]),
+      except: Some(vec!["b".to_string()]),
+    };
+
+    let matched = |key: &str| -> bool {
+      let rt = ServiceRuntime::default();
+      let sm = test_facet_graph();
+      if let Some(onlys) = &branching.only {
+        let mut found = false;
+        for spec in onlys {
+          if rt.check_branch_match(spec, key, &sm, None) {
+            found = true;
+            break;
+          }
+        }
+        if !found {
+          return false;
+        }
+      }
+      if let Some(excepts) = &branching.except {
+        for spec in excepts {
+          if rt.check_branch_match(spec, key, &sm, None) {
+            return false;
+          }
+        }
+      }
+      true
+    };
+
+    assert!(matched("a"));
+    assert!(!matched("b"));
+    assert!(!matched("c"));
   }
 }

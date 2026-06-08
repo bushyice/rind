@@ -92,15 +92,15 @@ pub fn collect_plugins<P: AsRef<Path>>(
         }
       };
 
-      let version = match lib.get::<u32>(b"PLUGIN_ABI_VERSION") {
-        Ok(f) => *f,
-        Err(_) => 1,
-      };
+      let version = lib
+        .get::<u32>(b"PLUGIN_ABI_VERSION")
+        .map(|v| *v)
+        .unwrap_or(1);
 
-      let ext = match lib.get::<unsafe extern "Rust" fn(&ExtensionManager)>(b"extension_entry") {
-        Ok(f) => Some(*f),
-        Err(_) => None,
-      };
+      let ext = lib
+        .get::<unsafe extern "Rust" fn(&ExtensionManager)>(b"extension_entry")
+        .map(|f| *f)
+        .ok();
 
       let get_plugin: Symbol<unsafe extern "Rust" fn() -> *mut dyn Plugin> =
         match lib.get(b"get_plugin") {
