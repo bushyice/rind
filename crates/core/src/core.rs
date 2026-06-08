@@ -13,9 +13,10 @@ pub mod persistence;
 pub mod registry;
 pub mod resources;
 pub mod runtime;
-pub mod types;
 pub mod user;
 pub mod utils;
+
+pub use rind_common::types;
 
 pub mod prelude {
   pub use super::*;

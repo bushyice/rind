@@ -9,6 +9,7 @@ path = "src/core.rs"
 
 [dependencies]
 rind-macros = { path = "../macros" }
+rind-common = { path = "../common" }
 toml.workspace = true
 serde.workspace = true
 once_cell.workspace = true
@@ -19,7 +20,6 @@ crc32fast.workspace = true
 serde_json.workspace = true
 bitflags.workspace = true
 sha-crypt = "0.5.0"
-strumbra.workspace = true
 
 [[bench]]
 name = "dispatch"

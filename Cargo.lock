@@ -372,11 +372,11 @@ dependencies = [
 
 [[package]]
 name = "display"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
+ "rind-common",
  "rind-core",
  "rind-plugins",
- "rind-plugins-common",
  "serde",
 ]
 
@@ -589,7 +589,7 @@ dependencies = [
 
 [[package]]
 name = "initramfs"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "libc",
  "nix",
@@ -732,7 +732,7 @@ dependencies = [
 
 [[package]]
 name = "networking"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "rind-core",
  "rind-flow",
@@ -958,20 +958,24 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "rind-api"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
- "libc",
- "libloading",
- "nix",
- "once_cell",
- "rind-flow",
  "rind-ipc",
  "serde_json",
 ]
 
 [[package]]
+name = "rind-api-sys"
+version = "0.0.1"
+dependencies = [
+ "libc",
+ "once_cell",
+ "rind-api",
+]
+
+[[package]]
 name = "rind-cfg"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "rind-core",
  "rind-flow",
@@ -979,12 +983,12 @@ dependencies = [
  "rind-primitives",
  "rind-services",
  "serde_json",
- "toml 1.0.6+spec-1.1.0",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
 name = "rind-cli"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bincode-next",
  "cc",
@@ -1002,8 +1006,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rind-common"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "strumbra",
+]
+
+[[package]]
 name = "rind-core"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bincode-next",
  "bitflags",
@@ -1012,29 +1024,29 @@ dependencies = [
  "libc",
  "nix",
  "once_cell",
+ "rind-common",
  "rind-macros",
  "serde",
  "serde_json",
  "sha-crypt",
- "strumbra",
- "toml 1.0.6+spec-1.1.0",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
 name = "rind-flow"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "rind-core",
  "rind-ipc",
  "rind-primitives",
  "serde",
  "serde_json",
- "toml 1.0.6+spec-1.1.0",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
 name = "rind-init"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "backoff",
  "libc",
@@ -1048,22 +1060,23 @@ dependencies = [
 
 [[package]]
 name = "rind-ipc"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "criterion",
  "libc",
  "nix",
+ "rind-common",
  "rind-core",
  "rmp-serde",
  "serde",
  "serde_bytes",
  "serde_json",
- "toml 1.0.6+spec-1.1.0",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
 name = "rind-macros"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1072,7 +1085,7 @@ dependencies = [
 
 [[package]]
 name = "rind-plugins"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "bitflags",
  "libc",
@@ -1081,28 +1094,20 @@ dependencies = [
 ]
 
 [[package]]
-name = "rind-plugins-common"
-version = "0.1.0"
-dependencies = [
- "rind-core",
- "serde",
-]
-
-[[package]]
 name = "rind-primitives"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "libc",
  "nix",
  "rind-core",
  "rind-ipc",
  "serde",
- "toml 1.0.6+spec-1.1.0",
+ "toml 0.9.12+spec-1.1.0",
 ]
 
 [[package]]
 name = "rind-services"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "libc",
  "nix",
@@ -1324,7 +1329,7 @@ dependencies = [
 
 [[package]]
 name = "systemd-loader"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "rind-cfg",
  "rind-core",
@@ -1455,13 +1460,13 @@ checksum = "ab16f14aed21ee8bfd8ec22513f7287cd4a91aa92e44edfe2c17ddd004e92607"
 
 [[package]]
 name = "tty-plugin"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
+ "rind-common",
  "rind-core",
  "rind-flow",
  "rind-ipc",
  "rind-plugins",
- "rind-plugins-common",
  "rind-primitives",
  "serde",
 ]

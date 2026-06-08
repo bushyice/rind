@@ -1,9 +1,9 @@
+use rind_core::prelude::Ustr;
 use rind_flow::triggers::{
-  subset_match, match_operation, json_branch_key, merge_json, branch_target_key, branch_source_key,
-  map_json_payload,
+  branch_source_key, branch_target_key, json_branch_key, map_json_payload, match_operation,
+  merge_json, subset_match,
 };
 use rind_flow::{FlowMatchOperation, FlowPayload};
-use rind_core::prelude::Ustr;
 
 #[test]
 fn subset_match_nested() {
@@ -64,6 +64,29 @@ fn map_json_payload_renames_keys() {
   );
   let specs = vec![Ustr::from("tty:seat")];
   let mapped = map_json_payload(&specs, &payload).expect("should map");
+  let FlowPayload::Json(j) = mapped else {
+    panic!("expected json");
+  };
+  let obj = j.into_json();
+  assert_eq!(obj.get("tty"), Some(&serde_json::json!("tty1")));
+  assert!(obj.get("seat").is_none());
+}
+
+#[test]
+fn map_json_payload_wrong_spec_returns_none() {
+  let payload = FlowPayload::Json(serde_json::json!({"seat": "tty1"}).to_string().into());
+  let specs = vec![Ustr::from("seat:tty")];
+  assert!(
+    map_json_payload(&specs, &payload).is_none(),
+    "seat:tty spec should fail when source has 'seat' not 'tty'"
+  );
+}
+
+#[test]
+fn map_json_payload_correct_spec_succeeds() {
+  let payload = FlowPayload::Json(serde_json::json!({"seat": "tty1"}).to_string().into());
+  let specs = vec![Ustr::from("tty:seat")];
+  let mapped = map_json_payload(&specs, &payload).expect("tty:seat should map seat->tty");
   let FlowPayload::Json(j) = mapped else {
     panic!("expected json");
   };

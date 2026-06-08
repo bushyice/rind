@@ -4,6 +4,7 @@ use std::{
   sync::Arc,
 };
 
+use rind_common::plugins::{SeatPayload, TTYEvent};
 use rind_core::prelude::*;
 use rind_core::reexports::{nix::sys::epoll::EpollFlags, *};
 use rind_core::reexports::{
@@ -17,7 +18,6 @@ use rind_flow::{
 };
 use rind_ipc::{Message, recv::IpcSourcemap};
 use rind_plugins::prelude::*;
-use rind_plugins_common::{SeatPayload, TTYEvent};
 use rind_primitives::mounts::MountMetadata;
 
 #[cfg(feature = "seatd")]

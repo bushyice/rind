@@ -1,13 +1,13 @@
 [package]
-name = "rind-plugins-common"
+name = "rind-common"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-
+description = "commons"
 
 [lib]
 path = "src/common.rs"
 
 [dependencies]
 serde.workspace = true
-rind-core = { path = "../core" }
+strumbra.workspace = true

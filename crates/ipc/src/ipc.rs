@@ -1,19 +1,24 @@
 pub mod payloads;
 #[cfg(feature = "server")]
 pub mod recv;
+#[cfg(feature = "server")]
 pub mod send;
+#[cfg(feature = "server")]
 pub mod ser;
+#[cfg(feature = "server")]
 pub mod shm;
 
+#[cfg(feature = "server")]
 use std::{io::stdout, os::unix::net::UnixStream};
 
-use rind_core::prelude::Ustr;
+use rind_common::types::Ustr;
 pub const IPC_MAGIC: [u8; 4] = *b"RIND";
 pub const MAX_IPC_MESSAGE_SIZE: usize = 64 * 1024 * 1024; // 64MB
 
 use serde::{Deserialize, Serialize};
 use serde_json;
 
+#[cfg(feature = "server")]
 use crate::{
   ser::{deser_from_vec, ser_to_vec},
   shm::{ShmChannel, ShmStream},
@@ -171,6 +176,7 @@ pub struct TransportMessage {
   pub action: TransportMessageAction,
 }
 
+#[cfg(feature = "server")]
 impl TransportMessage {
   pub fn as_bytes(&self) -> Vec<u8> {
     ser_to_vec(self, true)
@@ -234,6 +240,7 @@ pub struct Message {
   pub from_pid: Option<i32>,
 }
 
+#[cfg(feature = "server")]
 impl Message {
   pub fn from_type(t: MessageType) -> Self {
     Self {
@@ -355,24 +362,28 @@ impl Message {
   }
 }
 
+#[cfg(feature = "server")]
 impl From<MessageType> for Message {
   fn from(value: MessageType) -> Self {
     Self::from_type(value)
   }
 }
 
+#[cfg(feature = "server")]
 impl From<&str> for Message {
   fn from(value: &str) -> Self {
     Self::from_action(value)
   }
 }
 
+#[cfg(feature = "server")]
 pub enum TransportStream {
   Uds(UnixStream),
   Shm(ShmStream),
   ShmChan(ShmChannel),
 }
 
+#[cfg(feature = "server")]
 impl TransportStream {
   pub fn as_uds(self) -> Option<UnixStream> {
     match self {
@@ -400,6 +411,7 @@ impl TransportStream {
   }
 }
 
+#[cfg(feature = "server")]
 impl std::io::Read for TransportStream {
   fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
     match self {
@@ -410,6 +422,7 @@ impl std::io::Read for TransportStream {
   }
 }
 
+#[cfg(feature = "server")]
 impl std::io::Write for TransportStream {
   fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
     match self {
@@ -433,5 +446,3 @@ impl std::io::Write for TransportStream {
     }
   }
 }
-
-

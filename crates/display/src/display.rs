@@ -3,10 +3,10 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::{fs::OpenOptions, io::Write, os::fd::AsRawFd};
 
+use rind_common::plugins::SeatPayload;
 use rind_core::prelude::*;
 use rind_core::reexports::{libc, serde_json};
 use rind_plugins::prelude::*;
-use rind_plugins_common::SeatPayload;
 
 plugin_extensible!(EXTENSIONS);
 

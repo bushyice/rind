@@ -54,6 +54,17 @@ payload = "json"
 after = [{ facet = "test:base" }]
 branch = ["id"]
 
+[[facet]]
+name = "user_session"
+payload = "json"
+branch = ["seat"]
+
+[[facet]]
+name = "niri_active"
+payload = "json"
+after = [{ facet = "test:user_session" }]
+branch = ["tty:seat"]
+
 [[timer]]
 name = "tick"
 duration = "5s"
@@ -659,6 +670,71 @@ fn race_like_dispatch_churn_keeps_runtime_consistent() {
       );
     })
     .expect("post-churn assertions should succeed");
+
+  let _ = runtime.send(RuntimeCommand::Stop);
+}
+
+#[test]
+fn facet_transcendence_with_branch_mapping() {
+  let (runtime, metadata, mut resources, context_id) = setup_runtime_with_metadata();
+
+  runtime
+    .dispatch("flow", "bootstrap", Default::default(), context_id)
+    .expect("flow bootstrap should queue");
+  runtime
+    .dispatch("services", "bootstrap", Default::default(), context_id)
+    .expect("services bootstrap should queue");
+  runtime
+    .dispatch("events", "watch_events", Default::default(), context_id)
+    .expect("watch events should queue");
+  flush(&runtime, context_id, &metadata, &mut resources);
+
+  runtime
+    .dispatch(
+      "flow",
+      "set_facet",
+      FlowRuntimePayload::new("test:user_session")
+        .payload(serde_json::json!({"seat": "tty1", "username": "makano"}))
+        .into(),
+      context_id,
+    )
+    .expect("set user_session should queue");
+  flush(&runtime, context_id, &metadata, &mut resources);
+
+  runtime
+    .with_instances(|instances| {
+      let registry = InstanceRegistry::new(&metadata, instances);
+      let sm = registry
+        .singleton::<FacetGraph>(FacetGraph::KEY)
+        .expect("state machine should exist");
+      assert!(
+        sm.facets.contains_key(&Ustr::from("test:user_session")),
+        "user_session should be in graph"
+      );
+      assert!(
+        sm.facets.contains_key(&Ustr::from("test:niri_active")),
+        "niri_active should be transcended from user_session: facets={:?}",
+        sm.facets.keys().collect::<Vec<_>>()
+      );
+      if let Some(branches) = sm.facets.get(&Ustr::from("test:niri_active")) {
+        let first = branches.first().expect("niri_active should have a branch");
+        if let rind_ipc::FlowPayload::Json(j) = &first.payload {
+          let obj = j.into_json();
+          assert_eq!(
+            obj.get("tty"),
+            Some(&serde_json::json!("tty1")),
+            "niri_active payload should map seat->tty: {obj}"
+          );
+          assert!(
+            obj.get("seat").is_none(),
+            "niri_active payload should not have seat key: {obj}"
+          );
+        } else {
+          panic!("niri_active payload should be JSON");
+        }
+      }
+    })
+    .expect("transcendence branch mapping assertions should succeed");
 
   let _ = runtime.send(RuntimeCommand::Stop);
 }

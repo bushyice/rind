@@ -1,4 +1,4 @@
-use rind_core::types::Ustr;
+use rind_common::types::Ustr;
 
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct ListPayload {

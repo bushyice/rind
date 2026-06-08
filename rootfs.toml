@@ -61,7 +61,7 @@ files = [
   "examples/etc:/etc",
   "man:/usr/share/man/man1",
   "examples/fallback.toml:/etc/fallback.toml",
-  "crates/api/examples/api.c:/home/makano/api.c",
+  "crates/api-sys/examples/api.c:/home/makano/api.c",
   "examples/units-makano:/home/makano/.local/share/rind/units",
 
   # glibc
@@ -190,7 +190,7 @@ install = [
 
 # C header files and static libs
 libs = [
-  "Crind-api:rind:crates/api"
+  "Crind-api-sys:rind:crates/api-sys"
 ]
 
 # Busybox Setup

@@ -34,5 +34,5 @@ branching = { source = "tr_demo:niri_active", key = "tty", max-instances = 16 }
 [[facet]]
 name = "niri_active"
 payload = "json"
-branch = ["seat:tty"]
+branch = ["tty:seat"]
 after = ["rind:user_session"]

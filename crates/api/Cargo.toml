@@ -3,16 +3,12 @@ name = "rind-api"
 version.workspace = true
 edition.workspace = true
 license = "MPL-2.0"
+description = "`rind` api"
+readme = "README.md"
 
 [lib]
 path = "src/api.rs"
-crate-type = ["cdylib"]
 
 [dependencies]
-libloading.workspace = true
-once_cell.workspace = true
-rind-ipc = { path = "../ipc" }
-rind-flow = { path = "../flow" }
+rind-ipc = { path = "../ipc", default-features = false, features = [] }
 serde_json.workspace = true
-libc.workspace = true
-nix.workspace = true

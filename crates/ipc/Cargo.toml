@@ -3,26 +3,28 @@ name = "rind-ipc"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "ipc type declarations"
 
 [lib]
 path = "src/ipc.rs"
+
+[features]
+default = ["server"]
+
+server = ["rind-core"]
 
 [dependencies]
 libc.workspace = true
 serde.workspace = true
 nix.workspace = true
 toml.workspace = true
-rind-core = { path = "../core" }
+rind-core = { version = "*", path = "../core", optional = true }
+rind-common = { version = "*", path = "../common" }
 
 serde_bytes = "0.11"
 serde_json.workspace = true
 rmp-serde = "1.3"
 
-
-[features]
-default = ["server"]
-
-server = []
 
 [[bench]]
 name = "transports"

@@ -1,11 +1,11 @@
 use std::{
-  collections::BTreeSet,
-  collections::HashMap,
+  collections::{BTreeSet, HashMap},
   ffi::CString,
   fs,
   io::{Read, Seek, SeekFrom},
   path::{Path, PathBuf},
   process::{Command, exit},
+  str::FromStr,
 };
 
 use std::os::unix::fs::MetadataExt;
@@ -536,6 +536,11 @@ fn prepare_rootfs(profile: &Profile, fs_ext4: &mut Ext4Fs) {
       }
       let libname = format!(
         "lib{}.{}",
+        parts[0].trim_end_matches("-sys").replace('-', "_"),
+        if is_so { "so" } else { "a" }
+      );
+      let srclibname = format!(
+        "lib{}.{}",
         parts[0].replace('-', "_"),
         if is_so { "so" } else { "a" }
       );
@@ -545,9 +550,37 @@ fn prepare_rootfs(profile: &Profile, fs_ext4: &mut Ext4Fs) {
           .clone()
           .unwrap_or("target/x86_64-unknown-linux-musl/release".to_string()),
       )
-      .join(&libname);
+      .join(&srclibname);
       copy_host_path_to_ext4(fs_ext4, &src, &format!("/usr/lib/{}", libname), &disk_perms);
-      let mut buf = Vec::new();
+      let mut buf = String::from_str(
+        r#"
+        /*
+         * Copyright (c) 2026 rind contributors
+         *
+         * This header is provided under the MIT License.
+         *
+         * Permission is hereby granted, free of charge, to any person obtaining a copy
+         * of this software and associated documentation files (the "Software"), to deal
+         * in the Software without restriction, including without limitation the rights
+         * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+         * copies of the Software, and to permit persons to whom the Software is
+         * furnished to do so, subject to the following conditions:
+         *
+         * The above copyright notice and this permission notice shall be included in all
+         * copies or substantial portions of the Software.
+         *
+         * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+         * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+         * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+         * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+         * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+         * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+         * SOFTWARE.
+         */
+        "#,
+      )
+      .unwrap()
+      .into_bytes();
       let config = cbindgen::Config {
         enumeration: cbindgen::EnumConfig {
           prefix_with_name: true,
@@ -564,6 +597,7 @@ fn prepare_rootfs(profile: &Profile, fs_ext4: &mut Ext4Fs) {
         .generate()
         .unwrap()
         .write(&mut buf);
+      println!("[*] Generating lib: {}.h -> {}", parts[1], libname);
       if let Ok(mut f) = fs_ext4.open(
         &format!("/usr/include/{}.h", parts[1]),
         OpenFlags::CREATE | OpenFlags::WRITE | OpenFlags::TRUNCATE,
