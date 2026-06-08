@@ -10,5 +10,5 @@ readme = "README.md"
 path = "src/api.rs"
 
 [dependencies]
-rind-ipc = { path = "../ipc", default-features = false, features = [] }
+rind-ipc = { path = "../ipc" }
 serde_json.workspace = true
