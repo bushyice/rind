@@ -108,6 +108,10 @@ impl PermissionStore {
     }
   }
 
+  pub fn exists(&self, perm: &Ustr) -> bool {
+    self.by_name.lock().unwrap().contains_key(perm)
+  }
+
   pub fn user_has(&self, uid: u32, perm: PermissionId) -> bool {
     // should this be?
     if uid == 0 || perm.0 == 0 {
@@ -411,5 +415,3 @@ pub fn permission_path() -> PathBuf {
     .map(PathBuf::from)
     .unwrap_or_else(|_| PathBuf::from("/etc/rperms"))
 }
-
-

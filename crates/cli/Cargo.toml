@@ -59,7 +59,7 @@ no-sysinvoke = []
 
 [dependencies]
 clap.workspace = true
-rind-ipc = { path = "../ipc", default-features = false, features = [] }
+rind-ipc = { path = "../ipc" }
 rind-core = { path = "../core" }
 libc.workspace = true
 nix.workspace = true

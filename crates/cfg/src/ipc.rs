@@ -711,6 +711,10 @@ pub fn handle_ipc_reload_units(
   _dispatch: &RuntimeDispatcher,
   _log: &LogHandle,
 ) -> Result<Message, CoreError> {
+  if msg.parse_payload::<bool>().unwrap_or(false) {
+    *RELOAD_STATIC.lock().unwrap() = true;
+  }
+
   queue_lifecycle_action(
     msg,
     ctx,

@@ -28,6 +28,10 @@ impl UnitsOrchestrator {
   }
 
   fn load_permissions(&self, permissions: &PermissionStore) -> Result<Void, CoreError> {
+    if permissions.exists(&"Login".to_ustr()) {
+      return Ok(Void);
+    }
+
     permissions
       .reg_perm(PERM_LOGIN, "Login")?
       .reg_perm(PERM_SYSTEM_SERVICES, "SystemServices")?

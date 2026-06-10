@@ -1,7 +1,7 @@
 use std::{
   any::{Any, TypeId},
   collections::HashMap,
-  sync::Arc,
+  sync::{Arc, Mutex},
 };
 
 use crate::{
@@ -14,6 +14,8 @@ use crate::{
 };
 
 use crate::types::Ustr;
+
+pub static RELOAD_STATIC: Mutex<bool> = Mutex::new(false);
 
 #[derive(Default)]
 pub struct MetadataRegistry {
@@ -641,5 +643,3 @@ impl_handle_tuple!(A, B, C);
 impl_handle_tuple!(A, B, C, D);
 impl_handle_tuple!(A, B, C, D, E);
 impl_handle_tuple!(A, B, C, D, E, F);
-
-

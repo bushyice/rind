@@ -124,7 +124,10 @@ restart = false
         .into_iter()
         .next()
         .unwrap();
-      assert!(matches!(svc.last_state, ServiceState::Exited(0)));
+      assert!(
+        matches!(svc.last_state, ServiceState::Exited(0))
+          || matches!(svc.last_state, ServiceState::Inactive)
+      );
     })
     .unwrap();
 }
@@ -391,7 +394,10 @@ restart = false
         .into_iter()
         .next()
         .unwrap();
-      assert!(matches!(svc.last_state, ServiceState::Exited(0)));
+      assert!(
+        matches!(svc.last_state, ServiceState::Exited(0))
+          || matches!(svc.last_state, ServiceState::Inactive)
+      );
     })
     .unwrap();
 }

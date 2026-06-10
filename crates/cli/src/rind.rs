@@ -29,7 +29,10 @@ struct Cli {
 
 #[derive(clap::Subcommand)]
 enum Commands {
-  ReloadUnits,
+  ReloadUnits {
+    #[arg(short = 'a', long = "static")]
+    all: bool,
+  },
   SoftReboot,
   Reboot,
   Shutdown,
@@ -124,8 +127,8 @@ fn main() {
 
       panic!("exec failed: {err}");
     }
-    Commands::ReloadUnits => {
-      handle_send!("reload_units", &());
+    Commands::ReloadUnits { all } => {
+      handle_send!("reload_units", &all);
     }
     Commands::SoftReboot => {
       handle_send!("soft_reboot", &());

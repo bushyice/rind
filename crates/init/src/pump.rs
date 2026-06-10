@@ -308,9 +308,18 @@ fn process_lifecycle_action(
     LifecycleAction::SoftReboot => {
       try_stop_services(boot, metadata, runtime, resources, false);
       terminate_all_processes();
-      metadata.remove_metadata("static");
-      let _ = boot.run(metadata, instances, runtime, resources);
-      true
+      let _ = runtime.send(RuntimeCommand::Stop);
+      unsafe {
+        libc::sync();
+        let exe = std::env::current_exe().expect("failed to get current exe");
+        let exe_c =
+          std::ffi::CString::new(exe.as_os_str().as_encoded_bytes()).expect("exe path has null");
+        let argv0 = std::env::args().next().unwrap_or_default();
+        let argv0_c = std::ffi::CString::new(argv0).expect("argv0 has null");
+        let argv: [*const libc::c_char; 2] = [argv0_c.as_ptr(), std::ptr::null()];
+        libc::execv(exe_c.as_ptr(), argv.as_ptr());
+        libc::_exit(1);
+      }
     }
     LifecycleAction::Reboot => {
       try_stop_services(boot, metadata, runtime, resources, false);

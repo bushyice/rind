@@ -3,7 +3,7 @@ use crate::error::CoreError;
 use crate::logging::{LogConfig, LogHandle, start_logger};
 use crate::notifier::Notifier;
 use crate::orchestrator::{BootCycle, BootPhase, OrchestratorContext, OrchestratorStore};
-use crate::prelude::Resources;
+use crate::prelude::{RELOAD_STATIC, Resources};
 use crate::registry::{InstanceMap, MetadataRegistry};
 use crate::runtime::{RuntimeHandle, RuntimePayload, start_runtime};
 use crate::types::Void;
@@ -147,10 +147,16 @@ impl BootEngine {
     runtime: &RuntimeHandle,
     resources: &mut Resources,
   ) -> Result<Void, CoreError> {
-    let to_remove = metadata
-      .metadata_names()
-      .filter(|name| name.as_str() != "static")
-      .collect::<Vec<_>>();
+    let mut reload_static = RELOAD_STATIC.lock().unwrap();
+    let to_remove = if *reload_static {
+      *reload_static = false;
+      metadata.metadata_names().collect::<Vec<_>>()
+    } else {
+      metadata
+        .metadata_names()
+        .filter(|name| name.as_str() != "static")
+        .collect::<Vec<_>>()
+    };
     let types = metadata.indexes.keys().cloned().collect::<Vec<_>>();
     for name in to_remove {
       let context_id = self.primary_context_id().unwrap_or(0);
@@ -194,5 +200,3 @@ impl BootEngine {
     Ok(Void)
   }
 }
-
-
