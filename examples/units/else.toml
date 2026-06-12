@@ -45,3 +45,17 @@ payload = "json"
 name = "timeout_four"
 duration = "5s"
 finish = [{ service = "else:four", stop = true }]
+
+[[socket]]
+name = "some-sock"
+type = "uds"
+lifecycle = "owned"
+listen = "/var/sock/asockuseless"
+owner = "else:four"
+permissions = ["any"]
+start-on = ["rind:up!"]
+on-start = [{ facet = "else:soc_up!" }]
+
+[[facet]]
+name = "soc_up!"
+payload = "none"

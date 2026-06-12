@@ -64,3 +64,10 @@ run.exec = "/bin/shm"
 transport = "shm"
 start-on = [{ impulse = "rind:boot" }]
 restart = false
+
+[[service]]
+name = "test-soc-up"
+run.exec = "/bin/sh"
+run.args = ["-c", "echo started by soc && sleep 20"]
+start-on = [{ facet = "else:soc_up!" }]
+restart = false

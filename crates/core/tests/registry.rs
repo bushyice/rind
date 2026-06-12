@@ -1,5 +1,5 @@
-use rind_core::prelude::{Metadata, MetadataRegistry, Model, NamedItem, Ustr};
 use rind_core::prelude::rslvns;
+use rind_core::prelude::{Metadata, MetadataRegistry, Model, NamedItem, Ustr};
 use rind_macros::model;
 
 #[model(meta_name = name, meta_fields(name, run))]

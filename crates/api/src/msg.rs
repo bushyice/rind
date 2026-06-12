@@ -1,8 +1,8 @@
-use rind_ipc::{
-  FlowJson, FlowPayload, Message as IpcMessage, MessageType as IpcMessageType,
-  TransportMessage, TransportMessageAction, TransportMessageType,
-};
 use rind_ipc::ser::{deser_string, ser_to_vec};
+use rind_ipc::{
+  FlowJson, FlowPayload, Message as IpcMessage, MessageType as IpcMessageType, TransportMessage,
+  TransportMessageAction, TransportMessageType,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MessageAction {

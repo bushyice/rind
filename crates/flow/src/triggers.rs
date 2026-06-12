@@ -180,6 +180,8 @@ pub fn trigger_events(
           resolved_triggers.push(trigger.clone());
         }
       }
+    } else {
+      resolved_triggers.push(trigger.clone());
     }
 
     for resolved_trigger in resolved_triggers {
@@ -430,5 +432,3 @@ fn json_subset(reference: &serde_json::Value, thing: &serde_json::Value) -> bool
     (r, t) => r == t,
   }
 }
-
-

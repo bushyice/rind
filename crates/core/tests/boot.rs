@@ -1,15 +1,15 @@
-use rind_core::prelude::{LogConfig, LogHandle, RuntimeCommand, start_logger, start_runtime};
+use rind_core::boot::BootEngine;
 use rind_core::context::{RuntimeContext, ScopeBuilder};
 use rind_core::error::CoreError;
 use rind_core::metadata::Metadata;
 use rind_core::orchestrator::{
   BootCycle, BootPhase, Orchestrator, OrchestratorContext, OrchestratorWhen,
 };
+use rind_core::prelude::Resources;
+use rind_core::prelude::{LogConfig, LogHandle, RuntimeCommand, start_logger, start_runtime};
 use rind_core::registry::{InstanceMap, MetadataRegistry};
 use rind_core::runtime::{Runtime, RuntimeDispatcher, RuntimePayload};
 use rind_core::types::Void;
-use rind_core::boot::BootEngine;
-use rind_core::prelude::Resources;
 
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
@@ -86,10 +86,11 @@ impl Runtime for ScopeReaderRuntime {
     _log: &LogHandle,
   ) -> Result<Option<RuntimePayload>, CoreError> {
     if action == "boot" {
-      let value =
-        ctx.scope.get::<String>().cloned().ok_or_else(|| {
-          CoreError::InvalidState("missing String in runtime scope".to_string())
-        })?;
+      let value = ctx
+        .scope
+        .get::<String>()
+        .cloned()
+        .ok_or_else(|| CoreError::InvalidState("missing String in runtime scope".to_string()))?;
       let _ = self.tx.send(value);
     }
     Ok(None)

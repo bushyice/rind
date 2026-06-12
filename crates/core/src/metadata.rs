@@ -25,6 +25,8 @@ pub struct MetadataDescriptor {
   pub r#type: Option<Ustr>,
   #[serde(default)]
   pub tags: Vec<Ustr>,
+  #[serde(default)]
+  pub options: HashMap<Ustr, String>,
 }
 
 type ParserFn = Box<dyn Fn(Value) -> CoreResult<Box<dyn Any>> + Send + Sync>;
@@ -205,5 +207,3 @@ impl Metadata {
     self.values.keys().cloned()
   }
 }
-
-

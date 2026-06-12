@@ -1,5 +1,5 @@
-use std::time::Duration;
 use rind_services::parse_duration;
+use std::time::Duration;
 
 #[test]
 fn parse_duration_supports_units_and_raw_seconds() {

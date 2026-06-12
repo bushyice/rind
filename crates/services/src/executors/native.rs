@@ -1,11 +1,12 @@
 use crate::executors::{Executor, ExecutorContext, InstanceHandle, ProcessHandle};
-use crate::namespaces;
+use crate::{ServiceType, namespaces};
 use rind_core::prelude::*;
 use rind_core::utils::read_env_file;
 use std::os::fd::RawFd;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 use std::process::Stdio;
+use std::time::{Duration, Instant};
 
 pub struct NativeExecutor;
 
@@ -69,7 +70,7 @@ impl Executor for NativeExecutor {
         envs,
         working_dir,
         uid_gid,
-        pre_exec_fds,
+        pre_exec_fds.into_iter().collect::<Vec<_>>(),
         ctx.isolation,
         ctx.cgroup_path,
         join_namespace_fds,
@@ -96,10 +97,29 @@ impl Executor for NativeExecutor {
       cmd.gid(gid);
     }
 
+    // if !envs.is_empty() {
+    //   cmd.envs(envs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+    // }
+
     unsafe {
       cmd.pre_exec(move || {
         libc::setsid();
         namespaces::apply_namespace_setup(namespaces.as_ref())?;
+
+        for (k, v) in &envs {
+          let ck = std::ffi::CString::new(k.as_str()).unwrap();
+          let cv = std::ffi::CString::new(v.as_str()).unwrap();
+          if libc::setenv(ck.as_ptr(), cv.as_ptr(), 1) != 0 {
+            return Err(std::io::Error::last_os_error());
+          }
+        }
+
+        let pid_cstr = std::ffi::CString::new(libc::getpid().to_string()).unwrap();
+        let listen_pid_key = std::ffi::CString::new("LISTEN_PID").unwrap();
+        if libc::setenv(listen_pid_key.as_ptr(), pid_cstr.as_ptr(), 1) != 0 {
+          return Err(std::io::Error::last_os_error());
+        }
+
         for (idx, fd) in pre_exec_fds.iter().enumerate() {
           let target_fd = (3 + idx) as RawFd;
           if *fd != target_fd && libc::dup2(*fd, target_fd) < 0 {
@@ -114,11 +134,50 @@ impl Executor for NativeExecutor {
       });
     }
 
-    if !envs.is_empty() {
-      cmd.envs(envs.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-    }
+    let mut child = cmd.spawn()?;
 
-    let child = cmd.spawn()?;
+    if ctx.service.metadata.r#type == ServiceType::Wait {
+      let timeout = Duration::from_secs(
+        ctx
+          .service
+          .metadata
+          .options
+          .as_ref()
+          .and_then(|x| x.get("timeout").cloned())
+          .or_else(|| std::env::var("RIND_SERVICE_TIMEOUT").ok())
+          .and_then(|x| x.parse::<u64>().ok())
+          .unwrap_or(30),
+      );
+      let start = Instant::now();
+      loop {
+        match child.try_wait() {
+          Ok(Some(_)) => break,
+          Ok(None) => {
+            if start.elapsed() >= timeout {
+              child.kill()?;
+              child.wait()?;
+              return Err(CoreError::custom(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!(
+                  "Wait service '{}' timed out after {}s",
+                  ctx.service.metadata.name,
+                  timeout.as_secs()
+                ),
+              )));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+          }
+          Err(e) => {
+            return Err(CoreError::custom(std::io::Error::new(
+              std::io::ErrorKind::Other,
+              format!("Wait service '{}' error: {e}", ctx.service.metadata.name),
+            )));
+          }
+        }
+      }
+    }
+    println!("Child actual pid: {}", child.id());
+
     Ok(Box::new(ProcessHandle(child)))
   }
 }

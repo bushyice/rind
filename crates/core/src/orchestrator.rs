@@ -218,5 +218,3 @@ impl OrchestratorStore {
 fn conflicting_cycles(cycles: &[BootCycle]) -> bool {
   cycles.contains(&BootCycle::Runtime) && cycles.contains(&BootCycle::PostRuntime)
 }
-
-

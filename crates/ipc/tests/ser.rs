@@ -1,5 +1,5 @@
 use rind_ipc::ser::{
-  SerializeSerialized, UnitSerialized, ServiceSerialized, UnitItemsSerialized, serialize_many,
+  SerializeSerialized, ServiceSerialized, UnitItemsSerialized, UnitSerialized, serialize_many,
 };
 
 #[test]

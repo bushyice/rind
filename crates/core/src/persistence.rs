@@ -172,5 +172,3 @@ fn sync_parent_dir(path: &Path) -> Result<Void, CoreError> {
     .sync_all()
     .map_err(|e| CoreError::PersistenceError(format!("sync parent dir failed: {e}")))
 }
-
-

@@ -420,6 +420,16 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
     sha_crypt::sha512_check(password, hash).is_ok()
   } else if hash.starts_with("$5$") {
     sha_crypt::sha256_check(password, hash).is_ok()
+  } else if hash.starts_with("$y$") {
+    use std::str::FromStr;
+    use yescrypt::{PasswordHash, PasswordVerifier, Yescrypt};
+    let parsed = PasswordHash::from_str(hash);
+    match parsed {
+      Ok(parsed) => Yescrypt::default()
+        .verify_password(password.as_bytes(), &parsed)
+        .is_ok(),
+      Err(_) => false,
+    }
   } else {
     false
   }
@@ -646,5 +656,3 @@ impl PamHandle {
     lockouts.remove(username);
   }
 }
-
-

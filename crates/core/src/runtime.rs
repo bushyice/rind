@@ -165,6 +165,7 @@ struct RuntimeEngine {
   instances: InstanceMap,
   pub notifier: Option<Notifier>,
   stopped: bool,
+  event_bus: Option<EventBus>,
 }
 
 struct RuntimeContextState {
@@ -183,11 +184,15 @@ impl RuntimeHandle {
     match command {
       RuntimeCommand::RegisterScopes { context_id, scopes } => {
         let notifier = inner.notifier.clone();
+        let event_bus = inner
+          .event_bus
+          .get_or_insert_with(|| EventBus::new(notifier))
+          .clone();
         inner.contexts.insert(
           context_id,
           RuntimeContextState {
             scopes,
-            event_bus: EventBus::new(notifier),
+            event_bus,
             lifecycle: LifecycleQueue::default(),
           },
         );
@@ -419,6 +424,7 @@ impl RuntimeHandle {
         instances: InstanceMap::default(),
         notifier: None,
         stopped: false,
+        event_bus: None,
       })),
     }
   }
@@ -440,9 +446,10 @@ pub fn start_runtime(
       runtimes: map,
       contexts: HashMap::new(),
       queue: VecDeque::new(),
-      instances: InstanceMap::default(),
-      notifier,
-      stopped: false,
-    })),
+        instances: InstanceMap::default(),
+        notifier,
+        stopped: false,
+        event_bus: None,
+      })),
   }
 }

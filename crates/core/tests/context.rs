@@ -1,4 +1,4 @@
-use rind_core::prelude::{ScopeBuilder, RuntimeScope};
+use rind_core::prelude::{RuntimeScope, ScopeBuilder};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 

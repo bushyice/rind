@@ -253,6 +253,8 @@ impl SeatRuntime {
   }
 
   fn bootstrap() {
+    setup_ttys()?;
+
     let current_tty = fs::read_to_string("/sys/class/tty/tty0/active")?
       .trim()
       .to_string();
@@ -634,49 +636,63 @@ fn inject_builtin(name: &str, mut metadata: Metadata) -> CoreResult<Metadata> {
   }
 }
 
+pub static TTY_SETUP: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
+
+pub fn setup_ttys() -> CoreResult<Void> {
+  let mut setup = TTY_SETUP.lock().unwrap();
+  if *setup {
+    return Ok(Void);
+  }
+  let mut tty_count = 0;
+
+  let limit = std::env::var("RIND_ACTIVATE_TTYS")
+    .ok()
+    .and_then(|v| v.parse::<usize>().ok())
+    .unwrap_or(7);
+
+  if limit == 0 {
+    return Ok(Void);
+  }
+
+  if let Ok(dir) = fs::read_dir("/sys/class/tty") {
+    let mut entries: Vec<_> = dir.collect::<Result<Vec<_>, _>>()?;
+    entries.sort_by_key(|e| {
+      let name = e.file_name();
+      let name = name.to_string_lossy();
+
+      name
+        .strip_prefix("tty")
+        .and_then(|n| n.parse::<u32>().ok())
+        .unwrap_or(u32::MAX)
+    });
+
+    for item in entries {
+      let name = item.file_name();
+      let name = name.to_string_lossy();
+
+      if name.starts_with("tty") && name != "tty" && name != "tty0" && tty_count < limit {
+        tty_count += 1;
+
+        if let Ok(file) = OpenOptions::new().write(true).open(format!("/dev/{name}")) {
+          if unsafe { libc::ioctl(file.as_raw_fd(), libc::TIOCSCTTY, 1) } != 0 {}
+        }
+      }
+    }
+  }
+
+  *setup = true;
+  drop(setup);
+
+  Ok(Void)
+}
+
 fn trigger_ttyload(
   name: &str,
   ctx: ExtensionExecutionCtx<Arc<MountMetadata>>,
 ) -> CoreResult<ExtensionExecutionCtx<Arc<MountMetadata>>> {
   match name {
     "mount" if ctx.target.target.as_str() == "/sys" => Ok(ctx.with_fn(|_, _, _| {
-      let mut tty_count = 0;
-
-      let limit = std::env::var("RIND_ACTIVATE_TTYS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(7);
-
-      if limit == 0 {
-        return Ok(Box::new(()));
-      }
-
-      if let Ok(dir) = fs::read_dir("/sys/class/tty") {
-        let mut entries: Vec<_> = dir.collect::<Result<Vec<_>, _>>()?;
-        entries.sort_by_key(|e| {
-          let name = e.file_name();
-          let name = name.to_string_lossy();
-
-          name
-            .strip_prefix("tty")
-            .and_then(|n| n.parse::<u32>().ok())
-            .unwrap_or(u32::MAX)
-        });
-
-        for item in entries {
-          let name = item.file_name();
-          let name = name.to_string_lossy();
-
-          if name.starts_with("tty") && name != "tty" && name != "tty0" && tty_count < limit {
-            tty_count += 1;
-
-            if let Ok(file) = OpenOptions::new().write(true).open(format!("/dev/{name}")) {
-              if unsafe { libc::ioctl(file.as_raw_fd(), libc::TIOCSCTTY, 1) } != 0 {}
-            }
-          }
-        }
-      }
-
+      setup_ttys()?;
       Ok(Box::new(()))
     })),
     _ => Ok(ctx),

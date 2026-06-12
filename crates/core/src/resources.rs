@@ -141,5 +141,3 @@ impl Resources {
     self.flags.insert(res, flags);
   }
 }
-
-

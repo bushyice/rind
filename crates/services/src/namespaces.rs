@@ -425,10 +425,14 @@ fn exec_service(
   let mut argv = c_args.iter().map(|a| a.as_ptr()).collect::<Vec<_>>();
   argv.push(std::ptr::null());
 
-  let c_envs = envs
+  let mut c_envs = envs
     .iter()
     .filter_map(|(k, v)| CString::new(format!("{}={}", k.as_str(), v.as_str())).ok())
     .collect::<Vec<_>>();
+
+  let pid_cstr = CString::new(format!("LISTEN_PID={}", unsafe { libc::getpid() })).unwrap();
+  c_envs.push(pid_cstr);
+
   let mut envp = c_envs.iter().map(|e| e.as_ptr()).collect::<Vec<_>>();
   envp.push(std::ptr::null());
 

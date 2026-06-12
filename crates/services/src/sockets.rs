@@ -214,6 +214,9 @@ impl SocketRuntime {
     resources: &mut Resources,
     registry: &mut InstanceRegistry,
     sr: &mut SocketRegistry,
+    sm: Option<&FacetGraph>,
+    dispatch: &RuntimeDispatcher,
+    notifier: Option<&Notifier>,
   ) -> CoreResult<Void> {
     let sock = registry.instantiate_one("*", name.clone(), |metadata| {
       let owned_fd = self
@@ -242,6 +245,14 @@ impl SocketRuntime {
         .push((sock.metadata.name.clone(), sock.fd));
     }
 
+    if let Some(triggers) = sock.metadata.on_start.clone() {
+      trigger_events(triggers, sm, dispatch);
+
+      if let Some(notifier) = notifier {
+        let _ = notifier.notify();
+      }
+    }
+
     Ok(Void)
   }
 
@@ -251,6 +262,9 @@ impl SocketRuntime {
     resources: &mut Resources,
     registry: &mut InstanceRegistry,
     sr: &mut SocketRegistry,
+    sm: Option<&FacetGraph>,
+    dispatch: &RuntimeDispatcher,
+    notifier: Option<&Notifier>,
   ) -> CoreResult<Void> {
     let socket = registry.uninstantiate_one::<Socket>("*", name.clone())?;
     let fd = socket.fd;
@@ -268,6 +282,14 @@ impl SocketRuntime {
 
     if socket.metadata.r#type == SocketType::Uds {
       self.get_socket_path(&socket.metadata.listen, false)?;
+    }
+
+    if let Some(triggers) = socket.metadata.on_stop.clone() {
+      trigger_events(triggers, sm, dispatch);
+
+      if let Some(notifier) = notifier {
+        let _ = notifier.notify();
+      }
     }
 
     Ok(Void)
@@ -401,9 +423,25 @@ impl SocketRuntime {
               .unwrap_or(false);
 
             if should_start && !is_active {
-              let _ = self.start_socket(socket_name.clone(), ctx.resources, registry, sr);
+              let _ = self.start_socket(
+                socket_name.clone(),
+                ctx.resources,
+                registry,
+                sr,
+                Some(sm),
+                dispatch,
+                ctx.notifier.as_ref(),
+              );
             } else if should_stop && is_active {
-              let _ = self.stop_socket(socket_name.clone(), ctx.resources, registry, sr);
+              let _ = self.stop_socket(
+                socket_name.clone(),
+                ctx.resources,
+                registry,
+                sr,
+                Some(sm),
+                dispatch,
+                ctx.notifier.as_ref(),
+              );
             }
           }
           Ok(Void)
@@ -426,11 +464,23 @@ impl SocketRuntime {
           };
 
           for branch in active {
+            let name = branch.payload.to_string_payload().to_ustr();
+            if registry
+              .metadata
+              .find::<Socket>("*", name.as_str())
+              .map(|m| m.start_on.is_some())
+              .unwrap_or(false)
+            {
+              continue;
+            }
             match self.start_socket(
-              branch.payload.to_string_payload().to_ustr(),
+              name,
               ctx.resources,
               registry,
               sr,
+              Some(sm),
+              dispatch,
+              ctx.notifier.as_ref(),
             ) {
               Ok(_) => {}
               Err(CoreError::MetadataNotFound(_)) => {}
@@ -446,16 +496,28 @@ impl SocketRuntime {
   fn stop_for_scope(&mut self, scope: Ustr) {
     ctx
       .registry
-      .singleton_handle::<(&mut SocketRegistry, &mut VariableHeap), _>(
-        (SocketRegistry::KEY.into(), VariableHeap::KEY.into()),
-        |registry, (sr, _vh)| {
+      .singleton_handle::<(&mut SocketRegistry, &mut VariableHeap, &mut FacetGraph), _>(
+        (
+          SocketRegistry::KEY.into(),
+          VariableHeap::KEY.into(),
+          FacetGraph::KEY.into(),
+        ),
+        |registry, (sr, _vh, sm)| {
           for (group, soc) in registry
             .metadata
             .items::<Socket>(scope.clone())
             .unwrap_or_default()
           {
             let full_name = rslvns!(u group, soc.name);
-            self.stop_socket(full_name, ctx.resources, registry, sr)?;
+            self.stop_socket(
+              full_name,
+              ctx.resources,
+              registry,
+              sr,
+              Some(sm),
+              dispatch,
+              ctx.notifier.as_ref(),
+            )?;
           }
           Ok(Void)
         },
@@ -465,18 +527,46 @@ impl SocketRuntime {
   fn stop(&mut self, name: Ustr) {
     ctx
       .registry
-      .singleton_handle::<(&mut SocketRegistry, &mut VariableHeap), _>(
-        (SocketRegistry::KEY.into(), VariableHeap::KEY.into()),
-        |registry, (sr, _)| self.stop_socket(name, ctx.resources, registry, sr),
+      .singleton_handle::<(&mut SocketRegistry, &mut VariableHeap, &mut FacetGraph), _>(
+        (
+          SocketRegistry::KEY.into(),
+          VariableHeap::KEY.into(),
+          FacetGraph::KEY.into(),
+        ),
+        |registry, (sr, _, sm)| {
+          self.stop_socket(
+            name,
+            ctx.resources,
+            registry,
+            sr,
+            Some(sm),
+            dispatch,
+            ctx.notifier.as_ref(),
+          )
+        },
       )?;
   }
 
   fn start(&mut self, name: Ustr) {
     ctx
       .registry
-      .singleton_handle::<(&mut SocketRegistry, &mut VariableHeap), _>(
-        (SocketRegistry::KEY.into(), VariableHeap::KEY.into()),
-        |registry, (sr, _)| self.start_socket(name, ctx.resources, registry, sr),
+      .singleton_handle::<(&mut SocketRegistry, &mut VariableHeap, &mut FacetGraph), _>(
+        (
+          SocketRegistry::KEY.into(),
+          VariableHeap::KEY.into(),
+          FacetGraph::KEY.into(),
+        ),
+        |registry, (sr, _, sm)| {
+          self.start_socket(
+            name,
+            ctx.resources,
+            registry,
+            sr,
+            Some(sm),
+            dispatch,
+            ctx.notifier.as_ref(),
+          )
+        },
       )?;
   }
 

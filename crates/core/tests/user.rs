@@ -1,7 +1,6 @@
 use rind_core::prelude::ToUstr;
 use rind_core::user::{
-  PamConfig, PamError, PamHandle, ShadowEntry, UserStore, UserStoreShared,
-  verify_password,
+  PamConfig, PamError, PamHandle, ShadowEntry, UserStore, UserStoreShared, verify_password,
 };
 use std::collections::{HashMap, HashSet};
 use std::fs;

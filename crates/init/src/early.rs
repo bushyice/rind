@@ -170,11 +170,22 @@ pub fn mount_fstab() -> Result<(), String> {
       continue;
     }
 
+    let device = match resolve_fstab_device(&entry.device) {
+      Some(d) => d,
+      None => {
+        eprintln!(
+          "[fstab] device not found: {}, skipping {}",
+          entry.device, entry.mountpoint
+        );
+        continue;
+      }
+    };
+
     let flags = fstdab_options_to_flags(&entry.options);
 
     let _ = fs::create_dir_all(&entry.mountpoint);
 
-    let source = CString::new(entry.device.as_str()).ok();
+    let source = CString::new(device.as_str()).ok();
     let target = CString::new(entry.mountpoint.as_str())
       .map_err(|_| format!("invalid mountpoint: {}", entry.mountpoint))?;
     let fstype = CString::new(entry.fstype.as_str()).ok();
@@ -196,17 +207,50 @@ pub fn mount_fstab() -> Result<(), String> {
       let err = std::io::Error::last_os_error();
       eprintln!(
         "[fstab] failed to mount {} on {}: {err}",
-        entry.device, entry.mountpoint
+        device, entry.mountpoint
       );
     } else {
       eprintln!(
         "[fstab] mounted {} on {} ({})",
-        entry.device, entry.mountpoint, entry.fstype
+        device, entry.mountpoint, entry.fstype
       );
     }
   }
 
   Ok(())
+}
+
+fn resolve_fstab_device(spec: &str) -> Option<String> {
+  if let Some(val) = spec.strip_prefix("UUID=") {
+    return find_disk_by_value("by-uuid", val);
+  }
+  if let Some(val) = spec.strip_prefix("LABEL=") {
+    return find_disk_by_value("by-label", val);
+  }
+  if let Some(val) = spec.strip_prefix("PARTUUID=") {
+    return find_disk_by_value("by-partuuid", val);
+  }
+  if let Some(val) = spec.strip_prefix("PARTLABEL=") {
+    return find_disk_by_value("by-partlabel", val);
+  }
+  if spec.starts_with('/') {
+    return Some(spec.to_string());
+  }
+  Some(format!("/dev/{spec}"))
+}
+
+fn find_disk_by_value(by_dir: &str, value: &str) -> Option<String> {
+  let path = format!("/dev/disk/{by_dir}/{value}");
+  if Path::new(&path).exists() {
+    return Some(path);
+  }
+  let dir = fs::read_dir(format!("/dev/disk/{by_dir}")).ok()?;
+  for entry in dir.flatten() {
+    if entry.file_name().to_string_lossy().eq_ignore_ascii_case(value) {
+      return Some(entry.path().to_string_lossy().into_owned());
+    }
+  }
+  None
 }
 
 fn mount_data_from_options(options: &[String]) -> Option<CString> {

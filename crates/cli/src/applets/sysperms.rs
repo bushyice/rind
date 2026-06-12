@@ -1,9 +1,6 @@
 use clap::{Parser, Subcommand};
 use rind_ipc::{
-  Message, MessageType,
-  payloads::PermissionPayload,
-  send::send_message,
-  ser::ser_to_vec,
+  Message, MessageType, payloads::PermissionPayload, send::send_message, ser::ser_to_vec,
 };
 
 use crate::{handle_message, handle_send, handle_send_raw, print, send_msg};

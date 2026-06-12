@@ -134,5 +134,3 @@ pub fn variables_path() -> PathBuf {
     PathBuf::from("/var/lib/rind/variables.toml")
   }
 }
-
-

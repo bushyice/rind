@@ -1,4 +1,6 @@
-use rind_core::events::{EventBus, FlowAction, FlowEvent, FlowEventType, ServiceEvent, ServiceEventKind};
+use rind_core::events::{
+  EventBus, FlowAction, FlowEvent, FlowEventType, ServiceEvent, ServiceEventKind,
+};
 use rind_core::prelude::rslvns;
 
 #[test]

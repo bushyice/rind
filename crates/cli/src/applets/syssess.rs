@@ -92,6 +92,18 @@ pub fn main() {
 
       for i in 0..5 {
         if unsafe { libc::ioctl(fd, libc::TIOCSCTTY, 1) } == 0 {
+          let mut tty_attrs: libc::termios = unsafe { std::mem::zeroed() };
+          if unsafe { libc::tcgetattr(fd, &mut tty_attrs) } == 0 {
+            tty_attrs.c_iflag = libc::ICRNL | libc::IXON | libc::IXOFF;
+            tty_attrs.c_oflag = libc::OPOST | libc::ONLCR;
+            tty_attrs.c_cflag = libc::CREAD | libc::CS8 | libc::HUPCL;
+            tty_attrs.c_lflag =
+              libc::ISIG | libc::ICANON | libc::ECHO | libc::ECHOE | libc::ECHOK | libc::IEXTEN;
+
+            tty_attrs.c_cc[libc::VERASE] = 0x7f;
+
+            unsafe { libc::tcsetattr(fd, libc::TCSANOW, &tty_attrs) };
+          }
           break;
         }
         let err = std::io::Error::last_os_error();
@@ -127,6 +139,7 @@ pub fn main() {
         .env_clear()
         .env("HOME", &home)
         .env("USER", &user)
+        .env("TERM", "linux")
         .env("SESSION_ID", session_id.to_string())
         .env(
           "PATH",
@@ -146,6 +159,18 @@ pub fn main() {
           return;
         }
       };
+
+      unsafe {
+        cmd.pre_exec(move || {
+          libc::setsid();
+          if libc::ioctl(fd, libc::TIOCSCTTY, 1) < 0 {
+            return Err(std::io::Error::last_os_error());
+          }
+          let pid = libc::getpid();
+          libc::tcsetpgrp(fd, pid);
+          Ok(())
+        });
+      }
 
       let status = child.wait().unwrap();
       if status.success() {

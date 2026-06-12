@@ -28,3 +28,11 @@ subscribers = [{ id = "uds", options = ["detached=true"], permissions = ["any"] 
 name = "demo_ping"
 payload = "string"
 subscribers = ["uds"]
+
+# [[service]]
+# name = "some-waiter"
+# run.exec = "/usr/bin/sh"
+# run.args = ["-c", "sleep 25"]
+# restart = false
+# type = "wait"
+# start-on = ["rind:up!"]

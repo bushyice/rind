@@ -24,5 +24,3 @@ impl LifecycleQueue {
     self.inner.borrow_mut().pop_front()
   }
 }
-
-

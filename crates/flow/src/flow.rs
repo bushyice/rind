@@ -1015,6 +1015,7 @@ impl FlowRuntime {
 #[runtime("flow")]
 impl FlowRuntime {
   fn set_facet(&mut self, name: Ustr, #[optional] payload: serde_json::Value) {
+    let has_payload = payload.as_ref().map(|_| true);
     let flow_payload = FlowPayload::from_json(payload);
     ctx
       .registry
@@ -1026,7 +1027,7 @@ impl FlowRuntime {
             ctx.registry.metadata,
             sm,
             name.clone(),
-            Some(flow_payload.clone()),
+            has_payload.map(|_| flow_payload.clone()),
             Some(&*vh),
             &mut guard,
             ctx.event_bus,
@@ -1384,7 +1385,7 @@ impl<'a> Into<RuntimePayload> for FlowRuntimePayload<'a> {
   }
 }
 
-#[derive(Default, Serialize, Deserialize, Clone)]
+#[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct EmitTrigger {
   pub service: Option<Ustr>,
   pub name: Option<Ustr>,

@@ -1,5 +1,5 @@
-use rind_core::prelude::{StateEntry, StatePersistence, StateSnapshot};
 use rind_core::prelude::rslvns;
+use rind_core::prelude::{StateEntry, StatePersistence, StateSnapshot};
 use std::thread;
 
 fn temp_path() -> std::path::PathBuf {

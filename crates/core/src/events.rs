@@ -74,6 +74,7 @@ struct ErasedChannel {
   sender: Box<dyn Any + Send + Sync>,
 }
 
+#[derive(Clone)]
 pub struct EventBus {
   inner: Rc<RefCell<EventBusInner>>,
 }
@@ -152,5 +153,3 @@ impl EventBus {
     }
   }
 }
-
-

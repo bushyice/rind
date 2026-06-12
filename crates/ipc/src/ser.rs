@@ -169,5 +169,3 @@ pub fn deser_from_vec<T: DeserializeOwned>(item: &[u8], bincode: bool) -> CoreRe
 pub fn deser_string<V: AsRef<Vec<u8>>>(vec: V) -> String {
   deser_from_vec(vec.as_ref(), false).unwrap()
 }
-
-
