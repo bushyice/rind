@@ -4,43 +4,85 @@
 #include <unistd.h>
 #include <dlfcn.h>
 
-typedef struct {
-  uint8_t protocol;
-  const char** options;
-  size_t len;
-  uint64_t id;
-} rind_tp;
+typedef enum {
+  RIND_MSG_TYPE_IMPULSE = 0,
+  RIND_MSG_TYPE_FACET = 1,
+  RIND_MSG_TYPE_ENQUIRY = 2,
+  RIND_MSG_TYPE_RESPONSE = 3,
+  RIND_MSG_TYPE_UNKNOWN = 4,
+} RIND_MSG_TYPE;
 
-typedef struct {
-  uint8_t type;
-  const char* content;
-} rind_payload;
+typedef enum {
+  RIND_MSG_ACTION_REMOVE = 0,
+  RIND_MSG_ACTION_SET = 1,
+} RIND_MSG_ACTION;
 
-typedef struct {
-  uint8_t type;
-  uint8_t action;
-  rind_payload* payload;
-  const char* name;
-} rind_msg;
+typedef enum {
+  RIND_PAYLOAD_TYPE_STRING = 0,
+  RIND_PAYLOAD_TYPE_JSON = 1,
+} RIND_PAYLOAD_TYPE;
 
-typedef void (*rind_callback)(rind_msg);
+typedef enum {
+  RIND_TP_METHOD_STDIO = 0,
+  RIND_TP_METHOD_UDS = 1,
+  RIND_TP_METHOD_SHM = 2,
+} RIND_TP_METHOD;
 
-typedef rind_tp (*fn_rind_init_tp)(uint8_t, const char*);
-typedef void (*fn_rind_listen_tp)(rind_tp*, rind_callback);
-typedef rind_msg (*fn_rind_log_msg)(const char*);
-typedef rind_msg (*fn_rind_msg_enquire)(const char*, const char*);
-typedef rind_msg (*fn_rind_enquiry_tp)(rind_tp*, rind_msg);
-typedef uint8_t (*fn_rind_send_message)(const rind_tp*, rind_msg);
+struct rind_msg;
+struct rind_payload;
+struct rind_tp;
 
-void print_output(rind_msg msg) {
-  if (msg.name != NULL) {
-    printf("Received message: %s\n", msg.name);
+typedef char* (*fn_rind_msg_get_name)(const struct rind_msg*);
+typedef struct rind_payload* (*fn_rind_msg_get_payload)(const struct rind_msg*);
+typedef char* (*fn_rind_payload_get_content)(const struct rind_payload*);
+
+typedef void (*fn_rind_free_string)(char*);
+typedef void (*fn_rind_free_msg)(struct rind_msg*);
+
+typedef struct rind_tp* (*fn_rind_init_tp)(RIND_TP_METHOD, const char*);
+typedef void (*fn_rind_listen_tp)(struct rind_tp*, void (*)(struct rind_msg*));
+typedef struct rind_msg* (*fn_rind_enquiry_tp)(const struct rind_tp*, const struct rind_msg*);
+typedef uint8_t (*fn_rind_send_message)(const struct rind_tp*, const struct rind_msg*);
+
+typedef struct rind_msg* (*fn_rind_create_msg)(RIND_MSG_TYPE, RIND_MSG_ACTION);
+typedef struct rind_payload* (*fn_rind_create_msg_payload)(RIND_PAYLOAD_TYPE, const char*);
+typedef void (*fn_rind_set_message_payload)(struct rind_msg*, struct rind_payload*);
+typedef void (*fn_rind_set_message_name)(struct rind_msg*, const char*);
+typedef struct rind_msg* (*fn_rind_log_msg)(const char*);
+
+fn_rind_msg_get_name rind_msg_get_name;
+fn_rind_msg_get_payload rind_msg_get_payload;
+fn_rind_payload_get_content rind_payload_get_content;
+fn_rind_free_string rind_free_string;
+fn_rind_free_msg rind_free_msg;
+fn_rind_init_tp rind_init_tp;
+fn_rind_listen_tp rind_listen_tp;
+fn_rind_enquiry_tp rind_enquiry_tp;
+fn_rind_send_message rind_send_message;
+fn_rind_create_msg rind_create_msg;
+fn_rind_create_msg_payload rind_create_msg_payload;
+fn_rind_set_message_payload rind_set_message_payload;
+fn_rind_set_message_name rind_set_message_name;
+fn_rind_log_msg rind_log_msg;
+
+void print_output(struct rind_msg* msg) {
+  if (!msg) return;
+
+  char* name = rind_msg_get_name(msg);
+  if (name != NULL) {
+    printf("Received message: %s\n", name);
+    rind_free_string(name);
   } else {
     printf("Received message with null name!\n");
   }
 
-  if (msg.payload != NULL) {
-    printf("  Payload: %s\n", msg.payload->content);
+  const struct rind_payload* payload = rind_msg_get_payload(msg);
+  if (payload != NULL) {
+    char* content = rind_payload_get_content(payload);
+    if (content != NULL) {
+      printf("  Payload: %s\n", content);
+      rind_free_string(content);
+    }
   }
 }
 
@@ -48,20 +90,30 @@ int main() {
   setvbuf(stdout, NULL, _IONBF, 0);
   printf("connecting to shm tp...\n");
 
-  void* lib = dlopen("/lib/librind_api.so", RTLD_LAZY);
+  void* lib = dlopen("/lib/librind_api.so", RTLD_NOW | RTLD_GLOBAL);
   if (!lib) {
     fprintf(stderr, "failed to load library: %s\n", dlerror());
     return 1;
   }
 
-  fn_rind_init_tp rind_init_tp = (fn_rind_init_tp)dlsym(lib, "rind_init_tp");
-  fn_rind_listen_tp rind_listen_tp = (fn_rind_listen_tp)dlsym(lib, "rind_listen_tp");
-  fn_rind_log_msg rind_log_msg = (fn_rind_log_msg)dlsym(lib, "rind_log_msg");
-  fn_rind_send_message rind_send_message = (fn_rind_send_message)dlsym(lib, "rind_send_message");
-  fn_rind_msg_enquire rind_msg_enquire = (fn_rind_msg_enquire)dlsym(lib, "rind_msg_enquire");
-  fn_rind_enquiry_tp rind_enquiry_tp = (fn_rind_enquiry_tp)dlsym(lib, "rind_enquiry_tp");
+  rind_msg_get_name = (fn_rind_msg_get_name)dlsym(lib, "rind_msg_get_name");
+  rind_msg_get_payload = (fn_rind_msg_get_payload)dlsym(lib, "rind_msg_get_payload");
+  rind_payload_get_content = (fn_rind_payload_get_content)dlsym(lib, "rind_payload_get_content");
+  rind_free_string = (fn_rind_free_string)dlsym(lib, "rind_free_string");
+  rind_free_msg = (fn_rind_free_msg)dlsym(lib, "rind_free_msg");
 
-  if (!rind_init_tp || !rind_listen_tp || !rind_log_msg || !rind_send_message) {
+  rind_init_tp = (fn_rind_init_tp)dlsym(lib, "rind_init_tp");
+  rind_listen_tp = (fn_rind_listen_tp)dlsym(lib, "rind_listen_tp");
+  rind_enquiry_tp = (fn_rind_enquiry_tp)dlsym(lib, "rind_enquiry_tp");
+  rind_send_message = (fn_rind_send_message)dlsym(lib, "rind_send_message");
+
+  rind_create_msg = (fn_rind_create_msg)dlsym(lib, "rind_create_msg");
+  rind_create_msg_payload = (fn_rind_create_msg_payload)dlsym(lib, "rind_create_msg_payload");
+  rind_set_message_payload = (fn_rind_set_message_payload)dlsym(lib, "rind_set_message_payload");
+  rind_set_message_name = (fn_rind_set_message_name)dlsym(lib, "rind_set_message_name");
+  rind_log_msg = (fn_rind_log_msg)dlsym(lib, "rind_log_msg");
+
+  if (!rind_init_tp || !rind_listen_tp || !rind_send_message || !rind_create_msg) {
     fprintf(stderr, "failed to find symbols: %s\n", dlerror());
     dlclose(lib);
     return 1;
@@ -72,25 +124,34 @@ int main() {
     path = "/run/rind-tp/shm.sock";
   }
 
-  rind_tp* tp = (rind_tp*)malloc(sizeof(rind_tp));
-  *tp = rind_init_tp(2, path);
+  struct rind_tp* tp = rind_init_tp(RIND_TP_METHOD_SHM, path);
   printf("shm tp connected and mapped\n");
 
   rind_listen_tp(tp, print_output);
 
   printf("sending message to rind...\n");
-  rind_msg msg = rind_log_msg("hello from shm client!");
+  struct rind_msg* msg = rind_log_msg("hello from shm client!");
   rind_send_message(tp, msg);
+  rind_free_msg(msg);
 
-  rind_msg enq = rind_msg_enquire("has_state", "net:online");
-  rind_msg resp = rind_enquiry_tp(tp, enq);
+  struct rind_msg* enq = rind_create_msg(RIND_MSG_TYPE_ENQUIRY, RIND_MSG_ACTION_SET);
+  struct rind_payload* payload = rind_create_msg_payload(RIND_PAYLOAD_TYPE_STRING, "net:online");
+
+  rind_set_message_name(enq, "has_state");
+  rind_set_message_payload(enq, payload);
+
+  struct rind_msg* resp = rind_enquiry_tp(tp, enq);
   print_output(resp);
+
+  rind_free_msg(enq);
+  if (resp) {
+    rind_free_msg(resp);
+  }
 
   while (1) {
     sleep(1);
   }
 
-  free(tp);
   dlclose(lib);
   return 0;
 }

@@ -324,7 +324,8 @@ impl SeatRuntime {
 
     #[cfg(feature = "seatd")]
     if std::env::var("RIND_ENABLE_SEATD").map_or(true, |x| x == "1") {
-      std::thread::spawn(|| seatd::start());
+      let log = log.clone();
+      std::thread::spawn(|| seatd::start(log));
     }
 
     self.__runtime_reconcile(payload, ctx, dispatch, log)?;

@@ -92,12 +92,21 @@ impl EventLoop {
     metadata: &mut MetadataRegistry,
     instances: &mut InstanceMap,
     resources: &mut Resources,
+    log: &LogHandle,
   ) -> bool {
     let mut events = [EpollEvent::empty(); 16];
 
     loop {
       while let Some(action) = self.runtime.next_lifecycle_action(self.context_id) {
-        if !process_lifecycle_action(action, boot, metadata, instances, &self.runtime, resources) {
+        if !process_lifecycle_action(
+          action,
+          boot,
+          metadata,
+          instances,
+          &self.runtime,
+          resources,
+          log,
+        ) {
           return false;
         }
       }
@@ -267,6 +276,7 @@ fn process_lifecycle_action(
   instances: &mut InstanceMap,
   runtime: &RuntimeHandle,
   resources: &mut Resources,
+  log: &LogHandle,
 ) -> bool {
   match action {
     LifecycleAction::ReloadUnits => {
@@ -296,6 +306,7 @@ fn process_lifecycle_action(
       //   Default::default(),
       //   boot.primary_context_id().unwrap_or(0),
       // );
+      trigger_hooks("reload_units", log, None);
       let _ = runtime.dispatch(
         "events",
         "reload_scopes",
@@ -309,6 +320,7 @@ fn process_lifecycle_action(
       try_stop_services(boot, metadata, runtime, resources, false);
       terminate_all_processes();
       let _ = runtime.send(RuntimeCommand::Stop);
+      trigger_hooks("shutdown", log, None);
       unsafe {
         libc::sync();
         let exe = std::env::current_exe().expect("failed to get current exe");
@@ -325,6 +337,7 @@ fn process_lifecycle_action(
       try_stop_services(boot, metadata, runtime, resources, false);
       terminate_all_processes();
       let _ = runtime.send(RuntimeCommand::Stop);
+      trigger_hooks("shutdown", log, None);
       unsafe {
         libc::sync();
         libc::reboot(libc::LINUX_REBOOT_CMD_RESTART);
@@ -335,6 +348,7 @@ fn process_lifecycle_action(
       try_stop_services(boot, metadata, runtime, resources, true);
       terminate_all_processes();
       let _ = runtime.send(RuntimeCommand::Stop);
+      trigger_hooks("shutdown", log, None);
       unsafe {
         libc::sync();
         libc::reboot(libc::LINUX_REBOOT_CMD_POWER_OFF);

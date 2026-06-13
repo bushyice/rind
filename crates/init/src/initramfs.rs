@@ -1,6 +1,7 @@
 use std::ffi::CString;
 use std::fs;
 
+use rind_core::hooks::{hooks_path, initiate_hooks, trigger_hooks_raw};
 use rind_core::types::Void;
 
 use crate::early;
@@ -143,35 +144,52 @@ fn detect_root_fstype(device: &str) -> Option<String> {
   })
 }
 
+fn env_truthy(name: &str) -> bool {
+  std::env::var(name)
+    .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+    .unwrap_or(false)
+}
+
 fn mount_real_root(device: &str) -> Result<String, String> {
-  let new_root = "/new_root";
+  let new_root = std::env::var("RIND_INITRAMFS_NEW_ROOT").unwrap_or("/new_root".to_string());
 
-  if !std::path::Path::new(new_root).exists() {
-    fs::create_dir_all(new_root).map_err(|e| format!("failed to create {new_root}: {e}"))?;
+  if !std::path::Path::new(&new_root).exists() {
+    fs::create_dir_all(&new_root)
+      .map_err(|e| format!("failed to create {new_root}: {e}"))?;
   }
 
-  if early::is_mounted(new_root) {
-    return Ok(new_root.to_string());
+  if early::is_mounted(&new_root) {
+    return Ok(new_root);
   }
 
-  let fstype = detect_root_fstype(device).unwrap_or_else(|| {
+  let fstype = std::env::var("RIND_INITRAMFS_REAL_ROOT_FSTYPE").ok().or_else(|| {
+    detect_root_fstype(device)
+  }).unwrap_or_else(|| {
     eprintln!("[initrd] could not detect root fs type, assuming ext4");
     "ext4".to_string()
   });
 
+  let mount_data = std::env::var("RIND_INITRAMFS_REAL_ROOT_DATA").ok();
+
+  let mut flags = 0u64;
+  if env_truthy("RIND_INITRAMFS_REAL_ROOT_READONLY") {
+    flags |= libc::MS_RDONLY;
+  }
+
   eprintln!("[initrd] mounting root device {device} ({fstype}) on {new_root}");
 
   let c_device = CString::new(device).unwrap();
-  let c_target = CString::new(new_root).unwrap();
+  let c_target = CString::new(new_root.as_str()).unwrap();
   let c_fstype = CString::new(fstype.as_str()).unwrap();
+  let c_data = mount_data.as_ref().map(|d| CString::new(d.as_str()).unwrap());
 
   let rc = unsafe {
     libc::mount(
       c_device.as_ptr(),
       c_target.as_ptr(),
       c_fstype.as_ptr(),
-      0,
-      std::ptr::null(),
+      flags,
+      c_data.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()) as *const libc::c_void,
     )
   };
 
@@ -182,7 +200,7 @@ fn mount_real_root(device: &str) -> Result<String, String> {
     ));
   }
 
-  Ok(new_root.to_string())
+  Ok(new_root)
 }
 
 fn move_mounts_to_new_root(new_root: &str) -> Result<(), String> {
@@ -291,6 +309,9 @@ pub fn run_initramfs_boot() -> Result<bool, Box<dyn std::error::Error>> {
     }
   };
 
+  initiate_hooks(hooks_path())?;
+  trigger_hooks_raw("initramfs");
+
   let new_root = match mount_real_root(&device) {
     Ok(path) => path,
     Err(e) => {
@@ -309,6 +330,19 @@ pub fn run_initramfs_boot() -> Result<bool, Box<dyn std::error::Error>> {
   }
 
   umount_old_root();
+
+  unsafe {
+    std::env::set_var("RIND_INITRAMFS_SHORT_CIRCUIT", "1");
+  }
+
+  let handoff = std::env::var("RIND_INITRAMFS_HANDOFF_MODE")
+    .unwrap_or("exec".to_string())
+    .to_lowercase();
+
+  if handoff == "continue" {
+    eprintln!("[initrd] pivot_root succeeded, continuing boot");
+    return Ok(true);
+  }
 
   eprintln!("[initrd] pivot_root succeeded, execing into real root");
 

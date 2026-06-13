@@ -191,10 +191,12 @@ fn main() -> Result<Void, Box<dyn std::error::Error>> {
     eprintln!("[early] warning: {e}");
   });
 
+  initiate_hooks(hooks_path())?;
+
   let units_dir = if let Ok(path) = std::env::var("RIND_UNITS_DIR") {
     PathBuf::from(path)
   } else {
-    PathBuf::from("/etc/units")
+    PathBuf::from("/usr/lib/rind/units")
   };
 
   let pump_interval: u64 = std::env::var("RIND_PUMP_INTERVAL")
@@ -212,6 +214,8 @@ fn main() -> Result<Void, Box<dyn std::error::Error>> {
   let mut resources = Resources::default();
 
   let log = boot.start_logger();
+
+  trigger_hooks_mut("early", &log, None);
 
   if let Ok(plugins) = match collect_plugins(plugins_path(None), &log, None) {
     Ok(plugins) => Ok(plugins),
@@ -261,7 +265,13 @@ fn main() -> Result<Void, Box<dyn std::error::Error>> {
     pump_interval,
   )?;
 
-  if !event_loop.run(&mut boot, &mut metadata, &mut instances, &mut resources) {
+  if !event_loop.run(
+    &mut boot,
+    &mut metadata,
+    &mut instances,
+    &mut resources,
+    &log,
+  ) {
     return Ok(Void);
   }
 

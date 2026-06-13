@@ -209,7 +209,6 @@ impl Executor for NativeExecutor {
         }
       }
     }
-    println!("Child actual pid: {}", child.id());
 
     Ok(Box::new(ProcessHandle(child)))
   }

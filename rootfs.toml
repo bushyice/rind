@@ -57,12 +57,12 @@ symlinks = [
 # - local copy: "local_path:/dst/path"
 # - archive extract: "@alias:member/in/archive:/dst/path"
 files = [
-  "examples/units:/etc/units",
+  "examples/units:/usr/lib/rind/units",
   "examples/etc:/etc",
   "man:/usr/share/man/man1",
   "examples/fallback.toml:/etc/fallback.toml",
   "crates/api-sys/examples/api.c:/home/makano/api.c",
-  "examples/units-makano:/home/makano/.local/share/rind/units",
+  "examples/units-makano:/home/makano/.local/lib/rind/units",
 
   # glibc
   "@glibc:usr/bin:/usr/bin",

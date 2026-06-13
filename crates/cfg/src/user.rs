@@ -1,7 +1,3 @@
-// Users "exist" but-
-// - PAM sucsk
-// - Need to expose more APIs
-
 use std::{
   collections::{HashMap, HashSet},
   fs,
@@ -237,7 +233,11 @@ impl UserRuntime {
   }
 
   fn user_units_dir(&self, user: &UserRecord) -> PathBuf {
-    PathBuf::from(&user.home).join(".local/share/rind/units")
+    PathBuf::from(&user.home).join(
+      std::env::var("RIND_USER_UNITS_DIR")
+        .as_deref()
+        .unwrap_or(".local/lib/rind/units"),
+    )
   }
 
   fn create_runtime_dir(&self, user: &UserRecord) -> std::io::Result<Void> {

@@ -9,7 +9,7 @@ use std::{
   thread,
 };
 
-use rind_core::reexports::libc;
+use rind_core::{prelude::LogHandle, reexports::libc};
 
 const CLIENT_OPEN_SEAT: u16 = 1;
 const CLIENT_CLOSE_SEAT: u16 = 2;
@@ -202,15 +202,30 @@ fn realpath(path: &str) -> Option<String> {
   }
 }
 
-fn handle_client(mut stream: UnixStream) {
+fn handle_client(mut stream: UnixStream, log: &LogHandle) {
   let peer = stream.peer_addr().ok();
-  println!("[seatd] client connected: {:?}", peer);
+  log.log(
+    rind_core::prelude::LogLevel::Trace,
+    "seatd",
+    "client connected",
+    [("peer".to_string(), format!("{peer:?}"))].into(),
+  );
 
-  if let Err(e) = run_client(&mut stream) {
-    eprintln!("[seatd] client error: errno={}", e);
+  if let Err(e) = run_client(&mut stream, &log) {
+    log.log(
+      rind_core::prelude::LogLevel::Error,
+      "seatd",
+      format!("client error: errno={e}"),
+      Default::default(),
+    );
   }
 
-  eprintln!("[seatd] client disconnected: {:?}", peer);
+  log.log(
+    rind_core::prelude::LogLevel::Trace,
+    "seatd",
+    "client disconnected",
+    [("peer".to_string(), format!("{peer:?}"))].into(),
+  );
 }
 
 fn read_exact(stream: &mut UnixStream, buf: &mut [u8]) -> Result<(), i32> {
@@ -239,7 +254,7 @@ struct Device {
   _fd: OwnedFd,
 }
 
-fn run_client(stream: &mut UnixStream) -> Result<(), i32> {
+fn run_client(stream: &mut UnixStream, log: &LogHandle) -> Result<(), i32> {
   let mut client_state = ClientState::New;
   let mut devices: HashMap<i32, Device> = HashMap::new();
   let next_device_id = AtomicI32::new(1);
@@ -398,14 +413,20 @@ fn run_client(stream: &mut UnixStream) -> Result<(), i32> {
 
       _ => {
         let op = header.opcode;
-        eprintln!("[seatd] unknown opcode: {op}");
+        log.log(
+          rind_core::prelude::LogLevel::Error,
+          "seatd",
+          format!("unknown opcode: {op}"),
+          Default::default(),
+        );
+
         send_error(stream, libc::ENOSYS)?;
       }
     }
   }
 }
 
-pub fn start() {
+pub fn start(log: LogHandle) {
   let socket_path = std::env::var("SEATD_SOCK")
     .map(PathBuf::from)
     .unwrap_or_else(|_| PathBuf::from("/run/seatd.sock"));
@@ -415,25 +436,46 @@ pub fn start() {
   let listener = match UnixListener::bind(&socket_path) {
     Ok(l) => l,
     Err(e) => {
-      eprintln!("[seatd] failed to bind {socket_path:?}: {e}");
+      log.log(
+        rind_core::prelude::LogLevel::Error,
+        "seatd",
+        format!("failed to bind {socket_path:?}: {e}"),
+        Default::default(),
+      );
       return;
     }
   };
 
   let _ = std::fs::set_permissions(&socket_path, std::fs::Permissions::from_mode(0o666));
-  println!("[seatd] listening on {socket_path:?}");
+  log.log(
+    rind_core::prelude::LogLevel::Info,
+    "seatd",
+    format!("listening on {socket_path:?}"),
+    Default::default(),
+  );
 
   for stream in listener.incoming() {
     match stream {
       Ok(stream) => {
-        thread::spawn(|| handle_client(stream));
+        let log = log.clone();
+        thread::spawn(move || handle_client(stream, &log));
       }
       Err(e) => {
-        eprintln!("[seatd] accept error: {e}");
+        log.log(
+          rind_core::prelude::LogLevel::Error,
+          "seatd",
+          format!("accept error: {e}"),
+          Default::default(),
+        );
         break;
       }
     }
   }
 
-  eprintln!("[seatd] server stopped");
+  log.log(
+    rind_core::prelude::LogLevel::Info,
+    "seatd",
+    "server stopped",
+    Default::default(),
+  );
 }

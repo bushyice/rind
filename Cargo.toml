@@ -9,7 +9,6 @@ members = [
   "crates/display",
   "crates/flow",
   "crates/init",
-  "crates/initramfs",
   "crates/ipc",
   "crates/macros",
   "crates/networking",
