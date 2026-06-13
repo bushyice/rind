@@ -35,6 +35,22 @@ use rind_primitives::permissions::PERM_SYSTEM_SERVICES;
 use rind_primitives::scopes::ScopeStore;
 use rind_primitives::variables::VariableHeap;
 
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct RunOptionFile {
+  pub path: String,
+  #[serde(default)]
+  pub dir: bool,
+
+  #[serde(default)]
+  pub once: bool,
+  #[serde(default)]
+  pub clean: bool,
+  #[serde(default)]
+  pub create: bool,
+
+  pub content: Option<String>,
+}
+
 #[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct RunOption {
   #[serde(default)]
@@ -45,6 +61,8 @@ pub struct RunOption {
   pub variable: Option<String>,
   #[serde(default)]
   pub executor: Option<Ustr>,
+
+  pub files: Option<Vec<RunOptionFile>>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -438,12 +456,11 @@ pub struct Service {
   pub working_dir: Option<Ustr>,
   #[serde(default, rename = "space")]
   pub space: ServiceSpace,
-  #[serde(rename = "pre")]
-  pub pre_exec: Option<RunOptions>,
-  pub cleanup: Option<RunOptions>,
   pub options: Option<HashMap<Ustr, String>>,
   #[serde(default)]
   pub singleton: bool,
+  #[serde(default)]
+  pub cleanup: bool,
   #[serde(rename = "user-source")]
   pub user_source: Option<ServiceUserSource>,
   pub transport: Option<TransportMethod>,
@@ -1153,6 +1170,7 @@ impl ServiceRuntime {
       .get("exec")
       .and_then(|v| v.as_str())
       .unwrap_or_default();
+    let executor = table.get("executor").map(|v| v.to_string().to_ustr());
     let args = table
       .get("args")
       .and_then(|v| v.as_array())
@@ -1168,13 +1186,18 @@ impl ServiceRuntime {
         .filter_map(|(k, v)| v.as_str().map(|s| (Ustr::from(k.as_str()), Ustr::from(s))))
         .collect()
     });
+    let files = table
+      .get("files")
+      .and_then(|v| v.as_array())
+      .map(|t| t.iter().filter_map(|v| v.clone().try_into().ok()).collect());
 
     Some(RunOption {
       exec: Ustr::from(exec),
       args,
       env,
       variable: None,
-      executor: None,
+      executor,
+      files,
     })
   }
 
@@ -1195,7 +1218,7 @@ impl ServiceRuntime {
       LogLevel::Info,
       "service-runtime",
       "service started",
-      self.log_fields(service, "start"),
+      self.log_fields(service, "start", Some(&registry_key)),
     );
 
     let instances = self.spawn_all(
@@ -1215,10 +1238,20 @@ impl ServiceRuntime {
     Ok(Void)
   }
 
-  fn log_fields(&self, service: &Service, action: impl Into<Ustr>) -> HashMap<String, String> {
+  fn log_fields(
+    &self,
+    service: &Service,
+    action: impl Into<Ustr>,
+    name: Option<&Ustr>,
+  ) -> HashMap<String, String> {
     let mut fields = HashMap::new();
     fields.insert("action".to_string(), action.into().to_string());
-    fields.insert("service".to_string(), service.metadata.name.to_string());
+    fields.insert(
+      "service".to_string(),
+      name
+        .map(|x| x.to_string())
+        .unwrap_or(service.metadata.name.to_string()),
+    );
     fields
   }
 
@@ -1574,9 +1607,9 @@ impl ServiceRuntime {
         );
       }
       Err(e) => {
-        let err = format!("Failed to start service \"{}\": {e}", service.metadata.name);
+        let err = format!("Failed to start service \"{}\": {e}", registry_key);
         service.last_state = ServiceState::Error(err.clone());
-        let mut fields = self.log_fields(service, "start");
+        let mut fields = self.log_fields(service, "start", Some(&registry_key));
         fields.insert("error".into(), e.to_string());
         log.log(
           LogLevel::Error,
@@ -1691,7 +1724,7 @@ impl ServiceRuntime {
     {
       service.last_state = ServiceState::Stopping;
 
-      let mut fields = self.log_fields(service, "stop");
+      let mut fields = self.log_fields(service, "stop", service_key);
       fields.insert("mode".to_string(), format!("{mode:?}"));
       if let Some(ref key) = key {
         fields.insert("key".to_string(), format!("{key}"));
@@ -1762,7 +1795,7 @@ impl ServiceRuntime {
     service: &mut Service,
     pid: i32,
     code: i32,
-    _log: &LogHandle,
+    log: &LogHandle,
     dispatch: &RuntimeDispatcher,
     sm: Option<&FacetGraph>,
     service_key: Ustr,
@@ -1815,6 +1848,34 @@ impl ServiceRuntime {
 
       let full_name = Self::instance_key_name(service_key.as_str());
 
+      if service.metadata.cleanup {
+        for option in service.metadata.run.as_many() {
+          // Skip variables at this point (no vh here)
+          // maybe in the future.
+          if option.variable.is_some() {
+            continue;
+          }
+
+          let Some(files) = &option.files else {
+            continue;
+          };
+
+          for file in files {
+            if file.clean {
+              let path = PathBuf::from(&file.path);
+
+              if path.exists() {
+                if file.dir {
+                  let _ = std::fs::remove_dir_all(&path);
+                } else {
+                  let _ = std::fs::remove_file(&path);
+                }
+              }
+            }
+          }
+        }
+      }
+
       let _ = SocketRuntime::actions
         .clear_for(full_name.clone())
         .dispatch(dispatch);
@@ -1823,6 +1884,9 @@ impl ServiceRuntime {
         .dispatch(dispatch)
         .ok()?;
     }
+
+    let fields = self.log_fields(service, "stop", Some(&service_key));
+    log.log(LogLevel::Info, "service-runtime", "service exited", fields);
 
     Some(action)
   }
@@ -2888,8 +2952,8 @@ impl ServiceRuntime {
                 )))
               }
               Err(e) => {
-                let err = format!("Failed to start service \"{}\": {e}", service.metadata.name);
-                let mut fields = self.log_fields(service, "start");
+                let err = format!("Failed to start service \"{}\": {e}", service_key);
+                let mut fields = self.log_fields(service, "start", Some(&service_key));
                 fields.insert("error".into(), e.to_string());
                 log.log(
                   LogLevel::Error,
@@ -2943,8 +3007,8 @@ impl ServiceRuntime {
                 )))
               }
               Err(e) => {
-                let err = format!("Failed to start service \"{}\": {e}", service.metadata.name);
-                let mut fields = self.log_fields(service, "start");
+                let err = format!("Failed to start service \"{}\": {e}", service_key);
+                let mut fields = self.log_fields(service, "start", Some(&service_key));
                 fields.insert("error".into(), e.to_string());
                 log.log(
                   LogLevel::Error,

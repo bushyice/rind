@@ -246,7 +246,11 @@ fn find_disk_by_value(by_dir: &str, value: &str) -> Option<String> {
   }
   let dir = fs::read_dir(format!("/dev/disk/{by_dir}")).ok()?;
   for entry in dir.flatten() {
-    if entry.file_name().to_string_lossy().eq_ignore_ascii_case(value) {
+    if entry
+      .file_name()
+      .to_string_lossy()
+      .eq_ignore_ascii_case(value)
+    {
       return Some(entry.path().to_string_lossy().into_owned());
     }
   }

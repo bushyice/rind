@@ -45,6 +45,7 @@ impl From<LogLevelArg> for LogLevel {
 
 #[derive(Debug, Clone)]
 pub struct LogQuery {
+  pub exact: bool,
   pub level: Option<LogLevel>,
   pub target: Option<String>,
   pub message: Option<String>,
@@ -55,7 +56,11 @@ pub struct LogQuery {
 impl LogQuery {
   pub fn matches(&self, entry: &LogEntry) -> bool {
     if let Some(min_level) = self.level {
-      if level_rank(entry.level) < level_rank(min_level) {
+      if if self.exact {
+        entry.level == min_level
+      } else {
+        level_rank(entry.level) < level_rank(min_level)
+      } {
         return false;
       }
     }
@@ -166,6 +171,9 @@ pub fn main() {
     #[arg(long)]
     current: bool,
 
+    #[arg(short = 'e', long)]
+    exact: bool,
+
     #[arg(long = "field", value_name = "KEY=VALUE")]
     fields: Vec<String>,
 
@@ -192,7 +200,14 @@ pub fn main() {
     }
   };
 
-  let query = match build_log_query(cli.level, cli.target, cli.message, since, cli.fields) {
+  let query = match build_log_query(
+    cli.level,
+    cli.target,
+    cli.message,
+    since,
+    cli.fields,
+    cli.exact,
+  ) {
     Ok(query) => query,
     Err(err) => {
       report_error("invalid logs query", err);
@@ -243,6 +258,7 @@ fn build_log_query(
   message: Option<String>,
   since: Option<u64>,
   raw_fields: Vec<String>,
+  exact: bool,
 ) -> Result<LogQuery, String> {
   let mut fields = Vec::with_capacity(raw_fields.len());
   for field in raw_fields {
@@ -259,6 +275,7 @@ fn build_log_query(
     fields.push((k.trim().to_string(), v.to_string()));
   }
   Ok(LogQuery {
+    exact,
     level: level.map(Into::into),
     target,
     message,

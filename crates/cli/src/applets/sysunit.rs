@@ -253,6 +253,7 @@ pub fn main() {
               level: None,
               target: None,
               message: None,
+              exact: false,
               since: crate::applets::syslogs::current_boot_start_unix().ok(),
               fields: vec![("service".to_string(), name.clone())],
             },

@@ -446,10 +446,10 @@ pub fn start_runtime(
       runtimes: map,
       contexts: HashMap::new(),
       queue: VecDeque::new(),
-        instances: InstanceMap::default(),
-        notifier,
-        stopped: false,
-        event_bus: None,
-      })),
+      instances: InstanceMap::default(),
+      notifier,
+      stopped: false,
+      event_bus: None,
+    })),
   }
 }

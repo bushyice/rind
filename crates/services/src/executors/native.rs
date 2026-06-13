@@ -4,6 +4,7 @@ use rind_core::prelude::*;
 use rind_core::utils::read_env_file;
 use std::os::fd::RawFd;
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::Command;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -79,6 +80,36 @@ impl Executor for NativeExecutor {
       );
     }
 
+    if let Some(files) = &ctx.run.files {
+      for file in files {
+        if !file.clean && !file.create {
+          continue;
+        }
+
+        let path = PathBuf::from(&file.path);
+
+        if file.clean && path.exists() && (!file.once || ctx.service.instances.len() < 1) {
+          if file.dir {
+            std::fs::remove_dir_all(&path)?;
+          } else {
+            std::fs::remove_file(&path)?;
+          }
+        }
+
+        if file.create && !path.exists() {
+          if file.dir {
+            std::fs::create_dir_all(&path)?;
+          } else {
+            if let Some(parent) = path.parent() {
+              std::fs::create_dir_all(parent)?;
+            }
+            let content = file.content.clone().unwrap_or_default();
+            std::fs::write(&path, content)?;
+          }
+        }
+      }
+    }
+
     let mut cmd = Command::new(ctx.run.exec.as_str());
     let namespaces = ctx.isolation.namespaces.clone();
 
@@ -114,10 +145,12 @@ impl Executor for NativeExecutor {
           }
         }
 
-        let pid_cstr = std::ffi::CString::new(libc::getpid().to_string()).unwrap();
-        let listen_pid_key = std::ffi::CString::new("LISTEN_PID").unwrap();
-        if libc::setenv(listen_pid_key.as_ptr(), pid_cstr.as_ptr(), 1) != 0 {
-          return Err(std::io::Error::last_os_error());
+        if envs.contains_key("LISTEN_FDS") {
+          let pid_cstr = std::ffi::CString::new(libc::getpid().to_string()).unwrap();
+          let listen_pid_key = std::ffi::CString::new("LISTEN_PID").unwrap();
+          if libc::setenv(listen_pid_key.as_ptr(), pid_cstr.as_ptr(), 1) != 0 {
+            return Err(std::io::Error::last_os_error());
+          }
         }
 
         for (idx, fd) in pre_exec_fds.iter().enumerate() {
