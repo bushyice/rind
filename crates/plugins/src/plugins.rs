@@ -7,6 +7,7 @@ use libloading::os::unix::{Library, Symbol};
 use rind_core::{
   error::CoreError,
   prelude::{ExtensionManager, LogHandle, Orchestrator},
+  types::Void,
 };
 
 bitflags::bitflags! {
@@ -102,6 +103,24 @@ pub fn collect_plugins<P: AsRef<Path>>(
         .map(|f| *f)
         .ok();
 
+      if let Some(type_verify) = lib
+        .get::<unsafe extern "Rust" fn() -> core::any::TypeId>(b"plugin_type_verify")
+        .map(|f| *f)
+        .ok()
+      {
+        if type_verify() != core::any::TypeId::of::<Void>() {
+          log.log(
+            rind_core::prelude::LogLevel::Error,
+            "plugin-loader",
+            &format!(
+              "Failed to load plugin: type mismatch, potentially different build from host."
+            ),
+            [("name".to_string(), path.to_string_lossy().to_string())].into(),
+          );
+          return None;
+        }
+      }
+
       let get_plugin: Symbol<unsafe extern "Rust" fn() -> *mut dyn Plugin> =
         match lib.get(b"get_plugin") {
           Ok(s) => s,
@@ -162,6 +181,10 @@ pub mod prelude {
   macro_rules! plugin_abi {
     ($abi:expr) => {
       pub const PLUGIN_ABI_VERSION: u32 = $abi;
+
+      pub extern "Rust" fn plugin_type_verify() -> core::any::TypeId {
+        core::any::TypeId::of::<rind_core::types::Void>()
+      }
     };
   }
 
