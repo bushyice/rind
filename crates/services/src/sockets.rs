@@ -39,7 +39,14 @@ pub enum SocketServiceLifecycle {
   Owned,
 }
 
-#[model(meta_name = name, meta_fields(name, listen, r#type, owner, start_on, lifecycle, trigger, stop_on, managed_by, on_start, on_stop, on_data, permissions), derive_metadata(Debug, Clone, Default))]
+#[model(
+  meta_name = name,
+  meta_fields(
+    name, listen, r#type, owner, start_on, lifecycle, trigger, stop_on,
+    managed_by, on_start, on_stop, on_data, permissions
+  ),
+  derive_metadata(Debug, Clone, Default)
+)]
 pub struct Socket {
   pub name: Ustr,
   pub listen: String,
@@ -217,6 +224,7 @@ impl SocketRuntime {
     sm: Option<&FacetGraph>,
     dispatch: &RuntimeDispatcher,
     notifier: Option<&Notifier>,
+    log: Option<&LogHandle>,
   ) -> CoreResult<Void> {
     let sock = registry.instantiate_one("*", name.clone(), |metadata| {
       let owned_fd = self
@@ -246,7 +254,7 @@ impl SocketRuntime {
     }
 
     if let Some(triggers) = sock.metadata.on_start.clone() {
-      trigger_events(triggers, sm, dispatch);
+      trigger_events(triggers, sm, dispatch, log);
 
       if let Some(notifier) = notifier {
         let _ = notifier.notify();
@@ -265,6 +273,7 @@ impl SocketRuntime {
     sm: Option<&FacetGraph>,
     dispatch: &RuntimeDispatcher,
     notifier: Option<&Notifier>,
+    log: Option<&LogHandle>,
   ) -> CoreResult<Void> {
     let socket = registry.uninstantiate_one::<Socket>("*", name.clone())?;
     let fd = socket.fd;
@@ -285,7 +294,7 @@ impl SocketRuntime {
     }
 
     if let Some(triggers) = socket.metadata.on_stop.clone() {
-      trigger_events(triggers, sm, dispatch);
+      trigger_events(triggers, sm, dispatch, log);
 
       if let Some(notifier) = notifier {
         let _ = notifier.notify();
@@ -431,6 +440,7 @@ impl SocketRuntime {
                 Some(sm),
                 dispatch,
                 ctx.notifier.as_ref(),
+                Some(log),
               );
             } else if should_stop && is_active {
               let _ = self.stop_socket(
@@ -441,6 +451,7 @@ impl SocketRuntime {
                 Some(sm),
                 dispatch,
                 ctx.notifier.as_ref(),
+                Some(log),
               );
             }
           }
@@ -481,6 +492,7 @@ impl SocketRuntime {
               Some(sm),
               dispatch,
               ctx.notifier.as_ref(),
+              Some(log),
             ) {
               Ok(_) => {}
               Err(CoreError::MetadataNotFound(_)) => {}
@@ -517,6 +529,7 @@ impl SocketRuntime {
               Some(sm),
               dispatch,
               ctx.notifier.as_ref(),
+              Some(log),
             )?;
           }
           Ok(Void)
@@ -542,6 +555,7 @@ impl SocketRuntime {
             Some(sm),
             dispatch,
             ctx.notifier.as_ref(),
+            Some(log),
           )
         },
       )?;
@@ -565,6 +579,7 @@ impl SocketRuntime {
             Some(sm),
             dispatch,
             ctx.notifier.as_ref(),
+            Some(log),
           )
         },
       )?;
@@ -695,7 +710,7 @@ impl SocketRuntime {
       ctx.registry.singleton_handle::<(&mut FacetGraph,), _>(
         (FacetGraph::KEY.into(),),
         |_, (sm,)| {
-          trigger_events(triggers, Some(sm), dispatch);
+          trigger_events(triggers, Some(sm), dispatch, Some(log));
           Ok(Void)
         },
       )?;

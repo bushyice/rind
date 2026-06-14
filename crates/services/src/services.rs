@@ -432,7 +432,7 @@ pub enum ServiceType {
   meta_fields(
     name, run, after, r#type, branching, restart, start_on, stop_on, on_start,
     on_stop, transport, working_dir, space, user_source, singleton, managed_by,
-    cgroup, namespaces, watchdog, description, pre_exec, cleanup, options
+    cgroup, namespaces, watchdog, description, pre_exec, cleanup, options,
   ),
   derive_metadata(Debug, Default)
 )]
@@ -1583,7 +1583,7 @@ impl ServiceRuntime {
         self.register_service_transport(service, dispatch, Some(registry_key.clone()));
         if let Some(inst) = service.instances.as_one_mut() {
           inst.state = ServiceState::Active;
-          self.run_triggers(service.metadata.on_start.as_ref(), sm, dispatch);
+          self.run_triggers(service.metadata.on_start.as_ref(), sm, dispatch, log);
         }
 
         let _ = dispatch.dispatch(
@@ -1634,6 +1634,7 @@ impl ServiceRuntime {
     key: Option<Ustr>,
     user: Option<Ustr>,
     resources: &mut Resources,
+    log: &LogHandle,
   ) {
     if let Some(ref key) = key {
       if inst.key.as_str() != key.as_str() {
@@ -1667,7 +1668,7 @@ impl ServiceRuntime {
       inst.manually_stopped = true;
     } else {
       if inst.state == ServiceState::Active {
-        self.run_triggers(service.on_stop.as_ref(), sm, dispatch);
+        self.run_triggers(service.on_stop.as_ref(), sm, dispatch, log);
       }
       inst.state = ServiceState::Inactive;
     }
@@ -1698,6 +1699,7 @@ impl ServiceRuntime {
           key.clone(),
           user.clone(),
           resources,
+          log,
         );
       }
     } else {
@@ -1711,6 +1713,7 @@ impl ServiceRuntime {
           key.clone(),
           user.clone(),
           resources,
+          log,
         );
       }
     }
@@ -1807,7 +1810,7 @@ impl ServiceRuntime {
       let inst = &mut service.instances.0[idx];
 
       if matches!(inst.state, ServiceState::Active | ServiceState::Stopping) {
-        self.run_triggers(service.metadata.on_stop.as_ref(), sm, dispatch);
+        self.run_triggers(service.metadata.on_stop.as_ref(), sm, dispatch, log);
       }
 
       inst.state = ServiceState::Exited(code);
@@ -1932,9 +1935,10 @@ impl ServiceRuntime {
     triggers: Option<&Vec<Trigger>>,
     sm: Option<&FacetGraph>,
     dispatch: &RuntimeDispatcher,
+    log: &LogHandle,
   ) {
     if let Some(triggers) = triggers {
-      trigger_events(triggers.clone(), sm, dispatch);
+      trigger_events(triggers.clone(), sm, dispatch, Some(log));
     }
   }
 
@@ -2939,7 +2943,7 @@ impl ServiceRuntime {
                   for inst in service.instances.iter_mut() {
                     inst.state = ServiceState::Active;
                   }
-                  self.run_triggers(service.metadata.on_start.as_ref(), Some(sm), dispatch);
+                  self.run_triggers(service.metadata.on_start.as_ref(), Some(sm), dispatch, log);
                 }
 
                 Ok(Some((
@@ -2994,7 +2998,7 @@ impl ServiceRuntime {
                 self.register_service_transport(service, dispatch, Some(service_key.clone()));
                 if let Some(inst) = service.instances.as_one_mut() {
                   inst.state = ServiceState::Active;
-                  self.run_triggers(service.metadata.on_start.as_ref(), Some(sm), dispatch);
+                  self.run_triggers(service.metadata.on_start.as_ref(), Some(sm), dispatch, log);
                 }
 
                 Ok(Some((

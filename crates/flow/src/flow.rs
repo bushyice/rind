@@ -57,6 +57,7 @@ impl FlowItem {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct Trigger {
+  pub hook: Option<Ustr>,
   pub script: Option<Ustr>,
   pub exec: Option<Ustr>,
   pub args: Option<Vec<Ustr>>,

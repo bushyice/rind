@@ -57,6 +57,8 @@ impl Orchestrator for BootOrchestrator {
       RuntimePayload::default().insert("name", "rind:up!".to_ustr()),
     )?;
 
+    trigger_hooks_raw("boot");
+
     Ok(Void)
   }
 }
@@ -83,6 +85,8 @@ impl Orchestrator for AfterBootOrchestrator {
     ctx.dispatch("sockets", "setup_all", Default::default())?;
     ctx.dispatch("services", "start_all", Default::default())?;
     ctx.dispatch("events", "evaluate_triggers", Default::default())?;
+
+    trigger_hooks_raw("system");
 
     Ok(Void)
   }

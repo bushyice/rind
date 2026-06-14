@@ -97,6 +97,7 @@ pub fn trigger_events(
   triggers: Vec<Trigger>,
   sm: Option<&FacetGraph>,
   dispatch: &RuntimeDispatcher,
+  log: Option<&LogHandle>,
 ) {
   for trigger in triggers {
     let mut resolved_triggers = Vec::new();
@@ -218,6 +219,12 @@ pub fn trigger_events(
           },
           rpayload!({ "name": service.clone() }),
         );
+      } else if let (Some(hook), Some(log)) = (&resolved_trigger.hook, log) {
+        if let Some(true) = resolved_trigger.stop {
+          trigger_hooks_mut(hook.clone(), log, None);
+        } else {
+          trigger_hooks(hook.clone(), log, None);
+        }
       } else if let Some(timer) = &resolved_trigger.timer {
         let _ = dispatch.dispatch(
           "timer",

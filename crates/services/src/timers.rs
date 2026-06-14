@@ -167,7 +167,7 @@ impl TimerRuntime {
         |registry, (sm, _)| {
           if let Ok(timer) = registry.uninstantiate_one::<Timer>("*", name) {
             if let Some(triggers) = &timer.metadata.finish {
-              trigger_events(triggers.clone(), Some(sm), dispatch);
+              trigger_events(triggers.clone(), Some(sm), dispatch, Some(log));
             }
             ctx.resources.terminate(timer.fd);
           }
