@@ -127,7 +127,7 @@ impl FlowPayload {
   }
 }
 
-#[derive(Serialize, Deserialize, Copy, Clone)]
+#[derive(Debug, Serialize, Deserialize, Copy, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum TransportMessageType {
   Impulse,
@@ -137,7 +137,7 @@ pub enum TransportMessageType {
   Unknown,
 }
 
-#[derive(Serialize, Deserialize, Default, PartialEq, Copy, Clone)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq, Copy, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum TransportMessageAction {
   #[default]
@@ -166,7 +166,7 @@ pub enum FlowPayloadType {
   None,
 }
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TransportMessage {
   pub r#type: TransportMessageType,
   pub payload: Option<FlowPayload>,

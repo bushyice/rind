@@ -32,11 +32,13 @@ pub enum TransportMethod {
 pub struct Transport {
   pub(crate) id: u64,
   pub(crate) method: TransportMethod,
+  pub(crate) initiator: Option<String>,
 }
 
 impl Transport {
   pub fn init(method: TransportMethod, options: &[&str]) -> Result<Self, String> {
     let id = TRANSPORT_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let mut initiator = None::<String>;
 
     if !options.is_empty() {
       let mut retries = 0;
@@ -46,6 +48,7 @@ impl Transport {
         match method {
           TransportMethod::Uds => match UnixStream::connect(options[0]) {
             Ok(stream) => {
+              initiator = Some(options[0].to_string());
               UDS_CONNECTIONS.write().unwrap().insert(id, stream);
               last = Ok(());
               break;
@@ -59,6 +62,7 @@ impl Transport {
           },
           TransportMethod::Shm => match shm_client_connect(SHM_SIZE, options[0]) {
             Ok(conn) => {
+              initiator = Some(options[0].to_string());
               SHM_CONNECTIONS.write().unwrap().insert(id, conn);
               last = Ok(());
               break;
@@ -82,7 +86,11 @@ impl Transport {
       last?;
     }
 
-    Ok(Transport { id, method })
+    Ok(Transport {
+      id,
+      method,
+      initiator,
+    })
   }
 
   pub fn listen<F>(&self, mut callback: F)
@@ -172,13 +180,20 @@ impl Transport {
         .unwrap()
         .remove(&self.id)
         .map(Ok)
-        .unwrap_or(Err("no cached stream".to_string()))?,
+        .unwrap_or(
+          shm_client_connect(SHM_SIZE, self.initiator.as_deref().unwrap())
+            .map(|x| TransportStream::ShmChan(x)),
+        )
+        .map_err(|x| x.to_string())?,
       TransportMethod::Uds => TP_STREAMS
         .write()
         .unwrap()
         .remove(&self.id)
         .map(Ok)
-        .unwrap_or(Err("no cached stream".to_string()))?,
+        .unwrap_or(
+          UnixStream::connect(self.initiator.as_deref().unwrap()).map(|s| TransportStream::Uds(s)),
+        )
+        .map_err(|x| x.to_string())?,
       TransportMethod::Stdio => unreachable!(),
     };
 

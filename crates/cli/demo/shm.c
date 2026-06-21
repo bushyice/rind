@@ -134,8 +134,9 @@ int main() {
   rind_send_message(tp, msg);
   rind_free_msg(msg);
 
+  printf("requesting enquiry from rind...\n");
   struct rind_msg* enq = rind_create_msg(RIND_MSG_TYPE_ENQUIRY, RIND_MSG_ACTION_SET);
-  struct rind_payload* payload = rind_create_msg_payload(RIND_PAYLOAD_TYPE_STRING, "net:online");
+  struct rind_payload* payload = rind_create_msg_payload(RIND_PAYLOAD_TYPE_STRING, "net:online!");
 
   rind_set_message_name(enq, "has_state");
   rind_set_message_payload(enq, payload);
