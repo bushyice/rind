@@ -152,6 +152,7 @@ pub fn main() {
 
   #[derive(Parser)]
   #[command(name = "syslogs")]
+  #[command(version = concat!(env!("CARGO_PKG_VERSION"), "-", env!("GIT_HASH"), "-", env!("BUILD_HASH")))]
   struct Cli {
     #[arg(long, default_value = "/var/log/rind")]
     dir: PathBuf,

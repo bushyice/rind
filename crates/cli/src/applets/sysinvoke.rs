@@ -5,6 +5,7 @@ use crate::{apply_scope_name, handle_message, handle_send_raw, send_msg};
 
 #[derive(Parser)]
 #[command(name = "sysinvoke")]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), "-", env!("GIT_HASH"), "-", env!("BUILD_HASH")))]
 pub struct Cli {
   #[arg(name = "NAME")]
   name: String,

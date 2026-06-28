@@ -1,4 +1,3 @@
-// build.rs
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -53,7 +52,39 @@ pub static APPLETS: &[Applet] = &[
   fs::write(out_dir.join("generated_applets.rs"), generated).unwrap();
 }
 
+fn get_git_hash() -> String {
+  let output = Command::new("git")
+    .args(["rev-parse", "--short", "HEAD"])
+    .output()
+    .expect("git not available");
+  String::from_utf8(output.stdout)
+    .unwrap_or_default()
+    .trim()
+    .to_string()
+}
+
+fn generate_build_hash() -> String {
+  use std::time::{SystemTime, UNIX_EPOCH};
+
+  // if Path::new(env!("CARGO_MANIFEST_DIR"))
+
+  let nanos = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .unwrap()
+    .as_nanos();
+  format!("{:x}", nanos).chars().take(8).collect()
+}
+
+fn emit_version() {
+  let git_hash = get_git_hash();
+  let build_hash = generate_build_hash();
+  println!("cargo:rustc-env=GIT_HASH={git_hash}");
+  println!("cargo:rustc-env=BUILD_HASH={build_hash}");
+}
+
 fn main() {
+  emit_version();
+
   println!("cargo:rerun-if-changed=demo/shm.c");
 
   let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());

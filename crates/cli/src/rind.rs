@@ -11,7 +11,7 @@ mod print;
 
 #[derive(clap::Parser)]
 #[command(name = "rind")]
-#[command(version = env!("CARGO_PKG_VERSION"))]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), "-", env!("GIT_HASH"), "-", env!("BUILD_HASH")))]
 #[command(about = "Rust Init Daemon")]
 #[command(after_help = "\
 \x1b[1;36mApplets:\x1b[0m

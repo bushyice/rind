@@ -19,6 +19,7 @@ use crate::{handle_message, handle_send, handle_send_raw, send_msg};
 
 #[derive(Parser)]
 #[command(name = "syssess")]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), "-", env!("GIT_HASH"), "-", env!("BUILD_HASH")))]
 pub struct Cli {
   #[command(subcommand)]
   command: Command,

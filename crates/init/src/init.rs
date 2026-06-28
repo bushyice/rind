@@ -158,7 +158,19 @@ impl Orchestrator for PumpOrchestrator {
   }
 }
 
+const VERSION: &str = concat!(
+  env!("CARGO_PKG_VERSION"),
+  "-",
+  env!("GIT_HASH"),
+  "-",
+  env!("BUILD_HASH")
+);
+
 fn main() -> Result<Void, Box<dyn std::error::Error>> {
+  if std::env::args().any(|a| a == "--version" || a == "-V") {
+    println!("rind:init {VERSION}");
+    return Ok(Void);
+  }
   std::panic::set_hook(Box::new(|info| {
     let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
       s.to_string()
@@ -167,12 +179,13 @@ fn main() -> Result<Void, Box<dyn std::error::Error>> {
     } else {
       "unknown panic".to_string()
     };
-    eprintln!("[rind] FATAL: {msg}");
+    eprintln!("[rind@{VERSION}] FATAL: {msg}");
     if let Some(loc) = info.location() {
       eprintln!("  at {}:{}", loc.file(), loc.line());
     }
   }));
 
+  println!("[rind:init] {VERSION}");
   if initramfs::should_run_initramfs() {
     let continue_boot = initramfs::initramfs_init()?;
     if !continue_boot {

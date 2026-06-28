@@ -10,6 +10,7 @@ use crate::{handle_message, report_error};
 
 #[derive(Parser)]
 #[command(name = "run0")]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), "-", env!("GIT_HASH"), "-", env!("BUILD_HASH")))]
 pub struct Cli {
   #[arg(short = 'n', long = "non-interactive")]
   pub non_interactive: bool,

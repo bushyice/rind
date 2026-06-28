@@ -167,6 +167,24 @@ pub fn mount_fstab() -> Result<(), String> {
 
   for entry in &entries {
     if is_mounted(&entry.mountpoint) {
+      let flags = fstdab_options_to_flags(&entry.options);
+      let target = CString::new(entry.mountpoint.as_str())
+        .map_err(|_| format!("invalid mountpoint: {}", entry.mountpoint))?;
+      let rc = unsafe {
+        libc::mount(
+          std::ptr::null(),
+          target.as_ptr(),
+          std::ptr::null(),
+          flags.bits() | libc::MS_REMOUNT,
+          std::ptr::null(),
+        )
+      };
+      if rc < 0 {
+        let err = std::io::Error::last_os_error();
+        eprintln!("[fstab] failed to remount {}: {err}", entry.mountpoint);
+      } else {
+        eprintln!("[fstab] remounted {} with fstab options", entry.mountpoint);
+      }
       continue;
     }
 
