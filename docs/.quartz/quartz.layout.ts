@@ -25,7 +25,8 @@ export const sharedPageComponents: SharedLayout = {
   ],
   footer: Component.Footer({
     links: {
-      Codeberg: "https://codeberg.org/bushyice/rind",
+      Codeberg: "https://codeberg.org/reon/rind",
+      GitHub: "https://codeberg.org/reon-org",
     },
   }),
 };

@@ -180,6 +180,7 @@ fn inject_ipc_list(
                 method: match cfg.method {
                   NetworkMethod::Dhcp => "dhcp".into(),
                   NetworkMethod::Static => "static".into(),
+                  NetworkMethod::None => "none".into(),
                 },
                 address: config
                   .map(|x| x.payload.get_json_field_as::<Ustr>("ip"))
@@ -251,17 +252,13 @@ fn inject_networking(name: &str, mut metadata: Metadata) -> CoreResult<Metadata>
   }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkMethod {
+  #[default]
+  None,
   Dhcp,
   Static,
-}
-
-impl Default for NetworkMethod {
-  fn default() -> Self {
-    Self::Dhcp
-  }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -593,6 +590,7 @@ impl NetworkingRuntime {
         NetworkMethod::Static => {
           self.configure_static(&iface_name, &cfg, dispatch, log)?;
         }
+        NetworkMethod::None => {}
       }
     }
 
